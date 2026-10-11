@@ -39,6 +39,7 @@ from scenarios.loader import EngineModule, LiveService
 from loc_arena.compose_document import ComposeDocument, ComposeService, Healthcheck, ServiceSecret
 from loc_arena.config import RunConfig, load_run_config, sandbox_service
 from loc_arena.gateway.core import API_KEY_VARIABLE, GATEWAY_URL_VARIABLE, OPENROUTER_URL, OpenRouterProvider
+from loc_arena.gateway.proxy import locate_call_log
 from loc_arena.harness import apply_mode, build_recorded_run_events, grade_run, locate_run
 from loc_arena.identity_variables import find_shared_identity_variable, holds_identities, identity_variable
 from loc_arena.recorded_events import SERVICE_LOGS
@@ -470,7 +471,7 @@ def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: P
     run_compose = functools.partial(subprocess.run, env=environment)
 
     copied = functools.partial(copy_out, run_compose, made=set())
-    call_log = logs / "gateway" / f"{project}.calls.jsonl"
+    call_log = locate_call_log(logs, instance_id)
     run_directory = locate_run(config, mode, instance_id, logs)
     service_logs = run_directory / SERVICE_LOGS
     for directory in (call_log.parent, service_logs):

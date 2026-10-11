@@ -8,6 +8,9 @@ log has the details.
 
 ### Added
 
+- **See what the agents were thinking.** In a stack run's explorer, each turn has a collapsed Reasoning section
+  with the model's reasoning, whenever the model returned some. It is for reviewers only: monitors still never see
+  it.
 - **Agents get their tools from services, set per agent in the run config.** An agent keeps its harness's native
   tools and an MCP client; the forge (`open_pr`), the board (`send`, `read`, `unread`), the job service, the
   scratch surface and the coverage control plane are services behind agentgateway, and an agent's

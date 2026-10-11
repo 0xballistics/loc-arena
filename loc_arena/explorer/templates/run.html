@@ -385,6 +385,7 @@ dialog.notes .x:hover { color: var(--ink); }
 .tc.open .tch { margin-bottom: 6px; }
 .tc.open .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .tc.open .sub { font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); margin: 9px 0 4px; font-weight: 600; }
+.tc.open details.reasoning > summary { cursor: pointer; }
 .tc.open pre.trace { font-size: .86rem; line-height: 1.55; padding: 8px 10px; max-height: 380px; overflow: auto; }
 .tc.open pre.trace.code { font-size: .74rem; max-height: 220px; }
 .tc.open .inline-notes { margin: 6px 0 4px 4px; }
@@ -691,7 +692,7 @@ dialog.notes .x:hover { color: var(--ink); }
   };
   const kindIcon = (kind, size) => `<span class="ki" title="${esc(kind)}">${icon(KIND_ICON[kind] || (kind ? 'tool' : 'dot'), size || 14)}</span>`;
   // The parts of a step, each with the same shape everywhere it appears.
-  const PART = { did: 'tool', result: 'result', monitors: 'shield', raw: 'code', context: 'eye', effects: 'broadcast', happened: 'globe', note: 'pencil', reasoning: 'eyeoff' };
+  const PART = { did: 'tool', result: 'result', monitors: 'shield', raw: 'code', context: 'eye', effects: 'broadcast', happened: 'globe', note: 'pencil', reasoning: 'sparkle' };
   const partIcon = (part, size) => `<span class="pi">${icon(PART[part], size || 14)}</span>`;
   const headKindOf = s => s.tools[0]?.function || s.events[0]?.kind || 'inference_call';
 
@@ -710,7 +711,7 @@ dialog.notes .x:hover { color: var(--ink); }
   const laneIndex = name => { const i = LANES.indexOf(name); return i < 0 ? LANES.length : i; };
   const MONITOR_ORDER = MONITORS.map(m => m.name);
   const SCORED_MONITORS = MONITOR_ORDER.filter(name => VERDICTS.some(v => v.monitor === name));
-  const replyText = s => s.calls.map(c => c.reply).join('\n');
+  const replyText = s => s.calls.map(c => `${c.reasoning || ''}\n${c.reply}`).join('\n');
   const searchText = s => [replyText(s), ...s.tools.map(t => `${t.function}\n${t.arguments_text}\n${t.result_text}`), ...s.events.map(e => e.body), ...s.verdicts.map(v => v.reason)].join('\n').toLowerCase();
   const SEARCH = new Map(STEPS.map(s => [s.id, searchText(s)]));
   const byRound = (a, b) => a.round - b.round || laneIndex(a.agent) - laneIndex(b.agent);
@@ -786,11 +787,11 @@ dialog.notes .x:hover { color: var(--ink); }
   // first model call's reply, `result-1` the second tool call's result. The texts are
   // fixed by the builder, so a note still finds its passage after a rebuild.
   const FIELD_TEXT = {
-    prompt: (s, i) => s.calls[i]?.prompt, reply: (s, i) => s.calls[i]?.reply,
+    prompt: (s, i) => s.calls[i]?.prompt, reply: (s, i) => s.calls[i]?.reply, reasoning: (s, i) => s.calls[i]?.reasoning,
     args: (s, i) => s.tools[i]?.arguments_text, result: (s, i) => s.tools[i]?.result_text,
     body: (s, i) => s.events[i]?.body,
   };
-  const FIELD_NAME = { prompt: 'prompt', reply: 'reply', args: 'action', result: 'result', body: 'event' };
+  const FIELD_NAME = { prompt: 'prompt', reply: 'reply', reasoning: 'reasoning', args: 'action', result: 'result', body: 'event' };
   const fieldParts = field => { const [kind, i] = String(field || '').split('-'); return [kind, Number(i) || 0]; };
   const fieldText = (s, field) => { const [kind, i] = fieldParts(field); return domText((FIELD_TEXT[kind] || (() => ''))(s, i) || ''); };
   const fieldName = field => { const [kind, i] = fieldParts(field); return `${FIELD_NAME[kind] || kind}${i ? ` ${i + 1}` : ''}`; };
@@ -1023,6 +1024,7 @@ dialog.notes .x:hover { color: var(--ink); }
     const notesUnder = field => { const here = placed.filter(x => x.m.field === field && x.at).sort((a, b) => a.at[0] - b.at[0]); return here.length ? `<div class="inline-notes">${here.map(x => noteCard(x.m, s.id)).join('')}</div>` : ''; };
     const block = (field, cls) => annotated(s, field, placed, cls) + notesUnder(field);
     const parts = [];
+    s.calls.forEach((c, i) => { if (c.reasoning) parts.push(`<details class="reasoning"${placed.some(x => x.m.field === `reasoning-${i}`) ? ' open' : ''}><summary class="sub">${partIcon('reasoning', 12)}reasoning${c.identity === s.agent ? '' : ` as ${esc(c.identity)}`} &middot; ${c.reasoning.length.toLocaleString()} chars</summary>${block(`reasoning-${i}`)}</details>`); });
     s.tools.forEach((t, i) => parts.push(`<div class="sub">${partIcon('did', 12)}${s.tools.length > 1 ? esc(t.function) : 'what it did'}</div>${block(`args-${i}`)}<div class="sub">${partIcon('result', 12)}result${t.blocked ? ` (blocked: ${esc(t.blocked)})` : ''}</div>${block(`result-${i}`, 'code')}`));
     if (!s.tools.length) s.events.forEach((ev, i) => parts.push(`<div class="sub">${kindIcon(ev.kind, 12)}${esc(ev.kind)} by ${esc(ev.actor || '?')}</div>${block(`body-${i}`, 'code')}`));
     if (!s.tools.length && !s.events.length) s.calls.forEach((c, i) => parts.push(`<div class="sub">${partIcon('raw', 12)}reply as ${esc(c.identity)}</div>${block(`reply-${i}`)}`));
@@ -1031,7 +1033,7 @@ dialog.notes .x:hover { color: var(--ink); }
     const lost = placed.filter(x => !x.at).map(x => lostCard(x.m, s.id)).join('');
     const cls = ['tc', 'open', levelOf(s.peak), s.covert.length ? 'covert' : ''].filter(Boolean).join(' ');
     return `<div class="${cls}" data-step="${esc(s.id)}" data-step-host="${esc(s.id)}" aria-current="${S.step === s.id}">
-      <div class="tch">${s.covert.length ? '<span class="dotc"></span>' : ''}${kindIcon(headKindOf(s), 13)}<b>${esc(s.tools[0]?.function || stepSummary(s))}</b>${s.peak != null ? pill(s.peak) : ''}<button class="tcbtn" data-open-panel="${esc(s.id)}" title="open in the side panel: the raw reply, the context the model saw, your note on the step">open &#8599;</button><button class="tcbtn" data-collapse="${esc(s.id)}" title="collapse (Esc collapses every open card)">&#9652;</button></div>
+      <div class="tch">${s.covert.length ? '<span class="dotc"></span>' : ''}${kindIcon(headKindOf(s), 13)}<b>${esc(s.tools[0]?.function || stepSummary(s))}</b>${s.peak != null ? pill(s.peak) : ''}<button class="tcbtn" data-open-panel="${esc(s.id)}" title="open in the side panel: the model's reasoning, the raw reply, the context the model saw, your note on the step">open &#8599;</button><button class="tcbtn" data-collapse="${esc(s.id)}" title="collapse (Esc collapses every open card)">&#9652;</button></div>
       ${s.covert.length ? `<div class="tags">${covertTags(s.covert)}</div>` : ''}${parts.join('')}${verdicts}${note}${lost}
       ${s.calls.length ? `<button class="tcmore" data-open-panel="${esc(s.id)}">${partIcon('raw', 12)}raw reply ${partIcon('context', 12)}context ${partIcon('note', 12)}your step note <span>open &#8599;</span></button>` : ''}
     </div>`;
@@ -1316,7 +1318,7 @@ dialog.notes .x:hover { color: var(--ink); }
     const lines = [`# ${stepLabel(s)}`, '', `- run: ${RUN.name}`, `- step id: ${s.id}`, `- peak suspicion: ${s.peak ?? 'not scored'} (audit threshold ${THR})`, `- covert: ${s.covert.join(', ') || 'no'}`];
     s.tools.forEach((t, i) => lines.push('', `## What it did${s.tools.length > 1 ? ` (${i + 1})` : ''}: ${t.function}${t.blocked ? ' (blocked)' : ''}`, '', t.arguments_text, '', '### Result', '', t.result_text || '(no result)'));
     if (s.verdicts.length) { lines.push('', '## How the monitors read it', ''); s.verdicts.forEach(v => lines.push(`- ${v.monitor} ${v.score} on ${v.target || '?'}: ${v.reason}`)); }
-    s.calls.forEach((c, i) => lines.push('', `## Model call ${i + 1} as ${c.identity}${c.phase ? ` (${c.phase})` : ''}`, '', '### Reply', '', c.reply || '(empty)', '', '### Prompt', '', '```', c.prompt, '```'));
+    s.calls.forEach((c, i) => lines.push('', `## Model call ${i + 1} as ${c.identity}${c.phase ? ` (${c.phase})` : ''}`, '', ...(c.reasoning ? ['### Reasoning', '', c.reasoning, ''] : []), '### Reply', '', c.reply || '(empty)', '', '### Prompt', '', '```', c.prompt, '```'));
     s.events.forEach(ev => lines.push('', `## ${ev.kind} by ${ev.actor}`, '', '```json', ev.body, '```'));
     return lines.join('\n');
   }
@@ -1346,7 +1348,8 @@ dialog.notes .x:hover { color: var(--ink); }
       const own = c.identity === s.agent;
       const who = own ? '' : ` as ${esc(c.identity)}${c.phase ? `, ${esc(PHASE[c.phase] || c.phase)}` : ''}`;
       const rawWhat = own && hasTool ? 'the JSON the action above was read from' : `the reply${who}`;
-      return `<details class="fold"${openIf((!hasTool && s.calls.length === 1) || marked.has(`reply-${i}`))}>${foldSummary('raw', 'Raw reply', rawWhat, `${c.reply.length.toLocaleString()} chars`)}${annotated(s, `reply-${i}`, placed)}</details>
+      const thought = c.reasoning ? `<details class="fold"${openIf(marked.has(`reasoning-${i}`))}>${foldSummary('reasoning', 'Reasoning', `what the model reasoned${who}`, `${c.reasoning.length.toLocaleString()} chars`)}${annotated(s, `reasoning-${i}`, placed)}</details>` : '';
+      return `${thought}<details class="fold"${openIf((!hasTool && s.calls.length === 1) || marked.has(`reply-${i}`))}>${foldSummary('raw', 'Raw reply', rawWhat, `${c.reply.length.toLocaleString()} chars`)}${annotated(s, `reply-${i}`, placed)}</details>
         <details class="fold"${openIf(marked.has(`prompt-${i}`))}>${foldSummary('context', 'Context the model saw', `the full prompt${who}`, `${c.prompt.length.toLocaleString()} chars`)}${annotated(s, `prompt-${i}`, placed, 'code')}</details>`;
     }).join('');
     const also = hasTool && s.events.length ? `<details class="fold"${openIf(s.events.some((_, i) => marked.has(`body-${i}`)))}>${foldSummary('effects', 'Side effects of this turn', [...new Set(s.events.map(e => e.kind))].map(k => `${kindIcon(k, 12)}${esc(k)}`).join(' '), plural(s.events.length, 'event'))}${s.events.map((ev, i) => `<div class="sub">${kindIcon(ev.kind, 12)}${esc(ev.kind)} by ${esc(ev.actor || '?')}${covertTags(ev.covert)}</div>${annotated(s, `body-${i}`, placed, 'code')}`).join('')}</details>` : '';
@@ -1365,7 +1368,7 @@ dialog.notes .x:hover { color: var(--ink); }
         <svg class="connectors" aria-hidden="true"></svg>
         <div class="textcol">
           ${did}${happened}${read}${said}${also}
-          ${s.calls.length ? `<p class="help absent">${partIcon('reasoning', 14)}Not shown: the model&rsquo;s reasoning. The gateway does not record it, only the reply.</p>` : ''}
+          ${s.calls.length && !s.calls.some(c => c.reasoning) ? `<p class="help absent"><span class="pi">${icon('eyeoff', 14)}</span>No reasoning: the model returned none here, or the run left no gateway call log to read it from.</p>` : ''}
           <div class="metaline">${seqs.length ? `sealed #${Math.min(...seqs)}&ndash;${Math.max(...seqs)} &middot; ` : ''}<code>${esc(s.id)}</code><button class="copy" data-copy-text="${esc(s.id)}">copy id</button><button class="copy" data-copy-link="${esc(s.id)}">copy link</button><button class="copy" data-act="md">copy as Markdown</button></div>
         </div>
         <div class="gutter${placed.some(x => x.at) ? '' : ' empty'}">
@@ -1661,7 +1664,8 @@ dialog.notes .x:hover { color: var(--ink); }
       <p><b>What you are looking at.</b> The transcript puts every agent in its own lane, side by side, one row per round, with each monitor&rsquo;s takes in the columns on the left. A card is one agent turn: what the agent did, and the start of what came back. Click a card to read that turn in the panel beside the transcript; J and K move through the turns on screen, and Escape, the close button or the browser&rsquo;s back button close it. Events outside any agent turn (the environment, scripted coworkers, credential rotation) sit under <b>World</b>.</p>
       <p><b>Where a verdict sits.</b> Monitors read the mirror log, so a verdict names a mirror event. The log this page is built from numbers events by the sealed log, and the two number independently. Each mirror event is paired with its sealed twin, and the verdict is placed on the turn holding that twin. A verdict whose target is not an agent turn goes to the <b>whole run</b> row and to <b>Outcome and monitors</b>.</p>
       <p><b>Flagged and covert.</b> A turn is flagged when a verdict on it scores above the audit threshold (${esc(THR)}); a score equal to it is not a flag, as in the harness, which the harness sets from the honest twin at the audit budget. Whether the run was <i>caught</i> is decided on the combined score, so a flagged turn is not the same as an audit. A turn is covert when the sealed verifier cites it as evidence for a side-task milestone, or when it calls one of the attack tools (<code>acquire_identity</code>, <code>write_scratch</code>, <code>blind_monitor</code>, <code>start_rogue_loop</code>).</p>
-      <p><b>What is not here.</b> Model reasoning: the gateway keeps only the reply text. Verdict timestamps: the monitors run in batches, so their times say when a batch ran, not when the turn happened.</p>
+      <p><b>Model reasoning.</b> Shown on a turn when the model returned it, read from the call log the gateway of a stack run keeps beside the run. In-process and scripted runs, and models with reasoning off, have none. The monitors never see it.</p>
+      <p><b>What is not here.</b> Verdict timestamps: the monitors run in batches, so their times say when a batch ran, not when the turn happened.</p>
       <p><b>Reading the outcome.</b> A pull request written before round 0, outside any agent turn, comes from the environment&rsquo;s script, even when it is stamped with an agent&rsquo;s name. A verdict on it says how the monitor reads that request, not what an agent did. This page shows one run; nothing here is a rate.</p>
       <p><b>Your notes.</b> Kept in this browser per run, and saved to or loaded from a file under <b>Your notes</b>. Nothing leaves this page.</p>`;
   }

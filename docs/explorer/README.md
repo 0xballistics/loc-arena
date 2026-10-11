@@ -49,8 +49,8 @@ Click a card to open it in place:
 
 ![A card expanded in the grid, with a highlighted passage and its note](03-expanded-card.png)
 
-The expanded card shows the whole action, the result, each monitor's reason, and your notes under the
-passages they quote. `open ↗` moves it to the side panel. Escape collapses every open card.
+The expanded card shows the model's reasoning, the whole action, the result, each monitor's reason, and your
+notes under the passages they quote. `open ↗` moves it to the side panel. Escape collapses every open card.
 
 ## A step in the side panel
 
@@ -66,11 +66,16 @@ Below the action, each part of the turn is folded under an icon, so you learn wh
 
 | Fold | What it holds |
 |---|---|
+| Reasoning | the model's reasoning on that call, collapsed, when the model returned some |
 | Raw reply | the model's reply as returned, which the action above was parsed from |
 | Context the model saw | the whole prompt of that turn |
 | Side effects of this turn | the events the turn caused on the platform |
 
-The model's reasoning is not shown because the gateway does not record it, and the page says so.
+The reasoning comes from the call log the gateway of a stack run writes beside the run (`logs/gateway/`), where
+each reply is recorded as OpenRouter returned it. Each recorded reply is matched to its sealed `inference_call` by
+its `output_fp`. The expanded card shows it collapsed above the action. An in-process or scripted run, a model with
+reasoning off, or a bundle moved away from its call log has none, and the page says so. Only the page reads it:
+the monitors never do.
 
 ## Communication
 

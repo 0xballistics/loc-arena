@@ -15,7 +15,7 @@ from collections import defaultdict, deque
 from collections.abc import Mapping
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from loc_arena.gateway.core import ProviderResult
 from loc_arena.gateway.proxy import GatewayCall, locate_call_log
@@ -48,10 +48,13 @@ def read_reasoning(bundle: Path) -> Mapping[int, str]:
         return {}
     waiting: dict[str, deque[tuple[int, str | None]]] = defaultdict(deque)
     for index, line in enumerate(call_log.read_text(encoding="utf-8").splitlines()):
-        call = GatewayCall.model_validate_json(line)
-        if not isinstance(call.response, dict) or not call.response.get("choices"):
-            continue  # a refused or failed call, or a stream: no reply to pair
-        message = _RecordedCompletion.model_validate(call.response).choices[0].message
+        try:
+            call = GatewayCall.model_validate_json(line)
+            if not isinstance(call.response, dict) or not call.response.get("choices"):
+                continue  # a refused or failed call, or a stream: no reply to pair
+            message = _RecordedCompletion.model_validate(call.response).choices[0].message
+        except ValidationError:
+            continue  # a line cut off when the run stopped, or a reply of another shape: nothing to show
         text = message.content or ""
         reply = ProviderResult(text, 0, 0, message.tool_calls or None).assistant_message()
         for output_fp in {fingerprint(reply), *([] if message.tool_calls else [fingerprint(text)])}:

@@ -515,19 +515,23 @@ def test_denial_and_owner_queue_are_visible_without_granting_access(access_servi
 def test_direct_revoke_removes_overlapping_approved_requests(access_service: AccessService) -> None:
     for _ in range(2):
         request_id = request_access(access_service)
-        _call(
+        approved = _call(
             f"{access_service.url}/requests/{request_id}/decision",
             "POST",
             token=GRANTER_TOKEN,
             body=b'{"decision":"approve","reason":"needed"}',
         )
-    _call(
+        assert approved == HTTPStatus.OK
+    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.OK
+
+    revoked = _call(
         f"{access_service.url}/grants",
         "DELETE",
         token=GRANTER_TOKEN,
         body=json.dumps({"agent": NOBODY, "rights": ["read"]}).encode(),
     )
 
+    assert revoked == HTTPStatus.OK
     assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.FORBIDDEN
 
 
@@ -555,11 +559,17 @@ def test_request_log_links_caller_owner_and_approved_scope(
 
 def test_temporary_approval_cannot_be_delegated_as_permanent_access(access_service: AccessService) -> None:
     request_id = request_access(access_service, token=DELEGATE_TOKEN, right="write")
-    _call(
+    approved = _call(
         f"{access_service.url}/requests/{request_id}/decision",
         "POST",
         token=GRANTER_TOKEN,
         body=b'{"decision":"approve","reason":"needed"}',
+    )
+
+    assert approved == HTTPStatus.OK
+    assert (
+        _call(f"{access_service.url}/notes/plan", "PUT", token=DELEGATE_TOKEN, body=b"x")
+        == HTTPStatus.OK
     )
 
     status = _call(

@@ -8,6 +8,8 @@ log has the details.
 
 ### Added
 
+- Owner-routed access requests record authenticated requesters, bounded approval decisions and grant expiry without granting rights on submission.
+
 - **The board replaces the message bus (#99, step 3).** Agents talk only through the board, an MCP service on
   the official MCP Python SDK (`python -m loc_arena.board <run config>`, the scenario's `board`): `send` posts a
   message to one agent, `read` returns every message addressed to the caller, and `unread` those it has not had

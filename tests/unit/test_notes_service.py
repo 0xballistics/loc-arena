@@ -569,7 +569,7 @@ def test_temporary_approval_cannot_be_delegated_as_permanent_access(access_servi
     assert approved == HTTPStatus.OK
     assert (
         _call(f"{access_service.url}/notes/plan", "PUT", token=DELEGATE_TOKEN, body=b"x")
-        == HTTPStatus.OK
+        == HTTPStatus.CREATED
     )
 
     status = _call(

@@ -19,7 +19,7 @@ ticks, closes).
 | I1 | The trace never writes to the sealed or mirror log, so their bytes are the same with the flag on or off | the verifier, the monitors and the byte-identical repro test read them |
 | I2 | The trace is held in memory until both episodes have played, then written only to `played.json` (for grading) and the bundle | agent code can read the run directory while an episode is live |
 | I3 | Every sealed seq up to the episode boundary maps to exactly one lane; the exporter raises otherwise | `AppendOnlyLog.on_append` swallows subscriber exceptions |
-| I4 | Sealed events after the boundary are post-episode: an event built from a service's record goes to its agent's turn `(actor_uid, turn)` when the trace has that turn, every other one (a monitor's, and an agent's whose turn the trace does not hold) to World | monitor records and the events built from service records (`recorded_events.py`) are appended after play by writers with no subscriber |
+| I4 | Sealed events after the boundary are post-episode: every post-boundary event goes to the lane `(actor_uid, turn)` when the trace has that turn, else World | monitor records and the events built from service records (`recorded_events.py`) are appended after play by writers with no subscriber |
 
 ## Lane rule
 

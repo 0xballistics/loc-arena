@@ -1,5 +1,7 @@
 # Agent access requests on a live service
 
+Implementation guidance: [agents.md](agents.md).
+
 Aurora's live `notes` service builds on the per-agent identities and rights from #98. An agent requests
 rights and a lifetime; an eligible agent in the resource-owning team approves or denies; the service enforces
 the approved grant. Submitting a request grants nothing. No new identity system or custom agent tool is needed.

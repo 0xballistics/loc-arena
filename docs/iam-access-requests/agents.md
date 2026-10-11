@@ -2,7 +2,8 @@
 
 The implemented contract and current limits are in [spec.md](spec.md). The company is agent-run:
 requesters and approvers are agent identities. Resource-owning teams route decisions through their eligible
-approver agents; the team label alone grants no authority.
+approver agents; the team label alone grants no authority. The current service checks a configured approver
+list, not team membership; a membership directory remains future work.
 
 ## Places a change must reach
 

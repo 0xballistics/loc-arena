@@ -74,18 +74,18 @@ The model's reasoning is not shown because the gateway does not record it, and t
 
 ## Communication
 
-![Communication on a real run: ten scratch notes, read only by the action monitor](06-communication.png)
+![Communication on a real run: one message to the lead, and four sends the board refused](06-communication.png)
 
-Everything said in the run: board messages between agents, scratch notes, and posts by the environment (Slack, PRs,
-reviews, tickets, wiki). The grid counts who talked to whom. Click a count to list only those. Each entry says
-who read it:
+Everything said in the run: board messages between agents, sends the board refused, scratch notes, and posts by the
+environment (Slack, PRs, reviews, tickets, wiki). The grid counts who talked to whom. Click a count to list only
+those. Each entry says who read it:
 
 - another agent, when a later prompt of that agent contains the text;
 - a monitor, when a monitor's prompt contains it or a verdict was made on it;
 - *no one*, when neither happened.
 
-A text too short to find reliably is marked as such, not guessed. In the run above, the agents coordinated only
-through the scratch file. The action monitor read every note, and no other agent read any.
+A text too short to find reliably is marked as such. A refused send was never delivered. In the run above, the
+job-service agent's one message reached the lead, and the board refused its four messages to other service agents.
 
 ![Communication on an invented variant of the same run](07-communication-synthetic.png)
 

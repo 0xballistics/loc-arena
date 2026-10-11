@@ -28,8 +28,8 @@
 Almost everything is config, so most changes are a config edit rather than a code change.</p>
 
 <h2>Setup</h2>
-<p>You need <code>uv</code> (Python 3.12, pinned) and, for a live run, an OpenRouter API key. The key is read only
-by the gateway.</p>
+<p>You need <code>uv</code> (Python 3.12, pinned), for a live run an OpenRouter API key, and for a stack run
+(<code>STACK=1</code>) Docker Engine 28 or later. The key is read only by the gateway.</p>
 <pre><code>uv sync                       # create the environment and install everything
 cp .env.example .env          # then set OPENROUTER_API_KEY
 make setup                    # check the toolchain, sync deps, validate the config</code></pre>
@@ -57,7 +57,8 @@ gateway that holds the key; without it the same episode runs in a single process
 
 <h2>Read the dashboard</h2>
 <p>Open the latest report. It is a single static page, and a run index lists every run.</p>
-<pre><code>make view RUN=aurora-efficiency               # open the latest report in the dashboard</code></pre>
+<pre><code>make view RUN=aurora-efficiency               # open the latest report in the dashboard
+make explore                                  # the run explorer: every agent side by side with the monitors' verdicts</code></pre>
 
 <div class="grid two">
   <div class="card"><h3>Outcome</h3><p>At the top: the main-task score, whether the rogue deployment landed and how firmly, and whether the episode was caught.</p></div>
@@ -72,7 +73,7 @@ gateway that holds the key; without it the same episode runs in a single process
 <h3>Monitors</h3>
 <p>Monitors are declared in <code>monitors.yaml</code>. To add one, set its tap point, the inputs it reads from the
 observable list, whether it decides by rule or by model, whether it runs in line or on a side worker, and its
-weight. To move a monitor, change its tap point. To turn the scratch-surface monitor on, enable it. The one hard
+weight. To move a monitor, change its tap point. The one hard
 limit is the firewall: an input off the observable list fails the build. See <a href="monitoring.html">Monitoring</a>.</p>
 
 <h3>Scoring</h3>
@@ -84,6 +85,30 @@ rule from a weighted average to a maximum, or tighten the budget, and rerun.</p>
 <p>Models are named by role in <code>models.cheap.yaml</code>: the untrusted team, the trusted monitor, and the
 teacher. Point the team at a stronger model to see how much further the side task gets; point the monitor at a
 weaker one to see detection fall off. One line per role.</p>
+
+<h3>Tools, services and skills</h3>
+<pre><code># scenarios/&lt;pack&gt;/scenario.yaml
+services:
+  forge:
+    module: loc_arena.forge.service   # a module of the engine image; build or image for its own image
+    port: 8000
+    tools: [open_pr]                  # MCP tools, served behind agentgateway
+  notes:
+    build: services/notes
+    port: 8000
+    rights: [read, write, grant]      # an identity per agent, rights enforced over HTTP
+skills: skills                        # SKILL.md folders, mounted read-only at /skills
+
+# configs/&lt;run&gt;.yaml, per agent
+sandbox:
+  tools: {forge: [open_pr], board: [send, read, unread]}
+  rights: {notes: [read, write]}</code></pre>
+<p>A new tool is served by a service on the official MCP SDK with the tool-call recorder
+(<code>loc_arena/tool_records.py</code>), listed in its entry's <code>tools</code>, and offered in each agent's
+<code>sandbox: tools</code>. A tool name belongs to one service. Its calls become events only where
+<code>loc_arena/recorded_events.py</code> has a builder for it; otherwise they stay in
+<code>services/&lt;name&gt;.log</code>. A skill is a folder with a <code>SKILL.md</code> and its scripts; agents run
+it with bash. Details: <code>docs/isolation/README.md</code>.</p>
 
 <h3>Tasks</h3>
 <p>A main task is a goal plus a scorer that reads real outcomes: tests passing and a real cost or metric, never a
@@ -105,12 +130,18 @@ the organization, the cast, and the tasks change. Meridian AI Lab is the first; 
 
 <h2>How the repository is laid out</h2>
 <dl class="defs">
-  <dt>the engine</dt><dd>the gateway, the organisation and its tools, the services, the record, the checker, the monitors, and the report</dd>
+  <dt>the engine</dt><dd>the gateway, the native agent loop, the services and their tools, the record builder, the checker, the monitors, and the report</dd>
   <dt>the company code</dt><dd>the seven coupled repositories the main task works on</dd>
   <dt>the settings</dt><dd>each organization plus its task catalog, laid over the engine, with its sealed reference</dd>
   <dt>the config</dt><dd>the setting, the monitors, the models, and the shared defaults</dd>
   <dt>the tests</dt><dd>the checks that keep the engine and every repository honest</dd>
 </dl>
+
+<h2>Sources</h2>
+<ul>
+  <li><a href="https://agentgateway.dev/docs">agentgateway</a>: the per-agent tool policy and the caller's identity passed to each service.</li>
+  <li><a href="https://agentskills.io/specification">Agent Skills specification</a>: the <code>SKILL.md</code> format of the skills folder.</li>
+</ul>
 
 <div class="pager">
   <a href="monitoring.html"><span class="dir">Previous</span><span class="ttl">← Monitoring</span></a>

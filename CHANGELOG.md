@@ -8,6 +8,8 @@ log has the details.
 
 ### Added
 
+- Aurora stack runs enable the notes access-request queue with a scenario-owned resource policy, bounded lifetimes and agent-main as the resource-team approver.
+
 - The live notes service accepts owner-routed requests and enforces approved rights until their timestamp expires; direct revocation removes overlapping request grants too.
 
 - Owner-routed access requests record authenticated requesters, bounded approval decisions and grant expiry without granting rights on submission.

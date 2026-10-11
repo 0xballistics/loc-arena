@@ -1,0 +1,8 @@
+{
+  "resource": "notes",
+  "owner_team": "research-platform",
+  "approvers": ["agent-main"],
+  "max_requests": 100,
+  "max_grant_seconds": 86400,
+  "allow_ongoing": true
+}

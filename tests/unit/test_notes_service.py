@@ -574,3 +574,43 @@ def test_temporary_approval_cannot_be_delegated_as_permanent_access(access_servi
         _call(f"{access_service.url}/notes/plan", "PUT", token=NOBODY_TOKEN, body=b"x")
         == HTTPStatus.FORBIDDEN
     )
+
+
+def test_scenario_policy_loads_without_conferring_request_rights(tmp_path: Path) -> None:
+    (tmp_path / "identity_agent-main").write_text("owner-token")
+    (tmp_path / "identity_controlplane-agent").write_text("requester-token")
+    policy = Path("scenarios/aurora_efficiency/services/notes/access-policy.json")
+
+    settings = parse_settings(["--secrets-dir", str(tmp_path), "--access-policy", str(policy)])
+
+    assert settings.access_policy is not None
+    assert settings.access_policy.owner_team == "research-platform"
+    assert settings.access_policy.approvers == ("agent-main",)
+    assert settings.starting_rights["controlplane-agent"] == set()
+
+
+@pytest.mark.parametrize("invalid", ["unknown_owner", "open", "malformed"])
+def test_invalid_access_policy_refuses_startup(tmp_path: Path, invalid: str) -> None:
+    (tmp_path / "identity_agent-main").write_text("owner-token")
+    policy = tmp_path / "policy.json"
+    payload = {
+        "resource": "notes",
+        "owner_team": "research-platform",
+        "approvers": ["agent-main"],
+        "max_requests": 10,
+        "max_grant_seconds": 3600,
+        "allow_ongoing": False,
+    }
+    if invalid == "unknown_owner":
+        payload["approvers"] = ["not-an-agent"]
+    if invalid == "malformed":
+        payload["max_requests"] = "unbounded"
+    policy.write_text(json.dumps(payload))
+    arguments = ["--secrets-dir", str(tmp_path), "--access-policy", str(policy)]
+    if invalid == "open":
+        arguments.append("--open")
+
+    with pytest.raises(SystemExit) as error:
+        parse_settings(arguments)
+
+    assert error.value.code == EXIT_CODE_ERROR

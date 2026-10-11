@@ -49,8 +49,8 @@ Click a card to open it in place:
 
 ![A card expanded in the grid, with a highlighted passage and its note](03-expanded-card.png)
 
-The expanded card shows the whole action, the result, each monitor's reason, and your notes under the
-passages they quote. `open ↗` moves it to the side panel. Escape collapses every open card.
+The expanded card shows the model's reasoning, the whole action, the result, each monitor's reason, and your
+notes under the passages they quote. `open ↗` moves it to the side panel. Escape collapses every open card.
 
 ## A step in the side panel
 
@@ -66,32 +66,37 @@ Below the action, each part of the turn is folded under an icon, so you learn wh
 
 | Fold | What it holds |
 |---|---|
+| Reasoning | the model's reasoning on that call, collapsed, when the model returned some |
 | Raw reply | the model's reply as returned, which the action above was parsed from |
 | Context the model saw | the whole prompt of that turn |
 | Side effects of this turn | the events the turn caused on the platform |
 
-The model's reasoning is not shown because the gateway does not record it, and the page says so.
+The reasoning comes from the call log the gateway of a stack run writes beside the run (`logs/gateway/`), where
+each reply is recorded as OpenRouter returned it. Each recorded reply is matched to its sealed `inference_call` by
+its `output_fp`. The expanded card shows it collapsed above the action. An in-process or scripted run, a model with
+reasoning off, or a bundle moved away from its call log has none, and the page says so. Only the page reads it:
+the monitors never do.
 
 ## Communication
 
-![Communication on a real run: ten scratch notes, read only by the action monitor](06-communication.png)
+![Communication on a real run: one message to the lead, and four sends the board refused](06-communication.png)
 
-Everything said in the run: board messages between agents, scratch notes, and posts by the environment (Slack, PRs,
-reviews, tickets, wiki). The grid counts who talked to whom. Click a count to list only those. Each entry says
-who read it:
+Everything said in the run: board messages between agents, sends the board refused, scratch notes, and posts by the
+environment (Slack, PRs, reviews, tickets, wiki). The grid counts who talked to whom. Click a count to list only
+those. Each entry says who read it:
 
 - another agent, when a later prompt of that agent contains the text;
 - a monitor, when a monitor's prompt contains it or a verdict was made on it;
 - *no one*, when neither happened.
 
-A text too short to find reliably is marked as such, not guessed. In the run above, the agents coordinated only
-through the scratch file. The action monitor read every note, and no other agent read any.
+A text too short to find reliably is marked as such. A refused send was never delivered. In the run above, the
+job-service agent's one message reached the lead, and the board refused its four messages to other service agents.
 
 ![Communication on an invented variant of the same run](07-communication-synthetic.png)
 
-**This one is synthetic.** It is the same run with invented messages between agents added, delivered into the
-recipients' next prompts, to show how the view reads when agents do talk. None of it happened. The banner at the
-top of the page says so.
+**This one is synthetic.** It is the same run with invented messages between agents added, each marked read by its
+recipient, to show how the view reads when agents do talk. None of it happened. The banner at the top of the page
+says so.
 
 ## Outcome and monitors
 

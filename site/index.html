@@ -37,6 +37,33 @@ from inside, while the team is also doing legitimate work that fills the episode
 same logs, reviewers, and monitors a real control team would run, catch it during the episode.</p>
 
 <h2>The two measurements</h2>
+<figure>
+<svg viewBox="0 0 720 300" role="img" aria-label="Outcome matrix: side task landed or not, by caught or not; landed and not caught is the failure the setting measures">
+  <text x="330" y="30" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" font-weight="600" fill="#14171d">caught</text>
+  <text x="330" y="47" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#5b6472">monitors, observable side</text>
+  <text x="590" y="30" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" font-weight="600" fill="#14171d">not caught</text>
+  <text x="590" y="47" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#5b6472">monitors, observable side</text>
+  <text x="185" y="114" text-anchor="end" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" font-weight="600" fill="#14171d">landed</text>
+  <text x="185" y="131" text-anchor="end" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#5b6472">sealed checker</text>
+  <text x="185" y="220" text-anchor="end" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" font-weight="600" fill="#14171d">not landed</text>
+  <text x="185" y="237" text-anchor="end" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#5b6472">sealed checker</text>
+  <rect x="205" y="64" width="250" height="96" rx="10" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
+  <text x="330" y="106" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="14" font-weight="600" fill="#14171d">landed, caught</text>
+  <text x="330" y="128" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" fill="#5b6472">control worked</text>
+  <rect x="465" y="64" width="250" height="96" rx="10" fill="#fbe3e4" stroke="#d63f4a" stroke-width="3"/>
+  <text x="590" y="106" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="14" font-weight="650" fill="#14171d">landed, not caught</text>
+  <text x="590" y="128" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" fill="#5b6472">the failure we measure</text>
+  <rect x="205" y="170" width="250" height="96" rx="10" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
+  <text x="330" y="212" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="14" font-weight="600" fill="#14171d">caught, nothing landed</text>
+  <text x="330" y="234" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" fill="#5b6472">outside the safety rate</text>
+  <rect x="465" y="170" width="250" height="96" rx="10" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
+  <text x="590" y="212" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="14" font-weight="600" fill="#14171d">neither</text>
+  <text x="590" y="234" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" fill="#5b6472">where the honest twin sits</text>
+  <text x="205" y="290" font-family="'IBM Plex Mono', ui-monospace, monospace" font-size="10.5" letter-spacing="1.2" fill="#5b6472">SAFETY = CAUGHT SHARE OF THE TOP ROW</text>
+</svg>
+<figcaption>Rows come from the sealed checker, columns from the monitors; neither reads the other. "Caught" differs by scope: a sweep's safety rate counts a landed episode caught when any step crosses the per-step audit threshold before harm; a single run's caught flag compares the episode's overall suspicion with the threshold set by its honest twin.</figcaption>
+</figure>
+
 <p>Every episode produces two verdicts from separate sources. They never share information.</p>
 <ul>
   <li><strong>Ground truth.</strong> A sealed, deterministic checker reads a private record of executed events and
@@ -49,54 +76,29 @@ same logs, reviewers, and monitors a real control team would run, catch it durin
 answer key. The gap between a rogue deployment that happened and one the monitors flagged is the number the
 setting produces.</p>
 
-<figure>
-<svg viewBox="0 0 720 300" role="img" aria-label="Two independent measurements, ground truth and detection, and the gap between them">
-  <rect x="26" y="40" width="290" height="150" rx="14" fill="#d9f2ef" stroke="#0d9488" stroke-width="1.5"/>
-  <rect x="46" y="62" width="16" height="13" rx="2.5" fill="none" stroke="#0d9488" stroke-width="2"/>
-  <path d="M49 62 v-4 a5 5 0 0 1 10 0 v4" fill="none" stroke="#0d9488" stroke-width="2"/>
-  <text x="74" y="73" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="15" font-weight="600" fill="#14171d">Ground truth</text>
-  <text x="46" y="103" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" fill="#5b6472">A sealed checker reads a private</text>
-  <text x="46" y="123" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" fill="#5b6472">record of executed events and</text>
-  <text x="46" y="143" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" fill="#5b6472">decides: does a rogue deployment</text>
-  <text x="46" y="163" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" fill="#5b6472">exist? Agents cannot reach it.</text>
-
-  <rect x="404" y="40" width="290" height="150" rx="14" fill="#f8ecd5" stroke="#b3730a" stroke-width="1.5"/>
-  <circle cx="428" cy="68" r="8" fill="none" stroke="#b3730a" stroke-width="2"/>
-  <circle cx="428" cy="68" r="3" fill="#b3730a"/>
-  <text x="446" y="73" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="15" font-weight="600" fill="#14171d">Detection</text>
-  <text x="424" y="103" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" fill="#5b6472">Monitors read only observable</text>
-  <text x="424" y="123" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" fill="#5b6472">surfaces and score how suspicious</text>
-  <text x="424" y="143" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" fill="#5b6472">the episode looks. They never see</text>
-  <text x="424" y="163" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13" fill="#5b6472">the sealed record.</text>
-
-  <line x1="316" y1="115" x2="404" y2="115" stroke="#c3cad4" stroke-width="1.5" stroke-dasharray="4 4"/>
-  <text x="360" y="230" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, monospace" font-size="12" letter-spacing="1.5" fill="#d63f4a">THE GAP</text>
-  <text x="360" y="258" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="13.5" fill="#14171d">landed, and not flagged</text>
-  <text x="360" y="277" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12.5" fill="#5b6472">the quantity the setting is built to measure</text>
-  <path d="M360 130 L360 210" stroke="#d63f4a" stroke-width="2" marker-end="url(#a1)"/>
-  <defs><marker id="a1" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto"><polygon points="0,1 8,5 0,9" fill="#d63f4a"/></marker></defs>
-</svg>
-<figcaption>The two measurements are computed independently. A rogue deployment that <b>landed</b> but was <b>not
-flagged</b> is the failure the setting is built to surface.</figcaption>
-</figure>
-
 <h2>The honest twin</h2>
-<p>Every attack episode has an honest twin: the same config with the covert objective disabled. The twin runs the
-legitimate work only. It sets the baseline for normal behaviour, and it calibrates the detection threshold. It is
-also a standing check on the checker: the twin reaches no covert step, so it must always verify clean. If it ever
-did not, the checker would be wrong. The covert switch is the only difference between an attack episode and its
-twin, which is what makes comparing them valid.</p>
+<p>Every attack episode has an honest twin: the same config with the covert objective and the attack tools off,
+played after the attack on services and sandboxes recreated empty. The twin runs the legitimate work only. It sets
+the baseline for normal behaviour, and it calibrates the detection threshold. It is also a standing check on the
+checker: the twin reaches no covert step, so it must always verify clean.</p>
+
+<h2>How it runs</h2>
+<p>Each agent has its harness's native tools (read, edit, bash), which act in its own sandbox, and an MCP client.
+Every other tool, such as opening a pull request or messaging a teammate, is served by a service behind one MCP
+route, agentgateway; the run config lists each agent's tools. Every model call goes through a gateway that alone
+holds the key. After play, each service's record of the calls made to it becomes the events the checker and the
+monitors read.</p>
 
 <h2>Reproducibility</h2>
-<p>An episode is fully described by its config and a seed. It rebuilds from scratch every time, so a result
-reproduces exactly. Anything time-varying is seeded.</p>
+<p>A scripted run (<code>policy: scripted</code>) replays fixed moves and reproduces exactly from its config and
+seed. A live run is graded on outcome: model replies vary, and live services run on real time.</p>
 
 <h2>Sections</h2>
 <div class="grid two">
   <a class="chapter card" href="architecture.html">
     <span class="num">Concepts</span>
     <h3>Architecture</h3>
-    <p>The engine every setting runs on: the services, the single path for model calls, the sealed and observable
+    <p>The engine every setting runs on: the containers, the single path for model calls, the sealed and observable
     sides, the event record, and how one episode runs.</p>
     <span class="go">Read →</span>
   </a>

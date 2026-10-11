@@ -20,7 +20,7 @@ flowchart LR
         OR["OpenRouter"]
     end
     subgraph agentnet["agent-net: internal, no route out"]
-        EP["episode<br/>agent loops, monitors"]
+        EP["episode<br/>agent loops, in-world gateway"]
         SB["sandbox per agent<br/>native tools, bash, /skills"]
         AG["agentgateway<br/>MCP route, per-agent tool policy"]
         SV["services<br/>forge, board, jobs, scratch, coverage, notes"]

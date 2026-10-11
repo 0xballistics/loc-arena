@@ -34,8 +34,8 @@ flowchart LR
     GW --> OR
 ```
 
-The harness inside an agent is interchangeable: any harness with an MCP client sees the same tools, from the
-same services, recorded the same way. The native loop is one such client.
+Any harness with an MCP client sees the same tools, from the same services, recorded the same way. The native
+loop is the only harness the arena runs today; choosing another one by config is #84.
 
 ## Containers
 

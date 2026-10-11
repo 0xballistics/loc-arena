@@ -55,13 +55,13 @@ turns lands in its turn 0, and the builder notes it in `unattributed_records.jso
 | `finish(last_sealed_seq)` | harness, when assembly returns | returns a read-only `EpisodeTrace` snapshot; `last_sealed_seq` is the boundary for I3/I4, so anything observed later is post-episode by construction | `RuntimeError` if a turn is still bound |
 
 `open_episode_logs(sealed_path, mirror_path, episode_id, *, traced)` opens an episode's two logs and, when
-`traced`, an `AgentTrace` subscribed to both; both assemblers use it so the subscription cannot drift.
+`traced`, an `AgentTrace` subscribed to both; `live.play_model_episode` uses it for every policy, so the subscription cannot drift.
 
 ## Verified assumptions
 
 | Assumption | Evidence |
 |---|---|
-| one sealed and one mirror writer per episode | `open_episode_logs` in `live.py`; the only other writers are post-episode: the monitors' and `recorded_events.py` |
+| one sealed and one mirror writer per episode | `live.play_model_episode` opens them; the only other writers run after play: the record builder (`recorded_events._write_events`) and the monitors |
 | turns never nest | `_drive_team` starts an agent's turn only after the previous one returns (`live.py`) |
 | inspect-ai 0.3.268 has agent spans, `ToolEvent.agent_span_id`, and log round-trip | probe on the locked version |
 

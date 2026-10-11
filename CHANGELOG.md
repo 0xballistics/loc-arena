@@ -8,10 +8,9 @@ log has the details.
 
 ### Added
 
-- **The run explorer shows each model call's reasoning.** In a stack run, a turn's card and its panel show the
-  model's reasoning beside its reply, read at build time from the gateway's call log and matched to the call's
-  sealed `inference_call` by its `output_fp`, so a reviewer reads what the agent thought before it acted. The
-  sealed and mirror logs and every monitor input are unchanged; a call without reasoning shows none.
+- **See what the agents were thinking.** In a stack run's explorer, each turn has a collapsed Reasoning section
+  with the model's reasoning, whenever the model returned some. It is for reviewers only: monitors still never see
+  it.
 - **The board replaces the message bus (#99, step 3).** Agents talk only through the board, an MCP service on
   the official MCP Python SDK (`python -m loc_arena.board <run config>`, the scenario's `board`): `send` posts a
   message to one agent, `read` returns every message addressed to the caller, and `unread` those it has not had

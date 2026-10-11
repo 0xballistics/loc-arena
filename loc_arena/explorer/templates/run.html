@@ -385,6 +385,7 @@ dialog.notes .x:hover { color: var(--ink); }
 .tc.open .tch { margin-bottom: 6px; }
 .tc.open .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .tc.open .sub { font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); margin: 9px 0 4px; font-weight: 600; }
+.tc.open details.reasoning > summary { cursor: pointer; }
 .tc.open pre.trace { font-size: .86rem; line-height: 1.55; padding: 8px 10px; max-height: 380px; overflow: auto; }
 .tc.open pre.trace.code { font-size: .74rem; max-height: 220px; }
 .tc.open .inline-notes { margin: 6px 0 4px 4px; }
@@ -1023,7 +1024,7 @@ dialog.notes .x:hover { color: var(--ink); }
     const notesUnder = field => { const here = placed.filter(x => x.m.field === field && x.at).sort((a, b) => a.at[0] - b.at[0]); return here.length ? `<div class="inline-notes">${here.map(x => noteCard(x.m, s.id)).join('')}</div>` : ''; };
     const block = (field, cls) => annotated(s, field, placed, cls) + notesUnder(field);
     const parts = [];
-    s.calls.forEach((c, i) => { if (c.reasoning) parts.push(`<div class="sub">${partIcon('reasoning', 12)}reasoning${c.identity === s.agent ? '' : ` as ${esc(c.identity)}`}</div>${block(`reasoning-${i}`)}`); });
+    s.calls.forEach((c, i) => { if (c.reasoning) parts.push(`<details class="reasoning"${placed.some(x => x.m.field === `reasoning-${i}`) ? ' open' : ''}><summary class="sub">${partIcon('reasoning', 12)}reasoning${c.identity === s.agent ? '' : ` as ${esc(c.identity)}`} &middot; ${c.reasoning.length.toLocaleString()} chars</summary>${block(`reasoning-${i}`)}</details>`); });
     s.tools.forEach((t, i) => parts.push(`<div class="sub">${partIcon('did', 12)}${s.tools.length > 1 ? esc(t.function) : 'what it did'}</div>${block(`args-${i}`)}<div class="sub">${partIcon('result', 12)}result${t.blocked ? ` (blocked: ${esc(t.blocked)})` : ''}</div>${block(`result-${i}`, 'code')}`));
     if (!s.tools.length) s.events.forEach((ev, i) => parts.push(`<div class="sub">${kindIcon(ev.kind, 12)}${esc(ev.kind)} by ${esc(ev.actor || '?')}</div>${block(`body-${i}`, 'code')}`));
     if (!s.tools.length && !s.events.length) s.calls.forEach((c, i) => parts.push(`<div class="sub">${partIcon('raw', 12)}reply as ${esc(c.identity)}</div>${block(`reply-${i}`)}`));
@@ -1347,7 +1348,7 @@ dialog.notes .x:hover { color: var(--ink); }
       const own = c.identity === s.agent;
       const who = own ? '' : ` as ${esc(c.identity)}${c.phase ? `, ${esc(PHASE[c.phase] || c.phase)}` : ''}`;
       const rawWhat = own && hasTool ? 'the JSON the action above was read from' : `the reply${who}`;
-      const thought = c.reasoning ? `<details class="fold" open>${foldSummary('reasoning', 'Reasoning', `what the model reasoned${who}`, `${c.reasoning.length.toLocaleString()} chars`)}${annotated(s, `reasoning-${i}`, placed)}</details>` : '';
+      const thought = c.reasoning ? `<details class="fold"${openIf(marked.has(`reasoning-${i}`))}>${foldSummary('reasoning', 'Reasoning', `what the model reasoned${who}`, `${c.reasoning.length.toLocaleString()} chars`)}${annotated(s, `reasoning-${i}`, placed)}</details>` : '';
       return `${thought}<details class="fold"${openIf((!hasTool && s.calls.length === 1) || marked.has(`reply-${i}`))}>${foldSummary('raw', 'Raw reply', rawWhat, `${c.reply.length.toLocaleString()} chars`)}${annotated(s, `reply-${i}`, placed)}</details>
         <details class="fold"${openIf(marked.has(`prompt-${i}`))}>${foldSummary('context', 'Context the model saw', `the full prompt${who}`, `${c.prompt.length.toLocaleString()} chars`)}${annotated(s, `prompt-${i}`, placed, 'code')}</details>`;
     }).join('');

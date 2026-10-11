@@ -84,7 +84,7 @@ world down. A scripted run reproduces exactly from its config and seed; a live r
   <text x="590" y="174" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#5b6472">the gateway alone</text>
 </svg>
 <figcaption>A stack run (<code>make run STACK=1</code>): one Docker Compose project on two networks. Blue is the
-harness, amber what agent code can touch, teal the key and the sealed call log.</figcaption>
+harness, amber where agent code runs, teal the key and the call log.</figcaption>
 </figure>
 
 <p>Each agent has its harness's native tools (read, edit, bash), which act in its own sandbox, and an MCP client;
@@ -181,9 +181,54 @@ records are placed in the turn of the agent that made the call. A reviewer repla
 
 <h2>How an episode runs</h2>
 
-<p>Every episode, attack or honest twin, follows the same path. The covert objective, and the tools it needs, are
-enabled in the attack episode only, which then runs first; the honest twin plays after it on services and sandboxes
-recreated empty.</p>
+<figure>
+<svg viewBox="0 0 720 380" role="img" aria-label="Sequence of a stack run: the attack plays, the services are recreated empty, the honest twin plays, then the host builds events and grades">
+  <defs><marker id="q1" markerWidth="9" markerHeight="9" refX="6.5" refY="4.5" orient="auto"><polygon points="0,1 7,4.5 0,8" fill="#2f4bd6"/></marker></defs>
+  <rect x="10" y="16" width="160" height="40" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
+  <text x="90" y="34" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12.5" font-weight="600" fill="#14171d">host</text>
+  <text x="90" y="49" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="10.5" fill="#5b6472">make run STACK=1</text>
+  <line x1="90" y1="56" x2="90" y2="372" stroke="#c3cad4" stroke-width="1.3" stroke-dasharray="4 4"/>
+  <rect x="190" y="16" width="160" height="40" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
+  <text x="270" y="34" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12.5" font-weight="600" fill="#14171d">episode</text>
+  <text x="270" y="49" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="10.5" fill="#5b6472">agent loops</text>
+  <line x1="270" y1="56" x2="270" y2="372" stroke="#c3cad4" stroke-width="1.3" stroke-dasharray="4 4"/>
+  <rect x="370" y="16" width="160" height="40" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
+  <text x="450" y="34" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12.5" font-weight="600" fill="#14171d">sandboxes, services</text>
+  <text x="450" y="49" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="10.5" fill="#5b6472">and agentgateway</text>
+  <line x1="450" y1="56" x2="450" y2="372" stroke="#c3cad4" stroke-width="1.3" stroke-dasharray="4 4"/>
+  <rect x="550" y="16" width="160" height="40" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
+  <text x="630" y="34" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12.5" font-weight="600" fill="#14171d">gateway</text>
+  <text x="630" y="49" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="10.5" fill="#5b6472">the key</text>
+  <line x1="630" y1="56" x2="630" y2="372" stroke="#c3cad4" stroke-width="1.3" stroke-dasharray="4 4"/>
+  <path d="M90 88 L267 88" stroke="#2f4bd6" stroke-width="1.6" marker-end="url(#q1)"/>
+  <text x="180.0" y="82" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">play the attack</text>
+  <path d="M270 112 L447 112" stroke="#2f4bd6" stroke-width="1.6" marker-end="url(#q1)"/>
+  <text x="360.0" y="106" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">commands, tool calls</text>
+  <path d="M270 136 L627 136" stroke="#2f4bd6" stroke-width="1.6" marker-end="url(#q1)"/>
+  <text x="450.0" y="130" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">model calls</text>
+  <path d="M450 168 L93 168" stroke="#2f4bd6" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#q1)"/>
+  <text x="270.0" y="162" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">logs so far</text>
+  <path d="M90 198 L447 198" stroke="#2f4bd6" stroke-width="1.6" marker-end="url(#q1)"/>
+  <text x="270.0" y="192" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" font-weight="600" fill="#14171d">recreate empty</text>
+  <path d="M90 228 L267 228" stroke="#2f4bd6" stroke-width="1.6" marker-end="url(#q1)"/>
+  <text x="180.0" y="222" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">play the honest twin</text>
+  <path d="M270 252 L447 252" stroke="#2f4bd6" stroke-width="1.6" marker-end="url(#q1)"/>
+  <text x="360.0" y="246" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">commands, tool calls</text>
+  <path d="M450 284 L93 284" stroke="#2f4bd6" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#q1)"/>
+  <text x="270.0" y="278" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">logs</text>
+  <path d="M270 306 L93 306" stroke="#2f4bd6" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#q1)"/>
+  <text x="180.0" y="300" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">run directory</text>
+  <path d="M90 322 L118 322 L118 336 L93 336" stroke="#2f4bd6" stroke-width="1.6" fill="none" marker-end="url(#q1)"/>
+  <text x="126" y="333" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">build events from records</text>
+  <path d="M90 348 L118 348 L118 362 L93 362" stroke="#2f4bd6" stroke-width="1.6" fill="none" marker-end="url(#q1)"/>
+  <text x="126" y="359" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">grade</text>
+</svg>
+<figcaption>One attack run in a stack. The twin's sandboxes, services and agentgateway start empty; the episode
+container and the gateway carry on.</figcaption>
+</figure>
+
+<p>Every episode, attack or honest twin, follows the same steps. The covert objective and its tools are enabled in
+the attack episode only.</p>
 
 <ol class="steps">
   <li><b>Build the world.</b> Stand up the services, the codebase, and the empty records from the config and seed.</li>

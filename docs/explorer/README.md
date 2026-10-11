@@ -89,9 +89,9 @@ job-service agent's one message reached the lead, and the board refused its four
 
 ![Communication on an invented variant of the same run](07-communication-synthetic.png)
 
-**This one is synthetic.** It is the same run with invented messages between agents added, delivered into the
-recipients' next prompts, to show how the view reads when agents do talk. None of it happened. The banner at the
-top of the page says so.
+**This one is synthetic.** It is the same run with invented messages between agents added, each marked read by its
+recipient, to show how the view reads when agents do talk. None of it happened. The banner at the top of the page
+says so.
 
 ## Outcome and monitors
 

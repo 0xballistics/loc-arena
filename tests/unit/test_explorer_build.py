@@ -99,6 +99,6 @@ def test_a_send_the_board_refused_is_not_a_message_between_agents() -> None:
     step_ids = {("controlplane-agent", 0): "run/controlplane-agent/0"}
     placed = [PlacedEvent("controlplane-agent", 0, refused), PlacedEvent("controlplane-agent", 0, delivered)]
 
-    _, utterances = assemble_steps(placed, step_ids, ["controlplane-agent"], {}, {}, ExplorerSettings())
+    _, utterances = assemble_steps(placed, step_ids, ["controlplane-agent"], {}, {}, {}, ExplorerSettings())
 
     assert [(u.text, u.kind) for u in utterances] == [("hi", "refused"), ("hello", "message")]

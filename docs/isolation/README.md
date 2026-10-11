@@ -6,10 +6,11 @@ scenario brings its own services.
 
 ## The model
 
-Each agent runs in its own sandbox with two things: its harness's native tools (read, edit, bash) and an MCP
-client. Everything else an agent can do to the company, such as opening a PR, messaging a teammate, submitting a
-job or writing to the scratch surface, is a tool on a service behind one MCP route, agentgateway. The run
-config decides exactly which tools each agent is offered. Every service records each call made to it and by
+Each agent has two kinds of tools: its harness's native tools (read, edit, bash), which act in its own sandbox,
+and an MCP client. The native loop itself runs in `episode`. Most of what an agent can do to the company, such as
+opening a PR, messaging a teammate, submitting a job or writing to the scratch surface, is a tool on a service
+behind one MCP route, agentgateway; the run config decides exactly which tools each agent is offered. A
+rights-bearing HTTP service such as `notes` is called from the sandbox directly, with the agent's own identity. Every service records each call made to it and by
 whom. After play, those records become the events the monitors and the verifier read. The honest twin plays on
 services and sandboxes recreated empty.
 
@@ -94,8 +95,9 @@ calls with the caller added.
 
 Before grading, the run copies each live service's log, and agentgateway's, to `services/<name>.log` in the run
 directory. `loc_arena/recorded_events.py` then turns each record into the events of the episode or the honest
-twin whose play window holds its time, on the sealed log and the mirror log, in the turn of the agent that was
-running. A refused call is a blocked `action`. A record that cannot be placed goes to
+twin whose play window holds its time, in the turn of the agent that was running. Each event goes to the sealed
+log and, unless it is sealed-only, the mirror log: a scratch note's `shared_surface` event stays on the sealed
+log, where the verifier reads it and the monitors cannot. A refused call is a blocked `action`. A record that cannot be placed goes to
 `unattributed_records.jsonl` in the run directory. Grading never builds events, so grading a run again adds
 none.
 

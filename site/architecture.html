@@ -38,8 +38,8 @@ it stands now.</div>
 
 <h2>The engine</h2>
 
-<p>Each agent runs in its own sandbox with two things: its harness's native tools (read, edit, bash) and an MCP
-client. Everything else it can do to the company is a tool on a service behind one MCP route, and the run
+<p>Each agent has its harness's native tools (read, edit, bash), which act in its own sandbox, and an MCP
+client; the native loop itself runs in the episode container. Everything else it can do to the company is a tool on a service behind one MCP route, and the run
 config decides exactly which tools each agent is offered.</p>
 
 <dl class="defs">
@@ -116,8 +116,9 @@ reads the <b>sealed</b> copy. Neither can reach across to the other's side.</fig
 <h2>Services and networks</h2>
 
 <p>In a stack run (<code>make run STACK=1</code>) the episode is one Docker Compose project with two networks.
-Agent code reaches the services only through agentgateway, which offers each agent the tools its run config lists
-and passes that agent's identity on to the service. Only the gateway can leave the project.</p>
+Agent code reaches the MCP services only through agentgateway, which offers each agent the tools its run config
+lists and passes that agent's identity on to the service. A rights-bearing HTTP service such as notes is called from
+the sandbox directly, with the agent's own identity. Only the gateway can leave the project.</p>
 
 <figure>
 <svg viewBox="0 0 760 440" role="img" aria-label="Agents reach services through one tool route; model calls go through the gateway, the only way out">
@@ -162,7 +163,7 @@ and passes that agent's identity on to the service. Only the gateway can leave t
   <text x="590" y="160" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, monospace" font-size="10.5" letter-spacing="1.2" fill="#b3730a">EGRESS-NET</text>
   <text x="590" y="174" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#5b6472">the gateway alone</text>
 </svg>
-<figcaption>Tool calls reach a service only through the one MCP route, as the caller. Model calls go to the
+<figcaption>MCP tool calls reach a service only through the one route, as the caller. Model calls go to the
 gateway, the only container with a key and a way out. Each service records the calls made to it.</figcaption>
 </figure>
 
@@ -174,8 +175,8 @@ services in memory and offers no shell, so its agents run no code.</p>
 <p>Every event is recorded: an action, a message, a pull request, a model call, a config change, a tick. Each carries a fingerprint of its contents, a sequence number, the actor's identity, and the episode id.
 The writer rejects anything out of order or duplicated and never rewrites a line.</p>
 
-<p>Each service records every call made to it. After play, those records become the events the monitors and the
-checker read, each placed in the turn of the agent that made the call. A reviewer replays the episode from the log
+<p>Each service records every call made to it. After play, those records become the events the checker reads and,
+except for sealed-only ones such as scratch notes, the monitors read, each placed in the turn of the agent that made the call. A reviewer replays the episode from the log
 rather than trusting a summary.</p>
 
 <h2>How an episode runs</h2>

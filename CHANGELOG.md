@@ -16,8 +16,8 @@ log has the details.
 - **The board is the channel between agents.** Messages travel only through it, and each agent's turn begins
   with the messages sent to it since the last it received.
 - **Events come from the services' records.** Each service records every call made to it and by whom. After play
-  and before grading, those records become the events the monitors and the verifier read, on the sealed and the
-  mirror log, and each is placed in the turn of its agent that was running. A call a service refuses is a
+  and before grading, those records become the events the verifier reads on the sealed log and, except for
+  sealed-only ones such as scratch notes, the monitors read on the mirror log. Each is placed in the turn of its agent that was running. A call a service refuses is a
   blocked action with the service's reason, since each service enforces the caller's scope itself. A record
   that cannot be placed is listed in `unattributed_records.jsonl` in the run directory, never dropped.
 - **The attack tools are services too.** `start_rogue_loop`, `acquire_identity`, `write_scratch` and

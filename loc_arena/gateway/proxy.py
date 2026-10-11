@@ -71,6 +71,11 @@ class GatewayCall(BaseModel):
     complete: bool = Field(description="False when the call was refused or failed, or its reply broke off.")
 
 
+def locate_call_log(logs: Path, instance_id: str) -> Path:
+    """Where a stack run copies its gateway's call log: in ``logs``, named after the run's compose project."""
+    return logs / "gateway" / f"locarena-{instance_id}.calls.jsonl"
+
+
 def resolve_caller_name(address: str) -> str:
     """The reverse DNS name of ``address`` (on a compose network, the container name), else the address."""
     try:

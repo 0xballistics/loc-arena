@@ -58,6 +58,7 @@ from loc_arena.explorer.placement import (
     place_verdicts,
     read_event_seqs,
 )
+from loc_arena.explorer.reasoning import read_reasoning
 from loc_arena.explorer.scores import RunScores, load_scores
 from loc_arena.explorer.settings import ExplorerSettings
 from loc_arena.recording_service import COVERT_TOOL_NAMES
@@ -142,7 +143,15 @@ def build_run_page(bundle: Path, settings: ExplorerSettings, index_href: str | N
     }
     verdicts = place_verdicts(scores, pair_mirror_to_sealed(sample, bundle), targets)
     evidence = collect_covert_evidence(scores)
-    steps, utterances = assemble_steps(placed, step_ids, lanes, verdicts.placed, evidence, settings)
+    steps, utterances = assemble_steps(
+        placed,
+        step_ids,
+        lanes,
+        verdicts.placed,
+        evidence,
+        read_reasoning(bundle),
+        settings,
+    )
     monitor_names = {monitor.name for monitor in scores.monitors}
     return RunPage(
         run=RunView(
@@ -197,6 +206,7 @@ def assemble_steps(
     lanes: Sequence[str],
     verdicts: Mapping[int, tuple[VerdictView, ...]],
     evidence: Mapping[int, frozenset[str]],
+    reasoning: Mapping[int, str],
     settings: ExplorerSettings,
 ) -> tuple[tuple[StepView, ...], list[Utterance]]:
     """The steps in round order, lanes in lane order, and everything said in them."""
@@ -207,7 +217,7 @@ def assemble_steps(
     for p in placed:
         step = step_ids[(p.lane, p.round)]
         if isinstance(p.event, ModelEvent):
-            calls[step].append(_describe_model_call(p.event))
+            calls[step].append(_describe_model_call(p.event, reasoning))
         elif isinstance(p.event, ToolEvent):
             tool = _describe_tool_call(p.event, verdicts, evidence, settings)
             tools[step].append(tool)
@@ -413,7 +423,7 @@ def _make_said(step: str, sender: str, verdicts: tuple[VerdictView, ...], covert
     )
 
 
-def _describe_model_call(event: ModelEvent) -> ModelCallView:
+def _describe_model_call(event: ModelEvent, reasoning: Mapping[int, str]) -> ModelCallView:
     metadata = event.metadata or {}
     seq = metadata.get("sealed_seq")
     return ModelCallView(
@@ -423,6 +433,7 @@ def _describe_model_call(event: ModelEvent) -> ModelCallView:
         prompt="\n\n".join(message.text for message in event.input),
         reply=event.error or event.output.completion,
         failed=bool(event.error),
+        reasoning=reasoning.get(seq) if isinstance(seq, int) else None,
     )
 
 

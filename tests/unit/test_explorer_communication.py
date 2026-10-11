@@ -16,7 +16,15 @@ SAID = Said(step="run/agent-main/0", sender="agent-main", scores=(), covert=(), 
 
 
 def _call(identity: str, prompt: str) -> ModelCallView:
-    return ModelCallView(seq=None, identity=identity, phase=None, prompt=prompt, reply="", failed=False)
+    return ModelCallView(
+        seq=None,
+        identity=identity,
+        phase=None,
+        prompt=prompt,
+        reply="",
+        failed=False,
+        reasoning=None,
+    )
 
 
 def _step(agent: str, round_number: int, *calls: ModelCallView) -> StepView:

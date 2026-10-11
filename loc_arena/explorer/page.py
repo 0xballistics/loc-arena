@@ -22,7 +22,7 @@ class VerdictView:
 
 @dataclass(frozen=True)
 class ModelCallView:
-    """One model call in a step: the context the model saw and its raw reply."""
+    """One model call in a step: the context the model saw, its raw reply, and any reasoning it returned."""
 
     seq: int | None
     identity: str
@@ -30,6 +30,7 @@ class ModelCallView:
     prompt: str
     reply: str
     failed: bool
+    reasoning: str | None
 
 
 @dataclass(frozen=True)

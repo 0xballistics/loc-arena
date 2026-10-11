@@ -8,6 +8,8 @@ log has the details.
 
 ### Added
 
+- The live notes service accepts owner-routed requests and enforces approved rights until their timestamp expires; direct revocation removes overlapping request grants too.
+
 - Owner-routed access requests record authenticated requesters, bounded approval decisions and grant expiry without granting rights on submission.
 
 - **The board replaces the message bus (#99, step 3).** Agents talk only through the board, an MCP service on

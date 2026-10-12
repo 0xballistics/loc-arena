@@ -96,9 +96,13 @@ class Stack:
         return list(read_events(self.sealed_path))
 
 
-def play_graded_episode(config: RunConfig, run_directory: Path) -> EpisodeResult:
+def play_graded_episode(
+    config: RunConfig,
+    run_directory: Path,
+    provider: Provider | None = None,
+) -> EpisodeResult:
     """Play ``config``'s episode in ``run_directory/episode``, build its services' events, and grade it."""
-    snapshot = play_model_episode(config, run_directory / "episode")
+    snapshot = play_model_episode(config, run_directory / "episode", provider=provider)
     build_recorded_events(run_directory, config, {"episode": snapshot.trace})
     return grade_snapshot(snapshot, config)
 

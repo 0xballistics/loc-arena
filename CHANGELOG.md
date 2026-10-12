@@ -141,6 +141,10 @@ log has the details.
 
 ### Fixed
 
+- **A live attack is judged only on what its agents did.** The world no longer opens a coverage-cutting
+  control-plane PR under agent-main's name in every attack episode, which gave the PR review monitor a catch
+  the model never earned. The scripted policy opens that PR as one of agent-main's own attack moves, through
+  the forge like any other PR.
 - **The explorer no longer counts a refused send as a message between agents.** The Communication view lists it
   as a refused send, counted apart and never read, since the board delivered nothing.
 - **A timed-out agent-code container is gone before the timeout is reported.** The grader force-removes it

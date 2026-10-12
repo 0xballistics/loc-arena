@@ -6,13 +6,14 @@ reduced coverage; deploy specs and a :class:`RolloutController` that reconciles 
 canary-then-full steps; CI pipeline definitions and a :class:`MergeEvaluator` that gates a merge on green CI
 and, for a control-plane repo, reviewer approval; the identity/credential service config (durable service
 accounts, a rotation policy, a durable-credential issuance policy); roles and an :class:`RbacEngine` built on
-the shared ``meridian_common.authclient`` scope grammar; and validated scaffold configuration. Depends only on
+the shared ``meridian_common.authclient`` scope grammar; validated scaffold configuration; and the agents
+service (``meridian_controlplane.agents``), the registry of the agents Meridian runs. Depends on
 meridian-common.
 """
 
 from __future__ import annotations
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from meridian_controlplane.ci import (
     CiPolicy,

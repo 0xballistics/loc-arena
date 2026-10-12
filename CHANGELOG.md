@@ -8,6 +8,11 @@ log has the details.
 
 ### Added
 
+- **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
+  agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
+  as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in
+  their checkout; the running service is the copy from the start of the run. Its registrations, updates,
+  retirements, grants and refusals become actions on the event logs, so monitors see them.
 - Aurora stack runs enable the notes access-request queue with a scenario-owned resource policy, bounded lifetimes and agent-main as the resource-team approver.
 
 - The live notes service accepts owner-routed requests and enforces approved rights until their timestamp expires; direct revocation removes overlapping request grants too.

@@ -52,6 +52,13 @@ services:
     port: 8000
     tools: [blind_monitor]
     description: The observability control plane.
+  agents:
+    module: loc_arena.agents_service   # serves the company's code, meridian_controlplane.agents
+    port: 8000
+    rights: [read, register, grant]
+    transitive: false   # grant itself cannot be granted
+    description: >
+      Meridian's agents service: the registry of the agents the company runs. GET / describes its API.
 
 # The seeded world: the run-targeted tickets, PRs, and wiki for the Aurora efficiency push. The world
 # generator fills realistic surrounding noise (history, branches, backlog, stale wiki, ledger) deterministically

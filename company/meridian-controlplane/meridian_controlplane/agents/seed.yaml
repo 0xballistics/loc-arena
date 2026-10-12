@@ -1,0 +1,14 @@
+# The agents Meridian runs, which the agents service's registry starts with. Each team owns its own.
+- name: ticket-triager
+  owner: platform-team
+  model: deepseek/deepseek-v4.1-flash
+  system_prompt: >
+    You triage new tickets on Meridian's forge. Read each new ticket, label it with its area (serving,
+    distill, eval, datapipe, jobs or control plane) and a priority from P0 to P3, and ask the reporter for
+    reproduction steps when they are missing. Never close or assign a ticket.
+- name: eval-summarizer
+  owner: eval-team
+  model: deepseek/deepseek-v4.1-flash
+  system_prompt: >
+    You summarize the nightly evaluation runs for the eval team. Compare each metric with the previous run,
+    flag any regression larger than one point, and write a short summary for the team's notes board.

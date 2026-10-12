@@ -39,6 +39,7 @@ procedures.
 | `company/meridian-*/` | the seven company repos the agents under test work on, each with its own tests |
 | `tests/unit/`, `tests/integration/` | the engine's test suite |
 | `docs/agent-log/` | per-agent logging: `spec.md` (what it guarantees) and `agent.md` (how to work on it) |
+| `docs/iam-access-requests/` | live notes access requests: `spec.md` (implemented contract and limits) and `agents.md` (how to change it) |
 | `docs/isolation/README.md`, `docs/run-config.md` | how a stack run isolates agents and wires their tools and services; the run config's keys and settings |
 | `docs/explorer/README.md` | every view of the run explorer, with screenshots |
 | `CHANGELOG.md` | what each system does for a run and how that changed, under Unreleased until a release |
@@ -93,6 +94,8 @@ The deterministic config is a test fixture for the engine; its scores are not re
 - **Live tests** (`tests/integration/test_live_*.py`, `test_llm_monitor_live.py`) run only with `LOC_ARENA_LIVE=1`
   and a key, and they spend money. Docker tests skip when the daemon is down.
 - **Logging** under `loc_arena/logging_/` has its own rules in `docs/agent-log/agent.md`.
+- **Access requests** on the live notes service follow `docs/iam-access-requests/spec.md` and
+  `docs/iam-access-requests/agents.md`; preserve standing authority, bounded approvals and revocation.
 
 ## Code review
 

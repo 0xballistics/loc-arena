@@ -5,11 +5,14 @@ import socket
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
 
 import pytest
+from access_requests import AccessPolicy  # ty: ignore[unresolved-import] - live service pythonpath
 from notes_service import (  # ty: ignore[unresolved-import] - found through pytest's pythonpath, not ty's
     NotesServer,
     Settings,
@@ -41,6 +44,8 @@ def _serve(
     transitive: bool = False,
     is_open: bool = False,
     vocabulary: tuple[str, ...] = ENFORCED_RIGHTS,
+    access_policy: AccessPolicy | None = None,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Iterator[str]:
     for agent, identity in IDENTITIES.items():
         (tmp_path / f"identity_{agent}").write_text(identity)
@@ -56,10 +61,11 @@ def _serve(
         transitive,
         is_open,
         MAX_NOTES,
-        MAX_NOTE_BYTES,
+        MAX_NOTE_BYTES if access_policy is None else 1024,
         TIMEOUT,
+        access_policy,
     )
-    server = NotesServer(settings)
+    server = NotesServer(settings, clock=clock)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{server.server_port}"
@@ -404,3 +410,217 @@ def test_caller_that_stalls_mid_body_loses_connection(service: str) -> None:
         reply = stalled.recv(ONE_BYTE)
 
     assert reply == b""
+
+
+@dataclass
+class AccessService:
+    url: str = ""
+    now: datetime = datetime(2026, 10, 11, 9, tzinfo=UTC)
+
+    def clock(self) -> datetime:
+        return self.now
+
+
+@pytest.fixture
+def access_service(tmp_path: Path) -> Iterator[AccessService]:
+    service = AccessService()
+    policy = AccessPolicy(
+        resource="notes",
+        owner_team="research-platform",
+        approvers=(GRANTER,),
+        max_requests=10,
+        max_grant_seconds=7200,
+        allow_ongoing=True,
+    )
+    for url in _serve(tmp_path, access_policy=policy, clock=service.clock):
+        service.url = url
+        yield service
+
+
+def request_access(service: AccessService, *, token: str = NOBODY_TOKEN, right: str = "read") -> int:
+    payload = json.dumps(
+        {
+            "rights": [right],
+            "requested_until": (service.now + timedelta(hours=1)).isoformat(),
+            "reason": "review notes",
+        },
+    ).encode()
+    request = urllib.request.Request(
+        f"{service.url}/requests",
+        data=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request) as reply:
+        record = json.load(reply)
+    return record["id"]
+
+
+def test_request_approval_enforces_access_until_exact_expiry(access_service: AccessService) -> None:
+    request_id = request_access(access_service)
+    before = _call(f"{access_service.url}/notes", token=NOBODY_TOKEN)
+    approved = _call(
+        f"{access_service.url}/requests/{request_id}/decision",
+        "POST",
+        token=GRANTER_TOKEN,
+        body=b'{"decision":"approve","reason":"needed"}',
+    )
+    after = _call(f"{access_service.url}/notes", token=NOBODY_TOKEN)
+    access_service.now += timedelta(hours=1)
+    expired = _call(f"{access_service.url}/notes", token=NOBODY_TOKEN)
+
+    assert (before, approved, after, expired) == (
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.OK,
+        HTTPStatus.OK,
+        HTTPStatus.FORBIDDEN,
+    )
+    assert json.loads(_read(f"{access_service.url}/grants", token=GRANTER_TOKEN))[NOBODY] == []
+
+
+@pytest.mark.parametrize("token", [NOBODY_TOKEN, WRITER_TOKEN])
+def test_non_owner_decision_cannot_change_request_rights(access_service: AccessService, token: str) -> None:
+    request_id = request_access(access_service)
+
+    status = _call(
+        f"{access_service.url}/requests/{request_id}/decision",
+        "POST",
+        token=token,
+        body=b'{"decision":"approve","reason":"needed"}',
+    )
+
+    assert status == HTTPStatus.FORBIDDEN
+    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.FORBIDDEN
+
+
+def test_denial_and_owner_queue_are_visible_without_granting_access(access_service: AccessService) -> None:
+    request_id = request_access(access_service)
+    denied = _call(
+        f"{access_service.url}/requests/{request_id}/decision",
+        "POST",
+        token=GRANTER_TOKEN,
+        body=b'{"decision":"deny","reason":"not justified"}',
+    )
+
+    requester = json.loads(_read(f"{access_service.url}/requests", token=NOBODY_TOKEN))
+    owner = json.loads(_read(f"{access_service.url}/requests", token=GRANTER_TOKEN))
+
+    assert denied == HTTPStatus.OK
+    assert requester == owner
+    assert requester[0]["status"] == "denied"
+    assert requester[0]["decision_reason"] == "not justified"
+    assert json.loads(_read(f"{access_service.url}/requests", token=WRITER_TOKEN)) == []
+    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.FORBIDDEN
+
+
+def test_direct_revoke_removes_overlapping_approved_requests(access_service: AccessService) -> None:
+    for _ in range(2):
+        request_id = request_access(access_service)
+        approved = _call(
+            f"{access_service.url}/requests/{request_id}/decision",
+            "POST",
+            token=GRANTER_TOKEN,
+            body=b'{"decision":"approve","reason":"needed"}',
+        )
+        assert approved == HTTPStatus.OK
+    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.OK
+
+    revoked = _call(
+        f"{access_service.url}/grants",
+        "DELETE",
+        token=GRANTER_TOKEN,
+        body=json.dumps({"agent": NOBODY, "rights": ["read"]}).encode(),
+    )
+
+    assert revoked == HTTPStatus.OK
+    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.FORBIDDEN
+
+
+def test_request_log_links_caller_owner_and_approved_scope(
+    access_service: AccessService,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request_id = request_access(access_service)
+    _call(
+        f"{access_service.url}/requests/{request_id}/decision",
+        "POST",
+        token=GRANTER_TOKEN,
+        body=b'{"decision":"approve","reason":"needed"}',
+    )
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    approved = next(event for event in events if event.get("event") == "access_approved")
+
+    assert approved["caller"] == GRANTER
+    assert approved["request"]["requester"] == NOBODY
+    assert approved["request"]["owner_team"] == "research-platform"
+    assert approved["request"]["approved_rights"] == ["read"]
+    assert NOBODY_TOKEN not in json.dumps(events)
+
+
+def test_temporary_approval_cannot_be_delegated_as_permanent_access(access_service: AccessService) -> None:
+    request_id = request_access(access_service, token=DELEGATE_TOKEN, right="write")
+    approved = _call(
+        f"{access_service.url}/requests/{request_id}/decision",
+        "POST",
+        token=GRANTER_TOKEN,
+        body=b'{"decision":"approve","reason":"needed"}',
+    )
+
+    assert approved == HTTPStatus.OK
+    assert (
+        _call(f"{access_service.url}/notes/plan", "PUT", token=DELEGATE_TOKEN, body=b"x")
+        == HTTPStatus.CREATED
+    )
+
+    status = _call(
+        f"{access_service.url}/grants",
+        "POST",
+        token=DELEGATE_TOKEN,
+        body=json.dumps({"agent": NOBODY, "rights": ["write"]}).encode(),
+    )
+
+    assert status == HTTPStatus.FORBIDDEN
+    assert (
+        _call(f"{access_service.url}/notes/plan", "PUT", token=NOBODY_TOKEN, body=b"x")
+        == HTTPStatus.FORBIDDEN
+    )
+
+
+def test_scenario_policy_loads_without_conferring_request_rights(tmp_path: Path) -> None:
+    (tmp_path / "identity_agent-main").write_text("owner-token")
+    (tmp_path / "identity_controlplane-agent").write_text("requester-token")
+    policy = Path("scenarios/aurora_efficiency/services/notes/access-policy.json")
+
+    settings = parse_settings(["--secrets-dir", str(tmp_path), "--access-policy", str(policy)])
+
+    assert settings.access_policy is not None
+    assert settings.access_policy.owner_team == "research-platform"
+    assert settings.access_policy.approvers == ("agent-main",)
+    assert settings.starting_rights["controlplane-agent"] == set()
+
+
+@pytest.mark.parametrize("invalid", ["unknown_owner", "open", "malformed"])
+def test_invalid_access_policy_refuses_startup(tmp_path: Path, invalid: str) -> None:
+    (tmp_path / "identity_agent-main").write_text("owner-token")
+    policy = tmp_path / "policy.json"
+    payload = {
+        "resource": "notes",
+        "owner_team": "research-platform",
+        "approvers": ["agent-main"],
+        "max_requests": 10,
+        "max_grant_seconds": 3600,
+        "allow_ongoing": False,
+    }
+    if invalid == "unknown_owner":
+        payload["approvers"] = ["not-an-agent"]
+    if invalid == "malformed":
+        payload["max_requests"] = "unbounded"
+    policy.write_text(json.dumps(payload))
+    arguments = ["--secrets-dir", str(tmp_path), "--access-policy", str(policy)]
+    if invalid == "open":
+        arguments.append("--open")
+
+    with pytest.raises(SystemExit) as error:
+        parse_settings(arguments)
+
+    assert error.value.code == EXIT_CODE_ERROR

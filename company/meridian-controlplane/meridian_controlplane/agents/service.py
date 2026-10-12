@@ -1,8 +1,9 @@
 """The agents service's HTTP API over the agent registry, with access control and an audit record.
 
-A request without a known identity is refused with 401, and one without the right with 403. Each request is
-one JSON line of the audit record: its time, the caller, the container it came from, the method, path and
-status, and, for an operation of the API, the operation's name and its arguments.
+A request with a malformed body is refused with 422, one without a known identity with 401, and one without
+the right with 403. Each request is one JSON line of the audit record: its time, the caller, the container it
+came from, the method, path and status, and, for an operation of the API, the operation's name and its
+arguments. Each operation is named after its route's handler.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse
 from pydantic import JsonValue
 from starlette.middleware.base import RequestResponseEndpoint
@@ -47,18 +50,16 @@ def create_agents_service_app(
     """The API over ``registry``, open to the callers ``access_control`` knows, auditing every request."""
     app = FastAPI(title="Meridian agents service", docs_url=None, redoc_url=None)
 
-    def authorize(
-        request: Request,
-        operation: str,
-        arguments: Mapping[str, JsonValue],
-        required_right: str | None,
-    ) -> str:
-        """The caller, once it may run ``operation``; the operation goes on the request's audit line."""
-        request.state.operation = operation
+    def put_operation_on_audit_line(request: Request, arguments: Mapping[str, JsonValue]) -> str | None:
+        """Name the route's operation, its arguments and its caller on the audit line; returns the caller."""
+        request.state.operation = request.scope["route"].name
         request.state.arguments = dict(arguments)
-        caller = request.state.caller = access_control.identify_caller(
-            request.headers.get("Authorization", ""),
-        )
+        request.state.caller = access_control.identify_caller(request.headers.get("Authorization", ""))
+        return request.state.caller
+
+    def authorize(request: Request, arguments: Mapping[str, JsonValue], required_right: str | None) -> str:
+        """The caller, once it may run the route's operation."""
+        caller = put_operation_on_audit_line(request, arguments)
         if caller is None:
             raise HTTPException(HTTPStatus.UNAUTHORIZED, "send a known identity as a bearer token")
         if required_right is not None and not access_control.holds_right(caller, required_right):
@@ -84,6 +85,12 @@ def create_agents_service_app(
         write_audit_line(json.dumps(audit_line))
         return response
 
+    @app.exception_handler(RequestValidationError)
+    async def refuse_malformed_request(request: Request, error: RequestValidationError) -> Response:
+        """Refused before the route can authorize, a malformed body's audit line still names the operation."""
+        put_operation_on_audit_line(request, request.path_params)
+        return await request_validation_exception_handler(request, error)
+
     @app.get("/health", response_class=PlainTextResponse)
     async def health() -> str:
         return "ok"
@@ -95,47 +102,47 @@ def create_agents_service_app(
 
     @app.get("/agents")
     async def list_agents(request: Request) -> list[AgentSummary]:
-        authorize(request, "list_agents", {}, READ)
+        authorize(request, {}, READ)
         return registry.list_agents()
 
     @app.get("/agents/{name}")
     async def read_agent(request: Request, name: str) -> AgentSummary:
-        authorize(request, "read_agent", {"name": name}, READ)
+        authorize(request, {"name": name}, READ)
         return registry.get_agent(name)
 
     @app.get("/agents/{name}/versions")
     async def list_versions(request: Request, name: str) -> list[AgentVersion]:
-        authorize(request, "list_versions", {"name": name}, READ)
+        authorize(request, {"name": name}, READ)
         return registry.list_versions(name)
 
     @app.post("/agents", status_code=HTTPStatus.CREATED)
     async def register_agent(request: Request, registration: AgentRegistration) -> AgentSummary:
-        caller = authorize(request, "register_agent", registration.model_dump(), REGISTER)
+        caller = authorize(request, registration.model_dump(), REGISTER)
         return registry.register(registration, registered_by=caller)
 
     @app.put("/agents/{name}")
     async def update_agent(request: Request, name: str, definition: AgentDefinition) -> AgentSummary:
-        caller = authorize(request, "update_agent", {"name": name, **definition.model_dump()}, REGISTER)
+        caller = authorize(request, {"name": name, **definition.model_dump()}, REGISTER)
         return registry.add_version(name, definition, created_by=caller)
 
     @app.delete("/agents/{name}")
     async def retire_agent(request: Request, name: str) -> AgentSummary:
-        authorize(request, "retire_agent", {"name": name}, REGISTER)
+        authorize(request, {"name": name}, REGISTER)
         return registry.retire(name)
 
     @app.get("/grants")
     async def list_grants(request: Request) -> dict[str, list[str]]:
-        authorize(request, "list_grants", {}, required_right=None)
+        authorize(request, {}, required_right=None)
         return access_control.list_rights_by_caller()
 
     @app.post("/grants")
     async def grant_rights(request: Request, change: RightsChange) -> list[str]:
-        granter = authorize(request, "grant_rights", change.model_dump(), GRANT)
+        granter = authorize(request, change.model_dump(), GRANT)
         return access_control.grant_rights(granter, change)
 
     @app.delete("/grants")
     async def revoke_rights(request: Request, change: RightsChange) -> list[str]:
-        revoker = authorize(request, "revoke_rights", change.model_dump(), GRANT)
+        revoker = authorize(request, change.model_dump(), GRANT)
         return access_control.revoke_rights(revoker, change)
 
     return app

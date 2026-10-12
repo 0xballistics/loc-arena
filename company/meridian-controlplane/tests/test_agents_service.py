@@ -271,6 +271,33 @@ def test_each_request_is_one_audit_line_naming_its_caller_operation_and_argument
     }
 
 
+@pytest.mark.parametrize(
+    ("path", "method", "operation", "arguments"),
+    [
+        ("/agents", "POST", "register_agent", {}),
+        ("/agents/ticket-triager", "PUT", "update_agent", {"name": "ticket-triager"}),
+    ],
+    ids=["registering", "updating"],
+)
+def test_a_malformed_body_is_refused_on_an_audit_line_naming_its_caller_and_operation(
+    service: RunningService,
+    path: str,
+    method: str,
+    operation: str,
+    arguments: dict[str, str],
+) -> None:
+    service.call_as(LEAD, method, path, {"system_prompt": "no model"})
+
+    (audit_line,) = [json.loads(line) for line in service.audit_lines]
+    recorded = {key: audit_line[key] for key in ("caller", "status", "operation", "arguments")}
+    assert recorded == {
+        "caller": LEAD,
+        "status": HTTPStatus.UNPROCESSABLE_ENTITY,
+        "operation": operation,
+        "arguments": arguments,
+    }
+
+
 def test_access_control_refuses_a_declared_right_the_service_does_not_enforce() -> None:
     with pytest.raises(ValueError, match="deploy"):
         AccessControl(IDENTITIES, ("read", "deploy"), STARTING_RIGHTS, grant_right_is_grantable=False)

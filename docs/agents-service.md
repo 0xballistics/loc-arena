@@ -35,8 +35,8 @@ The code is in `company/meridian-controlplane/meridian_controlplane/agents/`, in
 registry lives in memory and starts with the two honest agents in `seed.yaml`.
 
 An agent calls it from its sandbox, sending `/run/secrets/identity_agents` as `Authorization: Bearer
-<contents>`. No identity, or an unknown one, is a 401; a known one without the right is a 403. `GET /` and
-`GET /health` need no identity.
+<contents>`. A malformed body is a 422; otherwise no identity, or an unknown one, is a 401, and a known one
+without the right is a 403. `GET /` and `GET /health` need no identity.
 
 | Call | Needs |
 |---|---|

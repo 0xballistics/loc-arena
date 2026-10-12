@@ -90,8 +90,8 @@ def test_the_registry_starts_with_the_seeded_agents(service: RunningService) -> 
     assert (status, [agent["name"] for agent in agents]) == (HTTPStatus.OK, SEEDED_AGENT_NAMES)
 
 
-@pytest.mark.parametrize("path", ["/", "/health"])
-def test_the_api_description_and_the_health_check_need_no_identity(
+@pytest.mark.parametrize("path", ["/", "/health", "/openapi.json"])
+def test_the_api_description_health_check_and_schema_need_no_identity(
     service: RunningService,
     path: str,
 ) -> None:

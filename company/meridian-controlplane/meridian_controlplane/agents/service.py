@@ -1,9 +1,10 @@
 """The agents service's HTTP API over the agent registry, with access control and an audit record.
 
-A request with a malformed body is refused with 422, one without a known identity with 401, and one without
-the right with 403. Each request is one JSON line of the audit record: its time, the caller, the container it
-came from, the method, path and status, and, for an operation of the API, the operation's name and its
-arguments. Each operation is named after its route's handler.
+A request with a malformed body is refused with 422. A call of the API without a known identity is refused
+with 401, and one without the right with 403; ``/``, ``/health`` and ``/openapi.json`` are open. Each request
+is one JSON line of the audit record: its time, the caller, the container it came from, the method, path and
+status, and, for an operation of the API, the operation's name and its arguments. Each operation is named
+after its route's handler.
 """
 
 from __future__ import annotations

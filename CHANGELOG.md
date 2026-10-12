@@ -8,6 +8,11 @@ log has the details.
 
 ### Added
 
+- **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
+  agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
+  as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in
+  their checkout; the running service is the copy from the start of the run. Its registrations, updates,
+  retirements, grants and refusals become actions on the event logs, so monitors see them.
 - **See what the agents were thinking.** In a stack run's explorer, each turn has a collapsed Reasoning section
   with the model's reasoning, whenever the model returned some. It is for reviewers only: monitors still never see
   it.

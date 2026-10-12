@@ -53,6 +53,7 @@ from loc_arena.stack_play import (
     play_phases,
 )
 from loc_arena.task import SANDBOX_URL_VARIABLE, TOOLS_URL_VARIABLE, resolve_scenario
+from loc_arena.tasks.main_task_grader import COMPANY_REPOS
 from loc_arena.tools_gateway import (
     MCP_PATH,
     TOOLS_GATEWAY_CONFIG_SECRET_NAME,
@@ -68,6 +69,7 @@ KEY_SECRET_NAME = "openrouter_api_key"  # the compose secret: a file in settings
 OUTPUT_DIRECTORY = PurePosixPath("/output")  # the episode's audit bundles; the image creates it for nobody
 CONFIGS_DIRECTORY = PurePosixPath("/app/configs")  # the run configs, mounted read-only
 SCENARIOS_DIRECTORY = PurePosixPath("/app/scenarios")  # where the loader looks for a scenario pack
+COMPANY_DIRECTORY = PurePosixPath("/app/company")  # the company repos, in the engine image
 REPOSITORY = Path(__file__).resolve().parents[1]  # its Dockerfile and configs/
 TOKEN_BYTES = 32  # the entropy of each sandbox token and of each agent's identity on a live service
 VOCABULARY_VARIABLE = "LOC_ARENA_VOCABULARY"  # the rights a live service's scenario declares: a JSON list
@@ -143,6 +145,8 @@ def render_compose(
     services = config.live_services
     tool_services = [service.name for service in services if service.tools]
     identities = issue_identities(config)
+    # An engine module may serve company code: each company repo's root is on its path, as in a checkout.
+    company_repos_pythonpath = ":".join(str(COMPANY_DIRECTORY / repo) for repo in COMPANY_REPOS)
     return {
         "services": {
             "gateway": {
@@ -170,7 +174,7 @@ def render_compose(
                     config,
                     service,
                     identities,
-                    {**engine, "volumes": [configs]},
+                    {**engine, "volumes": [configs], "environment": {"PYTHONPATH": company_repos_pythonpath}},
                     run,
                 )
                 for service in services
@@ -308,13 +312,14 @@ def _render_live_service(
 ) -> ComposeService:
     """A live service: on agent-net alone, no published port.
 
-    One that runs a module of the ``engine`` service, with the run configs mounted read-only, is given the
-    path of ``run``'s config; any other mounts no volume. One with rights or tools holds every agent's
-    identity, each under its agent's id; one with rights also the rights its scenario declares and the
-    agents' starting rights.
+    One that runs a module of the ``engine`` service, with the run configs mounted read-only and the company
+    repos importable, is given the path of ``run``'s config; any other mounts no volume. One with rights or
+    tools holds every agent's identity, each under its agent's id; one with rights also the rights its
+    scenario declares and the agents' starting rights.
     """
     stack = config.settings.stack
     rights = {agent.id: list(agent.sandbox.rights.get(service.name, ())) for agent in config.agents}
+    environment: dict[str, str] = {}
     match service.source:
         case Path():
             source: ComposeService = {
@@ -325,8 +330,16 @@ def _render_live_service(
             # The entry name follows the config so one module (the recording service) can serve several.
             arguments = [f"{CONFIGS_DIRECTORY}/{run}.yaml", service.name]
             source = {**engine, "command": ["python", "-m", module, *arguments]}
+            environment = engine["environment"]
         case image:
             source = {"image": image}
+    if service.rights:
+        environment = {
+            **environment,
+            VOCABULARY_VARIABLE: json.dumps(list(service.rights)),
+            RIGHTS_VARIABLE: json.dumps(rights),
+            TRANSITIVE_VARIABLE: json.dumps(service.transitive),
+        }
     return {
         **source,
         **({"command": list(service.command)} if service.command else {}),
@@ -335,17 +348,7 @@ def _render_live_service(
         "cpus": stack.service_cpus,
         "pids_limit": stack.service_pids_limit,
         "networks": [AGENT_NETWORK],
-        **(
-            {
-                "environment": {
-                    VOCABULARY_VARIABLE: json.dumps(list(service.rights)),
-                    RIGHTS_VARIABLE: json.dumps(rights),
-                    TRANSITIVE_VARIABLE: json.dumps(service.transitive),
-                },
-            }
-            if service.rights
-            else {}
-        ),
+        **({"environment": environment} if environment else {}),
         **(
             {
                 "secrets": [

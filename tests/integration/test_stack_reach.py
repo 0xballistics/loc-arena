@@ -107,6 +107,10 @@ NOTES = next(service for service in CONFIG.live_services if service.name == "not
 NOTES_IDENTITY_FILE = f"{IDENTITY_PREFIX}{NOTES.name}"  # an agent's own identity, in its sandbox
 FORGE = next(service for service in CONFIG.live_services if service.name == "forge")
 BOARD = next(service for service in CONFIG.live_services if service.name == "board")
+AGENTS_SERVICE = next(service for service in CONFIG.live_services if service.name == "agents")
+# A sandbox holds its agent's identity on each service with rights, and none on a service with tools.
+SANDBOX_IDENTITY_FILES = [f"{IDENTITY_PREFIX}{AGENTS_SERVICE.name}", NOTES_IDENTITY_FILE]
+REGISTERED = {"name": "reach-triager", "model": "provider/model", "system_prompt": "Triage the new tickets."}
 THIRD_AGENT = (
     "eval-agent"  # holds the board's tools, and is neither sender nor recipient of the direct message
 )
@@ -153,6 +157,8 @@ REFUSED_GUESS_ROW = "the_notes_board_refuses_a_guessed_token"
 REFUSED_GRANT_ROW = "the_notes_board_refuses_a_grant_from_an_agent_without_the_grant_right"
 REFUSED_TRANSITIVE_ROW = "the_notes_board_refuses_to_grant_the_grant_right_when_it_is_not_transitive"
 REFUSED_GHOST_ROW = "the_notes_board_refuses_a_grant_to_an_agent_it_does_not_know"
+REGISTERS_ROW = "agent_main_registers_an_agent_on_the_agents_service_with_its_identity"
+REFUSED_REGISTER_ROW = "the_agents_service_refuses_a_registration_from_an_agent_that_only_reads"
 OWN_TOKEN_ROW = "the_sandbox_holds_only_its_own_token"
 OWN_IDENTITY_ROW = "the_sandbox_holds_only_its_own_identity"
 OWN_TOOLS_ROW = "the_tools_gateway_offers_an_agent_exactly_its_tools"
@@ -422,6 +428,9 @@ except urllib.error.HTTPError as error:
 # The notes board's calls, as the agent whose sandbox runs them: a read of the notes with its own identity, a
 # grant to another agent with it, its own identity as the sandbox holds it.
 READ_NOTES = "print(fetch('{notes_url}/notes', open('{secrets_dir}/{identity_file}').read().strip()))"
+# The agents service's registration, with the identity on it that the sandbox holds.
+AGENTS_IDENTITY = "open('{secrets_dir}/{agents_identity_file}').read().strip()"
+REGISTER_AGENT = f"print(post('{{agents_url}}/agents', {{registration}}, {AGENTS_IDENTITY}))"
 # The tools gateway's calls, with the sandbox's own token as its key: its tool list, and open_pr titled after
 # the agent whose sandbox runs it.
 OWN_KEY = "open('{secrets_dir}/{token_file}').read().strip()"
@@ -624,6 +633,9 @@ ROWS: dict[str, tuple[str, set[str]]] = {
     REFUSED_GRANT_ROW: (write_grant_script("grant_read"), {str(int(HTTPStatus.FORBIDDEN))}),
     REFUSED_TRANSITIVE_ROW: (write_grant_script("grant_grant"), {str(int(HTTPStatus.FORBIDDEN))}),
     REFUSED_GHOST_ROW: (write_grant_script("grant_ghost"), {str(int(HTTPStatus.NOT_FOUND))}),
+    # The agents service, company code the engine image serves: agent-main registers, a reader cannot.
+    REGISTERS_ROW: (REGISTER_AGENT, {str(int(HTTPStatus.CREATED))}),
+    REFUSED_REGISTER_ROW: (REGISTER_AGENT, {str(int(HTTPStatus.FORBIDDEN))}),
     "the_notes_board_cannot_resolve_the_providers_name": (
         "print(resolve('{provider_host}'))",
         {"gaierror:EAI_AGAIN"},
@@ -709,6 +721,7 @@ ROWS: dict[str, tuple[str, set[str]]] = {
 # Rows run as another agent than AGENT, and rows run in a service container instead of a sandbox.
 ROW_AGENTS = {
     READER_READS_ROW: OTHER_AGENT,
+    REFUSED_REGISTER_ROW: OTHER_AGENT,
     REFUSED_WITHOUT_RIGHTS_ROW: AGENT_WITHOUT_RIGHTS,
     REFUSED_GRANT_ROW: OTHER_AGENT,
     NO_TOOLS_ROW: AGENT_WITHOUT_TOOLS,
@@ -830,6 +843,7 @@ class StackRun:
     tools_gateway_log_text: str
     forge_log: list[ToolRecord]
     forge_log_text: str
+    agents_log_text: str
     played_from: float
     played_until: float
     native_opened: dict[str, Any]
@@ -923,6 +937,9 @@ def build_probes(
         "grant_read": repr(json.dumps({"agent": AGENT_WITHOUT_RIGHTS, "rights": ["read"]})),
         "grant_grant": repr(json.dumps({"agent": AGENT_WITHOUT_RIGHTS, "rights": ["grant"]})),
         "grant_ghost": repr(json.dumps({"agent": GHOST_AGENT, "rights": ["read"]})),
+        "agents_url": f"http://{AGENTS_SERVICE.name}:{AGENTS_SERVICE.port}",
+        "agents_identity_file": f"{IDENTITY_PREFIX}{AGENTS_SERVICE.name}",
+        "registration": repr(json.dumps(REGISTERED)),
     }
     scripts = {row: script for row, (script, _) in ROWS.items()} | SCRIPTS_CHECKED_APART
     commands = {row: write_command(script, values) for row, script in scripts.items()}
@@ -999,7 +1016,12 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
     identities = {agent.id: secrets.token_urlsafe(32) for agent in CONFIG.agents}  # on the notes board
     forge_identities = {agent.id: secrets.token_urlsafe(32) for agent in CONFIG.agents}
     board_identities = {agent.id: secrets.token_urlsafe(32) for agent in CONFIG.agents}
-    by_service = {FORGE.name: forge_identities, BOARD.name: board_identities}
+    agents_identities = {agent.id: secrets.token_urlsafe(32) for agent in CONFIG.agents}
+    by_service = {
+        FORGE.name: forge_identities,
+        BOARD.name: board_identities,
+        AGENTS_SERVICE.name: agents_identities,
+    }
     issued = {
         identity: by_service.get(identity.service, identities)[identity.agent_id]
         for identity in issue_identities(STACK_CONFIG)
@@ -1018,7 +1040,10 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
     call_log = directory / "calls.jsonl"
     try:
         sandboxes = [sandbox_service(agent) for agent in tokens]
-        services = [GATEWAY_SERVICE, *sandboxes, NOTES.name, FORGE.name, BOARD.name, TOOLS_GATEWAY_SERVICE]
+        services = [
+            *[GATEWAY_SERVICE, *sandboxes, NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name],
+            TOOLS_GATEWAY_SERVICE,
+        ]
         # The gateway, the forge and the episode share the engine image: built once, before any container
         # starts from it, and never again, nor a running service recreated, since a build need not reproduce.
         run_docker(*compose, "build", env=environment)
@@ -1076,7 +1101,7 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         list_files = f"import json, os; print(json.dumps(sorted(os.listdir({str(gateway.secrets_dir)!r}))))"
         service_secrets = {
             service: json.loads(run_in(service, "python", "-c", list_files))
-            for service in (GATEWAY_SERVICE, NOTES.name, FORGE.name, BOARD.name)
+            for service in (GATEWAY_SERVICE, NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name)
         }
 
         def read_log(service: str) -> list[str]:
@@ -1089,6 +1114,7 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         forge_log_text = "\n".join(read_log(FORGE.name))  # uvicorn's lines among the records
         forge_lines = [line for line in forge_log_text.splitlines() if line[:1] == "{"]
         forge_log = [ToolRecord.model_validate_json(line) for line in forge_lines]
+        agents_log_text = "\n".join(read_log(AGENTS_SERVICE.name))
         board_log = [ToolRecord.model_validate_json(line) for line in read_log(BOARD.name) if line[:1] == "{"]
         tools_gateway_lines = read_log(TOOLS_GATEWAY_SERVICE)
         tools_gateway_log = [
@@ -1152,6 +1178,7 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         tools_gateway_log_text="\n".join(tools_gateway_lines),
         forge_log=forge_log,
         forge_log_text=forge_log_text,
+        agents_log_text=agents_log_text,
         played_from=played_from,
         played_until=played_until,
         forge_identities=forge_identities,
@@ -1214,7 +1241,7 @@ def test_each_sandbox_holds_only_its_own_identity(stack_run: StackRun) -> None:
     held = stack_run.own_identities
 
     expected = {
-        agent: json.dumps([[NOTES_IDENTITY_FILE], hashlib.sha256(identity.encode()).hexdigest()])
+        agent: json.dumps([SANDBOX_IDENTITY_FILES, hashlib.sha256(identity.encode()).hexdigest()])
         for agent, identity in stack_run.identities.items()
     }
     assert held == expected
@@ -1291,10 +1318,10 @@ def test_each_container_holds_only_the_identity_files_its_role_needs(stack_run: 
     identities = {
         container: [name for name in names if name.startswith(IDENTITY_PREFIX)]
         for container, names in held.items()
-        if container not in (NOTES.name, FORGE.name, BOARD.name)
+        if container not in (NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name)
     }
     assert identities == {
-        **{sandbox_service(agent.id): [NOTES_IDENTITY_FILE] for agent in CONFIG.agents},
+        **{sandbox_service(agent.id): SANDBOX_IDENTITY_FILES for agent in CONFIG.agents},
         EPISODE_SERVICE: [],
         GATEWAY_SERVICE: [],
     }
@@ -1306,7 +1333,7 @@ def test_the_gateway_holds_the_key_and_nothing_else(stack_run: StackRun) -> None
     assert held == [KEY_SECRET_NAME]
 
 
-@pytest.mark.parametrize("service", [NOTES.name, FORGE.name, BOARD.name])
+@pytest.mark.parametrize("service", [NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name])
 def test_a_live_service_with_rights_or_tools_holds_exactly_one_identity_per_agent(
     stack_run: StackRun,
     service: str,
@@ -1509,6 +1536,7 @@ def write_played_run(directory: Path, stack_run: StackRun) -> Path:
     (run / PLAYED_FILE).write_text(played.model_dump_json())
     (run / SERVICE_LOGS).mkdir()
     (run / SERVICE_LOGS / f"{FORGE.name}.log").write_text(stack_run.forge_log_text)
+    (run / SERVICE_LOGS / f"{AGENTS_SERVICE.name}.log").write_text(stack_run.agents_log_text)
     return run
 
 
@@ -1533,6 +1561,23 @@ def test_the_pr_events_built_from_the_forges_log_name_the_agent_whose_key_opened
         if event.kind == "pr" and event.actor_uid != ERA_AGENT
     )
     assert built == [(agent, f"opened-by-{agent}") for agent in sorted([AGENT, NATIVE_AGENT, OTHER_AGENT])]
+
+
+def test_the_actions_built_from_the_agents_services_log_name_who_registered_and_who_was_refused(
+    stack_run: StackRun,
+    tmp_path: Path,
+) -> None:
+    run = write_played_run(tmp_path, stack_run)
+
+    build_recorded_run_events(CONFIG, run)
+
+    mirror = read_events(run / "episode" / "events.mirror.jsonl")
+    built = sorted(
+        (event.actor_uid, event.target_id, event.payload["blocked"])
+        for event in mirror
+        if event.kind == "action" and event.tool == "register_agent"
+    )
+    assert built == [(AGENT, REGISTERED["name"], False), (OTHER_AGENT, REGISTERED["name"], True)]
 
 
 @pytest.mark.parametrize(("mode", "era"), [(MODERN, "2026-07-28"), (LEGACY, "2025-")], ids=["2026", "2025"])

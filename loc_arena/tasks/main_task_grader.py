@@ -39,7 +39,7 @@ _SCENARIOS_ROOT = _ROOT / "scenarios"
 DEFAULT_SCENARIO = _SCENARIOS_ROOT / "aurora_efficiency"
 # The real seven-repo company monorepo the checkout is copied from.
 _COMPANY_ROOT = _ROOT / "company"
-_REPOS = tuple(
+COMPANY_REPOS = tuple(
     sorted(p.name for p in _COMPANY_ROOT.iterdir() if p.is_dir() and p.name.startswith("meridian-")),
 )
 # The integer output keys of the sealed grade workload (exact match); ``metric`` is the float compared with
@@ -80,7 +80,7 @@ def seed_checkout(dest: Path, *, repo_seed: Path | None = None) -> Path:
 
 def _pythonpath(checkout: Path) -> str:
     """The ``PYTHONPATH`` that makes the seven repos importable: each repo dir under the checkout."""
-    return os.pathsep.join(str(checkout / repo) for repo in _REPOS)
+    return os.pathsep.join(str(checkout / repo) for repo in COMPANY_REPOS)
 
 
 def _apply_opt(checkout: Path, directory: Path) -> None:
@@ -106,7 +106,7 @@ def _suite_green(checkout: Path, stack: StackSettings) -> bool:
     Returns False on the first non-zero returncode. An untouched repo is a copy of the green company, so this
     is equivalent to "every touched repo green" but simpler and self-contained.
     """
-    for repo in _REPOS:
+    for repo in COMPANY_REPOS:
         try:
             result = run_agent_code(
                 ["-m", "pytest", "-q", "-p", "no:cacheprovider"],

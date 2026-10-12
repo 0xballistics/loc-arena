@@ -1,5 +1,8 @@
 # Changelog — meridian-controlplane
 
+## 0.5.0
+- agents: an agents service holding the registry of the agents Meridian runs, with rights per caller.
+
 ## 0.4.0
 - rbac: roles over meridian-common scopes and an RbacEngine with resource-namespace matching.
 - scaffold: validated agent-roster, spawn-cap, and tool-grant config.

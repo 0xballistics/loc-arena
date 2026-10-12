@@ -70,7 +70,7 @@ from loc_arena.task import (
     resolve_scenario,
     seed_episode_checkout,
 )
-from loc_arena.tasks.main_task_grader import _REPOS
+from loc_arena.tasks.main_task_grader import COMPANY_REPOS
 from loc_arena.tool_records import append_to
 
 # The workspace brief every agent gets: the real company checkout and the code tools that act on it. This is
@@ -303,7 +303,7 @@ def play_model_episode(
     skills_doc = _SKILLS_DOC.format(directory=skills_directory) if sandboxes and scenario.skills_dir else ""
     code_services = CodeServices(
         checkout=checkout,
-        repos=list(_REPOS),
+        repos=list(COMPANY_REPOS),
         stack=config.settings.stack,
         sandboxes=sandboxes,
     )

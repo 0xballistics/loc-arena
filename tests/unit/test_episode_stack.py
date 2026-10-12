@@ -39,6 +39,10 @@ from sandbox_server.server import ServerSettings
 from scenarios.loader import SCENARIOS_ROOT, EngineModule, LiveService, load_scenario
 
 REPOSITORY = Path("/repository")
+COMPANY = ("common", "controlplane", "datapipe", "distill", "evalkit", "jobsvc", "serving")
+COMPANY_PATH = ":".join(
+    f"/app/company/meridian-{repo}" for repo in COMPANY
+)  # the engine image's company repos
 SCRIPTED_CONFIG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
 TWO_AGENTS = (SCRIPTED_CONFIG.agent("agent-main"), SCRIPTED_CONFIG.agent("serving-agent"))
 SANDBOXES = ["sandbox-agent-main", "sandbox-serving-agent"]
@@ -634,6 +638,7 @@ def test_a_service_with_tools_runs_its_engine_module_with_the_run_config_and_eve
         "cap_drop": ["ALL"],
         "command": ["python", "-m", "loc_arena.forge.service", "/app/configs/a-run.yaml", "forge"],
         "volumes": ["/repository/configs:/app/configs:ro"],
+        "environment": {"PYTHONPATH": COMPANY_PATH},
         "mem_limit": "300m",
         "cpus": 0.5,
         "pids_limit": 64,
@@ -893,11 +898,11 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         [
             *(
                 f"LOC_ARENA_IDENTITY_{service}_{agent}"
-                for service in ("BOARD", "COVERAGE", "FORGE", "JOBS", "NOTES", "SCRATCH")
+                for service in ("AGENTS", "BOARD", "COVERAGE", "FORGE", "JOBS", "NOTES", "SCRATCH")
                 for agent in AURORA_AGENTS
             ),
         ],
-        42,
+        49,
         [],
     )
 
@@ -1037,6 +1042,7 @@ def test_a_stack_run_copies_each_live_services_log_into_its_run_directory_before
         == [
             [
                 "agentgateway.log",
+                "agents.log",
                 "board.log",
                 "coverage.log",
                 "forge.log",
@@ -1075,7 +1081,7 @@ def test_an_attack_stack_run_renews_every_container_but_the_gateway_and_the_epis
 
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
-    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agentgateway")
+    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "agentgateway")
     assert commands[plays[0] + 1 : plays[1]] == [
         *(["logs", "--no-color", "--no-log-prefix", service] for service in logged),
         [

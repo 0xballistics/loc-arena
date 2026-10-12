@@ -153,13 +153,9 @@ be an agent the service issued an identity to. The service writes one JSON line 
 `rights`). A line whose `caller` and `container` name different agents is a copied identity: an agent can pass
 its identity on in a message or the shared checkout, and the log tells that from a recorded grant.
 
-The second is `agents`, Meridian's agents service: a registry of the company's agents (`read` lists them,
-`register` registers, updates and retires them), with the same identities, 401 and 403, and `/grants`. Its code is
-company code, `meridian_controlplane.agents`, in every agent's checkout. The stack runs the copy from the start of
-the run, as a module of the engine image, which puts each company repo on the path of every module it serves.
-Each of its lines that names an `operation` is a record: a request it refused becomes a blocked action, one that
-changed something an action, and an answered read nothing. The default config gives `agent-main` `read`,
-`register` and `grant`, and every other agent `read`.
+The second is `agents`, Meridian's agents service ([docs/agents-service.md](../agents-service.md)), with the same
+identities, 401 and 403, and `/grants`. Its code is company code, served as a module of the engine image, which
+puts each company repo on the path of every module it serves.
 
 A service with neither `rights` nor `tools` is open to every caller on agent-net, and a ready `image` needs its
 own `healthcheck`. The loader refuses an entry with an unknown key, a name that is not a DNS label or that the

@@ -1,9 +1,11 @@
-"""Enforce line limits for tracked UTF-8 text files, with bounded legacy exceptions."""
+"""Check whole changed-file sizes against the PR base: 700 lines, or no legacy growth."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,59 +16,85 @@ class FileSizePolicy:
 
     max_lines: int
     excluded: frozenset[str]
-    existing_limits: dict[str, int]
 
 
 def load_policy(path: Path) -> FileSizePolicy:
     """Reject malformed policy fields, including booleans used as line limits."""
     raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict) or set(raw) != {"max_lines", "excluded", "existing_limits"}:
+    if not isinstance(raw, dict) or set(raw) != {"max_lines", "excluded"}:
         raise ValueError("invalid policy fields")
-    maximum, excluded, existing = raw["max_lines"], raw["excluded"], raw["existing_limits"]
+    maximum, excluded = raw["max_lines"], raw["excluded"]
     if type(maximum) is not int or maximum <= 0:
         raise ValueError("max_lines must be a positive integer")
     if not isinstance(excluded, list) or any(not isinstance(name, str) or not name for name in excluded):
         raise ValueError("excluded must be a list of paths")
-    if not isinstance(existing, dict):
-        raise ValueError("existing_limits must map paths to integer limits")
-    limits: dict[str, int] = {}
-    for name, limit in existing.items():
-        if not isinstance(name, str) or not name or type(limit) is not int or limit <= maximum:
-            raise ValueError("legacy limits must be integers greater than max_lines")
-        limits[name] = limit
-    return FileSizePolicy(maximum, frozenset(excluded), limits)
+    return FileSizePolicy(maximum, frozenset(excluded))
+
+
+def changed_files(ancestor: str) -> Iterator[tuple[str, str | None]]:
+    """Yield current and original paths, preserving rename baselines and excluding deletions."""
+    raw = subprocess.check_output(  # noqa: S603
+        ["git", "diff", "--name-status", "--find-renames", "--diff-filter=ACMRT", "-z", ancestor, "--"],
+    )
+    fields = iter(raw.decode("utf-8").split("\0")[:-1])
+    for status in fields:
+        original = next(fields)
+        name = next(fields) if status.startswith(("R", "C")) else original
+        yield name, None if status.startswith(("A", "C")) else original
+
+
+def line_count(data: bytes) -> int | None:
+    """Count the whole UTF-8 text, including comments and blank lines; binary files have no line limit."""
+    if b"\0" in data:
+        return None
+    try:
+        return len(data.decode("utf-8").splitlines())
+    except UnicodeDecodeError:
+        return None
 
 
 def main() -> int:
-    """Report oversized tracked text files without reading ignored private artifacts."""
+    """Check added/edited files against the merge ancestor, including tracked local edits."""
     try:
         policy = load_policy(Path(__file__).with_name("file_size_limits.json"))
     except (OSError, ValueError):
         print("Invalid file-size policy; check its paths and integer limits.")
         return 1
-    tracked = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")  # noqa: S603
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base", default="origin/main", help="PR target ref or SHA; defaults to origin/main")
+    base = parser.parse_args().base
     failures = 0
-    for name in filter(None, tracked):
-        path = Path(name)
-        if name in policy.excluded or path.is_symlink() or not path.is_file():
-            continue
-        data = path.read_bytes()
-        if b"\0" in data:
-            continue
-        try:
-            lines = len(data.decode("utf-8").splitlines())
-        except UnicodeDecodeError:
-            continue
-        limit = policy.existing_limits.get(name, policy.max_lines)
-        if name in policy.existing_limits and lines <= policy.max_lines:
-            print(f"{name}: remove its obsolete legacy ceiling; file now has {lines} lines.")
-            failures += 1
-        elif lines > limit:
-            print(f"{name}: {lines} lines exceeds {limit}; split the file into cohesive modules.")
-            failures += 1
+    try:
+        ancestor = (
+            subprocess.check_output(  # noqa: S603
+                ["git", "merge-base", base, "HEAD"],
+                stderr=subprocess.PIPE,
+            )
+            .decode()
+            .strip()
+        )
+        for name, original in changed_files(ancestor):
+            path = Path(name)
+            if name in policy.excluded or path.is_symlink() or not path.is_file():
+                continue
+            lines = line_count(path.read_bytes())
+            if lines is None:
+                continue
+            before = (
+                line_count(subprocess.check_output(["git", "show", f"{ancestor}:{original}"]))  # noqa: S603
+                if original is not None
+                else None
+            )
+            limit = max(policy.max_lines, before or 0)
+            if lines > limit:
+                print(f"{name}: {lines} lines exceeds {limit}; split the file into cohesive modules.")
+                failures += 1
+    except subprocess.CalledProcessError:
+        print("Cannot determine changed files; fetch the PR base and pass it with --base.")
+        return 1
     if failures:
         return 1
-    print(f"File size checks passed (default limit: {policy.max_lines} lines).")
+    print(f"Changed-file checks passed ({policy.max_lines} lines, or no growth above the base size).")
     return 0
 
 

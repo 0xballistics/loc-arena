@@ -1,11 +1,4 @@
 {
   "max_lines": 700,
-  "excluded": ["uv.lock"],
-  "existing_limits": {
-    "loc_arena/explorer/templates/run.html": 1799,
-    "loc_arena/gateway/core.py": 928,
-    "loc_arena/harness.py": 810,
-    "tests/integration/test_stack_reach.py": 1666,
-    "tests/unit/test_episode_stack.py": 1206
-  }
+  "excluded": ["uv.lock"]
 }

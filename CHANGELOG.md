@@ -8,6 +8,8 @@ log has the details.
 
 ### Added
 
+- Every PR checks whole edited files against 700 lines, or their base size if already larger; untouched files are excluded.
+
 - **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
   agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
   as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in

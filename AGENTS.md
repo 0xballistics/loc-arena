@@ -97,6 +97,16 @@ The deterministic config is a test fixture for the engine; its scores are not re
 - **Access requests** on the live notes service follow `docs/iam-access-requests/spec.md` and
   `docs/iam-access-requests/agents.md`; preserve standing authority, bounded approvals and revocation.
 
+## File size gate
+
+Every PR runs `scripts/check_file_size.py`, also the first check in `make gates`. Each added, modified or
+renamed UTF-8 text file is checked in full, comments and blank lines included. Files at or below 700 lines
+must stay at or below 700; files already larger cannot exceed their size in the PR base. Untouched files are
+not checked. Binary files, symlinks and generated `uv.lock` are excluded; there are no legacy
+filename-specific ceilings. The check compares against the PR base's merge ancestor, not just changed lines.
+Locally it includes tracked working-tree/staged edits; use `make gates FILE_SIZE_BASE=<target-ref>` for a stack
+branch targeting another branch. Fetch the target first. Split oversized edited files by responsibility.
+
 ## Code review
 
 CodeRabbit reviews each pull request out of draft and reads this file as its criteria. Treat each finding as a

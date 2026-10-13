@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const { evaluate } = require('./coderabbit-gate.cjs');
+const review = { user: { login: 'coderabbitai[bot]' }, commit_id: 'latest', body: '' };
+assert.equal(evaluate({ head: 'latest', status: 'success', reviews: [{ ...review, state: 'PENDING' }], comments: [], unresolved: 0 }).ok, false);
+const clean = { head: 'latest', status: 'success', reviews: [review], comments: [], unresolved: 0 };
+assert.equal(evaluate(clean).ok, true);
+assert.equal(evaluate({ ...clean, status: 'pending' }).ok, false);
+assert.equal(evaluate({ ...clean, status: 'failure' }).ok, false);
+assert.equal(evaluate({ ...clean, reviews: [{ ...review, commit_id: 'old' }] }).ok, false);
+assert.equal(evaluate({ ...clean, reviews: [{ ...review, user: { login: 'human' } }] }).ok, false);
+assert.equal(evaluate({ ...clean, reviews: [{ ...review, body: '**Actionable comments posted: 2**' }] }).ok, false);
+assert.equal(evaluate({ ...clean, unresolved: 1 }).ok, false);
+const finding = { user: review.user, original_commit_id: 'latest' };
+assert.equal(evaluate({ ...clean, comments: [finding] }).ok, false);
+assert.equal(evaluate({ ...clean, comments: [{ ...finding, original_commit_id: 'old' }] }).ok, true);
+assert.equal(evaluate({ ...clean, comments: [{ ...finding, in_reply_to_id: 42 }] }).ok, true);
+assert.equal(evaluate({ ...clean, reviews: [{ ...review, body: '**Actionable comments posted: 0**' }] }).ok, true);
+console.log('CodeRabbit gate: 12 policy checks passed.');

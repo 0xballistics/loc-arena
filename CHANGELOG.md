@@ -8,6 +8,8 @@ log has the details.
 
 ### Added
 
+- A shipping check requires a clean latest-commit CodeRabbit review and no unresolved CodeRabbit threads.
+
 - Every PR checks whole edited files against 700 lines, or their base size if already larger; untouched files are excluded.
 
 - **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's

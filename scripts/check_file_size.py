@@ -19,7 +19,7 @@ class FileSizePolicy:
 
 def load_policy(path: Path) -> FileSizePolicy:
     """Reject malformed policy fields, including booleans used as line limits."""
-    raw = json.loads(path.read_text())
+    raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or set(raw) != {"max_lines", "excluded", "existing_limits"}:
         raise ValueError("invalid policy fields")
     maximum, excluded, existing = raw["max_lines"], raw["excluded"], raw["existing_limits"]

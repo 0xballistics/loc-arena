@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -82,3 +83,24 @@ def test_gate_rejects_invalid_policy_at_startup(tmp_path: Path, change: dict[str
 
     assert result.returncode == 1
     assert "Invalid file-size policy" in result.stdout
+
+
+def test_gate_reads_non_ascii_policy_paths_independent_of_locale(tmp_path: Path) -> None:
+    script = tmp_path / CHECK.name
+    script.write_text(CHECK.read_text(encoding="utf-8"), encoding="utf-8")
+    policy = {"max_lines": 700, "excluded": ["caf\u00e9.py"], "existing_limits": {}}
+    (tmp_path / "file_size_limits.json").write_text(json.dumps(policy, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "caf\u00e9.py").write_bytes(b"x\n" * 701)
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)  # noqa: S603
+    subprocess.run(["git", "add", "caf\u00e9.py"], cwd=tmp_path, check=True)  # noqa: S603
+
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env=os.environ | {"PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0", "LC_ALL": "C"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

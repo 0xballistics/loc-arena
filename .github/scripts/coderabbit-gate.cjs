@@ -22,8 +22,9 @@ async function run({ github, context }) {
     });
     pulls = pulls.filter(p => p.state === 'open' && p.head.sha === context.payload.sha);
   }
-  if (context.eventName === 'workflow_dispatch') {
-    pulls = [(await github.rest.pulls.get({ ...repo, pull_number: Number(context.payload.inputs.pr) })).data];
+  if (context.eventName === 'issue_comment') {
+    if (!context.payload.issue?.pull_request || context.payload.comment?.body !== '/recheck-coderabbit') return;
+    pulls = [(await github.rest.pulls.get({ ...repo, pull_number: context.payload.issue.number })).data];
   }
   for (const pull of pulls.filter(p => p.state === 'open')) {
     const number = pull.number;

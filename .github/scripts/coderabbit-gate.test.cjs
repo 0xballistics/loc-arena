@@ -22,5 +22,5 @@ const path = require('node:path');
 const workflow = fs.readFileSync(path.join(__dirname, '../workflows/coderabbit-clean.yml'), 'utf8');
 const triggerBlock = workflow.split('\non:\n')[1].split('\npermissions:')[0];
 const triggers = [...triggerBlock.matchAll(/^  ([a-z_]+):/gm)].map(match => match[1]);
-assert.deepEqual(triggers, ['pull_request_target', 'status', 'workflow_dispatch']);
+assert.deepEqual(triggers, ['pull_request_target', 'status', 'issue_comment']);
 console.log('Privileged workflow has only trusted refresh triggers.');

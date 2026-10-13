@@ -21,7 +21,9 @@ normal review remains necessary. Human review requirements are separate.
 
 The gate refreshes on PR opening/new commits and CodeRabbit status updates. Review-event triggers are
 excluded because their workflow YAML can come from the PR merge ref, before any trusted checkout occurs.
-After resolving a thread without a new commit/status event, manually run the workflow with the PR number.
+After resolving a thread without a new commit/status event, post `/recheck-coderabbit` as a new PR comment.
+That issue-comment event runs default-branch workflow code; it cannot select an arbitrary execution ref.
+Branch-selectable `workflow_dispatch` is deliberately absent from this privileged workflow.
 GitHub does not provide a review-thread-resolution trigger to this workflow. Pending, unavailable or stale
 review metadata fails closed. The workflow and scripts execute only from the trusted default branch; no
 pull-request code runs with its check-writing token. It posts a check directly on the current PR head SHA.

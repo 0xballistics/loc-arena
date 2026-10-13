@@ -53,4 +53,5 @@ public-repo:
 	@uv run python scripts/make_public.py
 
 gates:
+	@python3 scripts/check_file_size.py
 	@uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q

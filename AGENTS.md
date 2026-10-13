@@ -97,6 +97,14 @@ The deterministic config is a test fixture for the engine; its scores are not re
 - **Access requests** on the live notes service follow `docs/iam-access-requests/spec.md` and
   `docs/iam-access-requests/agents.md`; preserve standing authority, bounded approvals and revocation.
 
+## File size gate
+
+Every PR runs `scripts/check_file_size.py`, also the first check in `make gates`. Tracked UTF-8 text files
+must have at most 700 lines, tests and documentation included. Binary files, symlinks and generated `uv.lock`
+are excluded. Five pre-existing oversized files have fixed ceilings in `scripts/file_size_limits.json` and
+must not grow. Remove a legacy ceiling when splitting that file below 700 lines; do not raise it to bypass
+review. New oversized files must be split by responsibility, not padded with exceptions.
+
 ## Code review
 
 CodeRabbit reviews each pull request out of draft and reads this file as its criteria. Treat each finding as a

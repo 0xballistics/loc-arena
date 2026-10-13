@@ -16,3 +16,11 @@ assert.equal(evaluate({ ...clean, comments: [{ ...finding, original_commit_id: '
 assert.equal(evaluate({ ...clean, comments: [{ ...finding, in_reply_to_id: 42 }] }).ok, true);
 assert.equal(evaluate({ ...clean, reviews: [{ ...review, body: '**Actionable comments posted: 0**' }] }).ok, true);
 console.log('CodeRabbit gate: 12 policy checks passed.');
+
+const fs = require('node:fs');
+const path = require('node:path');
+const workflow = fs.readFileSync(path.join(__dirname, '../workflows/coderabbit-clean.yml'), 'utf8');
+const triggerBlock = workflow.split('\non:\n')[1].split('\npermissions:')[0];
+const triggers = [...triggerBlock.matchAll(/^  ([a-z_]+):/gm)].map(match => match[1]);
+assert.deepEqual(triggers, ['pull_request_target', 'status', 'workflow_dispatch']);
+console.log('Privileged workflow has only trusted refresh triggers.');

@@ -19,7 +19,8 @@ fresh CodeRabbit review on the new head. Do not disable the bot, forge a review 
 pass. This check does not assess the correctness of a fix or cover non-inline nitpicks in summary issue comments;
 normal review remains necessary. Human review requirements are separate.
 
-The gate refreshes on PR opening/new commits, review submission/comment events and CodeRabbit status updates.
+The gate refreshes on PR opening/new commits and CodeRabbit status updates. Review-event triggers are
+excluded because their workflow YAML can come from the PR merge ref, before any trusted checkout occurs.
 After resolving a thread without a new commit/status event, manually run the workflow with the PR number.
 GitHub does not provide a review-thread-resolution trigger to this workflow. Pending, unavailable or stale
 review metadata fails closed. The workflow and scripts execute only from the trusted default branch; no

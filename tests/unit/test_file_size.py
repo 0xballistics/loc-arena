@@ -128,7 +128,8 @@ def test_gate_preserves_legacy_baseline_across_rename(repository: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "change", [{"max_lines": True}, {"max_lines": 0}, {"excluded": "uv.lock"}, {"unexpected": 1}]
+    "change",
+    [{"max_lines": True}, {"max_lines": 0}, {"excluded": "uv.lock"}, {"unexpected": 1}],
 )
 def test_gate_rejects_invalid_policy_at_startup(tmp_path: Path, change: dict[str, object]) -> None:
     script = tmp_path / CHECK.name
@@ -153,7 +154,8 @@ def test_gate_reads_non_ascii_policy_paths_independent_of_locale(repository: Pat
     script.write_text(CHECK.read_text(encoding="utf-8"), encoding="utf-8")
     policy = {"max_lines": 700, "excluded": ["caf\u00e9.py"]}
     (repository / "file_size_limits.json").write_text(
-        json.dumps(policy, ensure_ascii=False), encoding="utf-8"
+        json.dumps(policy, ensure_ascii=False),
+        encoding="utf-8",
     )
     (repository / "caf\u00e9.py").write_bytes(b"x\n" * 701)
     git(repository, "add", "caf\u00e9.py")

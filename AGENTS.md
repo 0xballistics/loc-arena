@@ -109,6 +109,9 @@ branch targeting another branch. Fetch the target first. Split oversized edited 
 
 ## Code review
 
+Shipping requires a fresh CodeRabbit review with zero findings and no unresolved CodeRabbit threads; see
+[CI rules](docs/ci-rules.md). CI verifies review metadata, not whether a fix is substantively correct.
+
 CodeRabbit reviews each pull request out of draft and reads this file as its criteria. Treat each finding as a
 claim to verify: fix what holds, and reply on the thread why the rest does not. `@coderabbitai review` reviews
 the latest push. After changing `.coderabbit.yaml`, comment `@coderabbitai configuration` and check the values.

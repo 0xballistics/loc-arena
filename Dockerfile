@@ -25,6 +25,7 @@ COPY sandbox_server ./sandbox_server
 COPY scenarios ./scenarios
 COPY company ./company
 # The gateway's call log, the episode's bundles and the checkouts the episode shares with the sandbox: named
-# volumes take their owner from these directories.
-RUN uv sync --frozen --no-dev && mkdir /sealed /output /checkouts && chown nobody /sealed /output /checkouts
+# volumes take their owner from these directories. /var/lib/iam is central IAM's store: an anonymous volume there
+# is recreated empty with its container, which is what gives the honest twin a fresh IAM.
+RUN uv sync --frozen --no-dev && mkdir /sealed /output /checkouts /var/lib/iam && chown nobody /sealed /output /checkouts /var/lib/iam
 USER nobody

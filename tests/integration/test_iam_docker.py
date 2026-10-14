@@ -1,0 +1,286 @@
+"""Central IAM in real containers: deny, request, approve, retry, restart, and the honest twin's fresh store.
+
+Brings up the rendered compose project's ``iam``, ``notes`` and ``agents`` services (the stack image is built
+first, so it holds this code) and drives them from inside the IAM container with ``python -c`` scripts, as the
+images have no curl and agent-net is isolated, so the host cannot reach a service. A request is sent as an
+agent with the credential the stack mounted for it. Then the services are recreated as ``renew_services`` does
+before the honest twin, with the twin's secrets: the store must be empty and the attack play's credentials
+unknown to it. Skipped unless the Docker daemon answers; the rest of the stack is covered by the unit tests
+and the scripted stack run.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from collections.abc import Callable, Iterator
+from typing import Any
+
+import pytest
+import yaml
+from loc_arena.config import load_run_config
+from loc_arena.episode_stack import REPOSITORY, _issue_secrets, issue_identities, render_compose
+
+from tests.integration._docker_support import image_exists
+
+RUN = "aurora-efficiency.iam"
+CONFIG = load_run_config(REPOSITORY / "configs" / f"{RUN}.yaml")
+SERVICES = ["iam", "notes", "agents"]
+PROJECT = "locarena-iamtest"
+TIMEOUT = 600
+
+pytestmark = pytest.mark.skipif(
+    not image_exists(CONFIG.settings.stack.image),
+    reason="needs a reachable Docker daemon and the stack image",
+)
+
+CALL = """
+import json, sys, urllib.request, urllib.error
+url, method, token, body, key = sys.argv[1:6]
+headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+if key:
+    headers["Idempotency-Key"] = key
+request = urllib.request.Request(url, body.encode() or None, headers, method=method)
+try:
+    with urllib.request.urlopen(request, timeout=10) as reply:
+        print(json.dumps([reply.status, reply.read().decode()]))
+except urllib.error.HTTPError as error:
+    print(json.dumps([error.code, error.read().decode()]))
+"""
+
+
+class Stack:
+    """The running project, its host-held credentials for one play, and how to call a service from inside."""
+
+    def __init__(self, compose: list[str], attack: dict[str, str], twin: dict[str, str]) -> None:
+        """Hold the compose command and each play's secrets; start in the attack play."""
+        self.compose, self.attack, self.twin = compose, attack, twin
+        self.play = attack  # the secrets the running containers were created with
+        self.env = {**os.environ, **attack}
+
+    def credential(self, service: str, agent: str, play: dict[str, str]) -> str:
+        """``agent``'s identity on ``service`` in ``play``: the credential the stack mounted for it."""
+        identity = next(i for i in issue_identities(CONFIG) if (i.service, i.agent_id) == (service, agent))
+        return play[identity.variable]
+
+    def run(self, *arguments: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [*self.compose, *arguments],
+            env=env or self.env,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT,
+            check=False,
+        )
+
+    def call(self, url: str, method: str, token: str, body: Any = None, key: str = "") -> tuple[int, Any]:
+        done = self.run(
+            "exec",
+            "-T",
+            "iam",
+            "python",
+            "-c",
+            CALL,
+            url,
+            method,
+            token,
+            "" if body is None else json.dumps(body),
+            key,
+        )
+        assert done.returncode == 0, done.stderr
+        status, text = json.loads(done.stdout.strip().splitlines()[-1])
+        try:
+            return status, json.loads(text)
+        except json.JSONDecodeError:
+            return status, text
+
+
+@pytest.fixture(scope="module")
+def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
+    directory = tmp_path_factory.mktemp("iam-docker")
+    document = render_compose(CONFIG, REPOSITORY, RUN, [])
+    compose_file = directory / "compose.yaml"
+    compose_file.write_text(yaml.safe_dump(document))
+    compose = [
+        "docker",
+        "compose",
+        "-p",
+        PROJECT,
+        "-f",
+        str(compose_file),
+        "--project-directory",
+        str(REPOSITORY),
+    ]
+    attack, twin = _issue_secrets(CONFIG)
+    attack["OPENROUTER_API_KEY"] = twin["OPENROUTER_API_KEY"] = "scripted-no-calls-dummy"
+    running = Stack(compose, attack, twin)
+    try:
+        built = running.run("build", *SERVICES)
+        assert built.returncode == 0, built.stderr[-2000:]
+        up = running.run("up", "--detach", "--wait", *SERVICES)
+        assert up.returncode == 0, up.stderr[-2000:]
+        yield running
+    finally:
+        running.run("down", "--volumes", "--remove-orphans")
+
+
+def new_access(stack: Stack, play: dict[str, str]) -> Callable[[str, str], tuple[int, Any]]:
+    def access(agent: str, path: str) -> tuple[int, Any]:
+        return stack.call(f"http://iam:8000{path}", "GET", stack.credential("iam", agent, play))
+
+    return access
+
+
+def test_a_denied_call_names_the_permission_then_request_approve_and_retry_works(stack: Stack) -> None:
+    serving, main = "serving-agent", "agent-main"
+    registry = lambda who, play=None: stack.credential("agents", who, play or stack.attack)  # noqa: E731
+    register = {"name": "docker-triager", "model": "provider/model", "system_prompt": "Triage."}
+    status, body = stack.call("http://agents:8000/agents", "POST", registry(serving), register)
+    assert status == 403
+    assert body["detail"] == {
+        "error": "forbidden",
+        "resource": "agents",
+        "permission": "register",
+        "request_with": "POST /requests on the IAM service",
+    }
+    iam_token = lambda who: stack.credential("iam", who, stack.attack)  # noqa: E731
+    asked = stack.call(
+        "http://iam:8000/requests",
+        "POST",
+        iam_token(serving),
+        {"resource": "agents", "permissions": ["register"], "reason": "own a triager"},
+        "docker-1",
+    )
+    assert asked[0] == 201
+    assert (
+        stack.call("http://agents:8000/agents", "POST", registry(serving), register)[0] == 403
+    )  # pending: nothing
+    decided = stack.call(
+        f"http://iam:8000/requests/{asked[1]['request']}/decision",
+        "POST",
+        iam_token(main),
+        {"approve": True},
+        "docker-2",
+    )
+    assert decided[0] == 200
+    for name in ("docker-triager", "docker-triager-2"):
+        status, _ = stack.call(
+            "http://agents:8000/agents",
+            "POST",
+            registry(serving),
+            {**register, "name": name},
+        )
+        assert status == 201  # approved access persists across calls
+    revoke = {"principal": serving, "resource": "agents", "permissions": ["register"]}
+    assert stack.call("http://iam:8000/grants/revoke", "POST", iam_token(main), revoke, "docker-3")[0] == 200
+    again = {**register, "name": "docker-triager-3"}
+    assert stack.call("http://agents:8000/agents", "POST", registry(serving), again)[0] == 403
+
+
+def test_the_store_survives_a_restart_and_the_honest_twin_starts_empty(stack: Stack) -> None:
+    serving = "serving-agent"
+    iam_token = stack.credential("iam", serving, stack.attack)
+    notes_token = stack.credential("notes", "agent-main", stack.attack)
+    asked = stack.call(
+        "http://iam:8000/requests",
+        "POST",
+        iam_token,
+        {"resource": "notes", "permissions": ["write"], "reason": "r"},
+        "k",
+    )
+    assert asked[0] == 201
+    before = stack.call("http://iam:8000/requests", "GET", iam_token)[1]
+    assert asked[1]["request"] in [
+        r["request"] for r in before
+    ]  # alongside the earlier test's, in the same play
+    assert stack.run("restart", "iam").returncode == 0
+    assert stack.run("up", "--detach", "--wait", "iam").returncode == 0
+    assert (
+        stack.call("http://iam:8000/requests", "GET", iam_token)[1] == before
+    )  # the store survived the restart
+    notes_read = stack.call("http://notes:8000/notes", "GET", notes_token)
+    assert notes_read[0] == 200  # the baseline grants were not reseeded away, nor lost
+    # The honest twin: recreate with the twin's secrets, as renew_services does.
+    twin_env = {**os.environ, **stack.twin}
+    recreated = stack.run(
+        "up",
+        "--detach",
+        "--wait",
+        "--force-recreate",
+        "--renew-anon-volumes",
+        "--no-deps",
+        *SERVICES,
+        env=twin_env,
+    )
+    assert recreated.returncode == 0, recreated.stderr[-2000:]
+    stack.env, stack.play = twin_env, stack.twin
+    assert (
+        stack.call("http://iam:8000/requests", "GET", iam_token)[0] == 401
+    )  # the attack play's credential is unknown
+    twin_token = stack.credential("iam", serving, stack.twin)
+    assert stack.call("http://iam:8000/requests", "GET", twin_token) == (
+        200,
+        [],
+    )  # the request history did not survive
+    twin_notes = stack.credential("notes", "agent-main", stack.twin)
+    assert stack.call("http://notes:8000/notes", "GET", notes_token)[0] == 401
+    assert stack.call("http://notes:8000/notes", "GET", twin_notes)[0] == 200
+
+
+def test_a_renewed_credential_works_at_the_service_and_the_old_one_cannot_replace_it(stack: Stack) -> None:
+    old = stack.credential("notes", "distill-agent", stack.play)
+    chosen = "mi_docker_replacement_secret_value_0001"
+    status, reply = stack.call("http://iam:8000/credentials/renew", "POST", old, {"credential": chosen})
+    assert status == 200, reply
+    assert chosen not in json.dumps(reply)  # IAM never returns the secret: the holder chose it
+    assert (
+        stack.call("http://notes:8000/notes", "GET", chosen)[0] == 200
+    )  # the replacement is good at the service
+    assert (
+        stack.call("http://notes:8000/notes", "GET", old)[0] == 200
+    )  # and so is the old, through the grace window
+    again = stack.call("http://iam:8000/credentials/renew", "POST", old, {"credential": chosen})
+    assert again[0] == 200  # the same renewal repeats (a lost reply): idempotent
+    thief = stack.call(
+        "http://iam:8000/credentials/renew",
+        "POST",
+        old,
+        {"credential": "mi_docker_thief_secret_value_0002"},
+    )
+    assert thief[0] == 409  # the old credential cannot replace the newer one
+    assert (
+        stack.call("http://notes:8000/notes", "GET", chosen)[0] == 200
+    )  # so the delivered replacement stands
+    assert stack.call("http://notes:8000/notes", "GET", "mi_docker_thief_secret_value_0002")[0] == 401
+
+
+def test_a_services_credential_for_an_agent_reaches_that_services_resource_and_no_other(stack: Stack) -> None:
+    main_notes = stack.credential(
+        "notes",
+        "agent-main",
+        stack.play,
+    )  # what the notes service holds of agent-main
+    asked = stack.call(
+        "http://iam:8000/requests",
+        "POST",
+        stack.credential("iam", "serving-agent", stack.play),
+        {"resource": "agents", "permissions": ["register"], "reason": "own an agent"},
+        "scoped-1",
+    )
+    assert asked[0] == 201
+    decide = f"http://iam:8000/requests/{asked[1]['request']}/decision"
+    refused = stack.call(decide, "POST", main_notes, {"approve": True}, "scoped-2")
+    assert (
+        refused[0] == 401
+    )  # a compromised notes service cannot approve for agents with agent-main's notes credential
+    grant = {"principal": "serving-agent", "resource": "agents", "permissions": ["register"], "until": None}
+    assert stack.call("http://iam:8000/grants", "POST", main_notes, grant, "scoped-3")[0] == 401
+    ok = stack.call(
+        decide,
+        "POST",
+        stack.credential("agents", "agent-main", stack.play),
+        {"approve": True},
+        "scoped-4",
+    )
+    assert ok[0] == 200  # the agents service's own credential for agent-main does reach agents

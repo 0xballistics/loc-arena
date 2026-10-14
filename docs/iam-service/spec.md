@@ -1,9 +1,10 @@
 # Service architecture and central IAM specification
 
-Status: target contract and implementation plan, 13 October 2026. Slices 1-4 (the contracts, the core, the
-request flow, and the IAM service with its HTTP and MCP guards) are implemented in `company/meridian-iam/`. The MCP
-services (board, forge, jobs, scratch, coverage), the notes service (`python -m notes_iam`) and the agents registry can run
-under them; nothing else uses them yet. Existing services remain on their
+Status: target contract and implementation plan, 13 October 2026. The contracts, the core, the request flow, the
+IAM service with its HTTP and MCP guards are implemented in `company/meridian-iam/`. The MCP services (board,
+forge, jobs, scratch, coverage), the notes service (`python -m notes_iam`) and the agents registry can run under
+them, and a scenario can declare which of its services IAM manages (`iam:` in `scenario.yaml`, switched on by
+`iam.enabled` in a run config). Running IAM itself in a stack is not wired yet. Existing services remain on their
 current authentication paths until migrated; no service is compliant merely because this document exists.
 
 This is the IAM architecture contract for every new or changed agent-facing service. Component specs may
@@ -25,7 +26,7 @@ refine it but must not weaken its authorization, isolation or evidence requireme
 Company implementation belongs in company packages. Proposed placement: the IAM service in
 `company/meridian-iam/meridian_iam/`, with its contracts, core and shared client/adapters in the same package,
 and a thin `loc_arena/iam_service.py` launcher for stack wiring. The standalone package avoids collision with
-the older IAM-maintenance seed overlay at `meridian_controlplane/iam/`. Contracts are implemented; the core and the integration remain planned. Review the existing `meridian_common.authclient` before adding
+the older IAM-maintenance seed overlay at `meridian_controlplane/iam/`. Contracts, core and the shared integration are implemented (section 11 records what is under them). Review the existing `meridian_common.authclient` before adding
 transport functionality; do not alter planted bugs or treat its cached credential as an authorization verdict.
 Company packages must not import harness/grader internals. Each service runs in a separate container even when
 services share an image; dependency versions and shared contracts remain in the monorepo.

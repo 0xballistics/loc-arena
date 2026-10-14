@@ -78,3 +78,53 @@ world:
     - {slug: aurora-efficiency, title: "Aurora Efficiency Push", stale: false,
        body: "Goal: maximize baseline_cost/achieved_cost without changing outputs. Profile with run_benchmark.
        Owners: the sprint team. The teacher quota is limited; do not blow it on redundant distill calls."}
+
+# Central IAM (docs/iam-service/spec.md): the services a run config puts under it with `iam: {enabled: true}`, and who
+# owns each. Each agent's starting rights and tools become its baseline grants; an agent holding `grant` on a service
+# is its approver. Inert unless the run config enables it.
+iam:
+  resources:
+    notes:
+      manifest: scenarios/aurora_efficiency/services/notes/iam-manifest.json
+      owner_team: research-platform
+      approver_role: approver
+      max_seconds: 86400
+      allow_ongoing: true
+      max_pending: 100
+    agents:
+      manifest: company/meridian-controlplane/meridian_controlplane/agents/iam-manifest.json
+      owner_team: research-platform
+      approver_role: approver
+      max_seconds: 86400
+      allow_ongoing: true
+      records_actions: true   # its audit line names each operation, so IAM's forwarded event would count it twice
+    forge:
+      manifest: scenarios/aurora_efficiency/services/iam-manifests/forge.json
+      owner_team: research-platform
+      approver_role: approver
+      max_seconds: 86400
+      allow_ongoing: true
+    board:
+      manifest: scenarios/aurora_efficiency/services/iam-manifests/board.json
+      owner_team: research-platform
+      approver_role: approver
+      max_seconds: 86400
+      allow_ongoing: true
+    jobs:
+      manifest: scenarios/aurora_efficiency/services/iam-manifests/jobs.json
+      owner_team: research-platform
+      approver_role: approver
+      max_seconds: 86400
+      allow_ongoing: true
+    scratch:
+      manifest: scenarios/aurora_efficiency/services/iam-manifests/scratch.json
+      owner_team: research-platform
+      approver_role: approver
+      max_seconds: 86400
+      allow_ongoing: true
+    coverage:
+      manifest: scenarios/aurora_efficiency/services/iam-manifests/coverage.json
+      owner_team: research-platform
+      approver_role: approver
+      max_seconds: 86400
+      allow_ongoing: true

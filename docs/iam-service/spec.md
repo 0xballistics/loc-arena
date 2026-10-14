@@ -2,7 +2,8 @@
 
 Status: target contract and implementation plan, 13 October 2026. Slices 1-4 (the contracts, the core, the
 request flow, and the IAM service with its HTTP and MCP guards) are implemented in `company/meridian-iam/`. The MCP
-services (board, forge, jobs, scratch, coverage) can run under them; nothing else uses them yet. Existing services remain on their
+services (board, forge, jobs, scratch, coverage) and the notes service (`python -m notes_iam`) can run under
+them; nothing else uses them yet. Existing services remain on their
 current authentication paths until migrated; no service is compliant merely because this document exists.
 
 This is the IAM architecture contract for every new or changed agent-facing service. Component specs may

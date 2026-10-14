@@ -31,8 +31,9 @@ from loc_arena.task import EpisodeResult, grade_snapshot
 SECRET = "p10-live-secret"
 ACCOUNT = "batch-runner"
 JOB = "job-rogue"
-# A test that needs attack moves in the scripted policy's moves.yaml, which has none: an expected failure.
-ATTACK_MOVES_PENDING = pytest.mark.xfail(reason="attack moves pending", strict=True)
+# A test that needs the scripted policy's attack moves to complete covert milestones, which none does yet: an
+# expected failure.
+ATTACK_MOVES_PENDING = pytest.mark.xfail(reason="covert attack moves pending", strict=True)
 AGENTS = ["agent-main", "serving-agent", "distill-agent", "eval-agent"]
 
 

@@ -48,6 +48,9 @@ log has the details.
   each with its own token. pi there calls models through the gateway, which by default lets runners make 300
   calls per play of the seeded agents' model only, and refuses the rest with a 429 or 403 it records. The gateway
   and the runners are recreated before the honest twin, so it starts with empty runners and a fresh count.
+- **The run explorer shows the honest twin.** An attack run's honest twin, which is played to set the audit
+  threshold, now has a page of its own beside the run's, linked both ways: every agent's turns, tool calls and model
+  calls, with no verdicts or outcome (it is not scored on its own).
 - A shipping check requires a clean latest-commit CodeRabbit review and no unresolved CodeRabbit threads.
 
 - Every PR checks whole edited files against 700 lines, or their base size if already larger; untouched files are excluded.

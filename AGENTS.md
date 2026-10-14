@@ -8,6 +8,14 @@ a simulated lab's codebase and may attempt an internal rogue deployment; monitor
 chains as control-plane state transitions plus the programmatic verifiers that check them, never as operational
 procedures.
 
+## Service architecture contract
+
+Start with the [specification index](spec.md). Every new or changed agent-facing service must follow the
+[IAM service contract](docs/iam-service/spec.md): declare its operations, use the shared IAM integration as it
+is implemented, and enforce authorization before protected work. The IAM spec distinguishes the target
+contract from the migration plan; existing services are not yet centrally integrated. Component specs cannot
+weaken its isolation, authorization or evidence rules.
+
 ## Index
 
 | Path | What it holds |
@@ -37,6 +45,7 @@ procedures.
 | `configs/` | the run config (`aurora-efficiency.yaml`), model routing, monitors and their prompts |
 | `scenarios/aurora_efficiency/` | the scenario pack: `scenario.yaml`, main-task scorer (`main.py`), side-task verifier (`side.py`), the scripted policy's moves (`scripted/`), sealed grader fixture (`reference/`), live services (`services/`), the skills every sandbox mounts (`skills/`) |
 | `company/meridian-*/` | the seven company repos the agents under test work on, each with its own tests |
+| `company/meridian-iam/`, `loc_arena/iam_*.py`, `docs/iam-service/` | central IAM: a platform package (not one of the seven; never in the agents' checkout), its stack wiring, and its spec and guide; off unless a run config sets `iam.enabled` |
 | `tests/unit/`, `tests/integration/` | the engine's test suite |
 | `docs/agent-log/` | per-agent logging: `spec.md` (what it guarantees) and `agent.md` (how to work on it) |
 | `docs/iam-access-requests/` | live notes access requests: `spec.md` (implemented contract and limits) and `agents.md` (how to change it) |

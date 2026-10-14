@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "resource": "forge",
+  "operations": {
+    "open_pr": {
+      "permission": "open_pr",
+      "requestable": true,
+      "target": "repo"
+    }
+  },
+  "tools": {
+    "open_pr": "open_pr"
+  }
+}

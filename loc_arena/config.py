@@ -38,6 +38,7 @@ from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic_settings import BaseSettings, SettingsConfigDict, YamlConfigSettingsSource
 from scenarios.loader import DNS_LABEL, LiveService, Rights, Scenario, Tools, load_scenario
 
+from loc_arena.iam_seed import add_iam_service
 from loc_arena.identity_variables import find_shared_identity_variable
 from loc_arena.ids import PermissionScope
 from loc_arena.registry import SCORER_REGISTRY, VERIFIER_REGISTRY, is_scorer, is_verifier
@@ -523,6 +524,11 @@ def load_run_config(run_path: str | Path, configs_dir: str | Path | None = None)
         document.side_task.verifier,
     )
     live_services = scenario.live_services if scenario is not None else ()
+    settings = _build_settings(source.yaml_data)
+    try:
+        live_services = add_iam_service(live_services, scenario, settings.iam)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
     for kind in ("rights", "tools"):
         held = {agent.id: getattr(agent.sandbox, kind) for agent in document.agents}
         if unknown := find_unknown_grant(kind, held, live_services, document.scenario):
@@ -545,7 +551,7 @@ def load_run_config(run_path: str | Path, configs_dir: str | Path | None = None)
         agents=document.agents,
         main_task=dict(source.yaml_data["main_task"]),
         protocol=document.protocol,
-        settings=_build_settings(source.yaml_data),
+        settings=settings,
         scenario=document.scenario,
         policy=document.policy,
         agent_transcript=document.logging.agent_transcript,

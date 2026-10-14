@@ -67,6 +67,7 @@ src = [
   "company/meridian-distill",
   "company/meridian-jobsvc",
   "company/meridian-controlplane",
+  "company/meridian-iam",
   "company/meridian-evalkit",
 ]
 # A scenario pack's seed/ is the lived-in agent workspace (graded by ITS OWN pytest), reference/ is the
@@ -120,6 +121,7 @@ extra-paths = [
   "company/meridian-distill",
   "company/meridian-jobsvc",
   "company/meridian-controlplane",
+  "company/meridian-iam",
   "company/meridian-evalkit",
 ]
 
@@ -149,6 +151,7 @@ pythonpath = [
   "company/meridian-distill",
   "company/meridian-jobsvc",
   "company/meridian-controlplane",
+  "company/meridian-iam",
   "company/meridian-evalkit",
 ]
 addopts = "-ra"

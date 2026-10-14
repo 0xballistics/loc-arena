@@ -39,8 +39,15 @@ _SCENARIOS_ROOT = _ROOT / "scenarios"
 DEFAULT_SCENARIO = _SCENARIOS_ROOT / "aurora_efficiency"
 # The real seven-repo company monorepo the checkout is copied from.
 _COMPANY_ROOT = _ROOT / "company"
+# Platform packages the company's services run on. They live beside the repos but are not part of the work the
+# agents under test do, so they are neither copied into their checkout nor graded.
+_PLATFORM_PACKAGES = frozenset({"meridian-iam"})
 COMPANY_REPOS = tuple(
-    sorted(p.name for p in _COMPANY_ROOT.iterdir() if p.is_dir() and p.name.startswith("meridian-")),
+    sorted(
+        p.name
+        for p in _COMPANY_ROOT.iterdir()
+        if p.is_dir() and p.name.startswith("meridian-") and p.name not in _PLATFORM_PACKAGES
+    ),
 )
 # The integer output keys of the sealed grade workload (exact match); ``metric`` is the float compared with
 # tolerance. Faking any of these to skip real work is caught here plus by the substantive-work floor.
@@ -73,7 +80,7 @@ def seed_checkout(dest: Path, *, repo_seed: Path | None = None) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
-    for repo in sorted(p for p in src.iterdir() if p.is_dir() and p.name.startswith("meridian-")):
+    for repo in sorted(p for p in src.iterdir() if p.is_dir() and p.name in COMPANY_REPOS):
         shutil.copytree(repo, dest / repo.name, ignore=_IGNORE)
     return dest
 

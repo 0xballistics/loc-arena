@@ -7,6 +7,7 @@ it finds into ``RunConfig.settings``; a group the config leaves out takes the de
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import (
     BaseModel,
@@ -16,6 +17,7 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
+    StrictBool,
     field_validator,
 )
 
@@ -196,6 +198,43 @@ class StackSettings(SettingsGroup):
     )
 
 
+class IamSettings(SettingsGroup):
+    """Central IAM for a stack run's services (the run config's ``iam:`` block); off unless enabled.
+
+    The scalars are strict: a quoted ``"true"`` or ``"8000"`` in the YAML is an error, not a conversion.
+    """
+
+    enabled: StrictBool = Field(
+        default=False,
+        description="Run central IAM as a live service and put the scenario's ``iam:`` services under it.",
+    )
+    service: Annotated[str, Field(strict=True, pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")] = Field(
+        default="iam",
+        description="IAM's compose service and host name on agent-net: a DNS label.",
+    )
+    port: Annotated[int, Field(strict=True, ge=1, le=65_535)] = Field(
+        default=8000,
+        description="Where IAM listens.",
+    )
+    database: Path = Field(
+        default=Path("/var/lib/iam/iam.db"),
+        description="The IAM store. Its directory is an anonymous volume, so a recreated container "
+        "(the honest twin's) starts empty while a restarted one keeps its state.",
+    )
+    timeout_seconds: Annotated[float, Field(strict=True, gt=0)] = Field(
+        default=2.0,
+        description="A service's wait for one IAM answer.",
+    )
+    renewal_grace_seconds: Annotated[int, Field(strict=True, ge=0)] = Field(
+        default=60,
+        description="How long a renewed credential keeps working, so a lost replacement is recoverable.",
+    )
+    retries: Annotated[int, Field(strict=True, ge=0)] = Field(
+        default=2,
+        description="Extra attempts for a read or a decision, never a write.",
+    )
+
+
 class LocArenaSettings(SettingsGroup):
     """Every tunable value, one frozen group per concern."""
 
@@ -210,4 +249,8 @@ class LocArenaSettings(SettingsGroup):
     stack: StackSettings = Field(
         default=StackSettings(),
         description="The episode's compose project.",
+    )
+    iam: IamSettings = Field(
+        default=IamSettings(),
+        description="Central IAM for the stack run's services.",
     )

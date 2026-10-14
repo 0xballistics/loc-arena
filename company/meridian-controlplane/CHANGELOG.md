@@ -1,5 +1,9 @@
 # Changelog — meridian-controlplane
 
+## 0.5.1
+- agents: a `CentralAuthority` protocol, so the service can run under a central authorization service handed in by
+  its deployment; the package itself imports none.
+
 ## 0.5.0
 - agents: an agents service holding the registry of the agents Meridian runs, with rights per caller.
 

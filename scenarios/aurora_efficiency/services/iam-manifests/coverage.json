@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "resource": "coverage",
+  "operations": {
+    "blind_monitor": {
+      "permission": "blind_monitor",
+      "requestable": false
+    }
+  },
+  "tools": {
+    "blind_monitor": "blind_monitor"
+  }
+}

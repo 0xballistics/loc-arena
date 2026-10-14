@@ -1,0 +1,226 @@
+"""IAM's HTTP API. Every route authenticates the bearer credential; no body names a caller."""
+
+from __future__ import annotations
+
+import dataclasses
+from typing import Annotated, Any
+
+from fastapi import FastAPI, Header, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, ConfigDict
+
+from meridian_iam.contracts import IamError, Invalid, Unauthenticated
+from meridian_iam.core import Iam
+
+BEARER = "Bearer "
+CALLER_HEADER = "X-Caller-Authorization"
+Key = Annotated[str, Header(alias="Idempotency-Key")]
+Auth = Annotated[str | None, Header()]
+
+
+class _Body(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class SubmitBody(_Body):
+    """A new access request."""
+
+    resource: str
+    permissions: list[str]
+    reason: str
+    until: int | None = None
+
+
+class DecideBody(_Body):
+    """An approval (optionally narrowed) or a denial."""
+
+    approve: bool
+    permissions: list[str] | None = None
+    until: int | None = None
+    reason: str = ""
+
+
+class GrantBody(_Body):
+    """A direct grant."""
+
+    principal: str
+    resource: str
+    permissions: list[str]
+    until: int | None = None
+
+
+class RevokeBody(_Body):
+    """A revocation."""
+
+    principal: str
+    resource: str
+    permissions: list[str]
+
+
+class MemberBody(_Body):
+    """A team member to add, with the authority (resource to permissions) it may grant."""
+
+    principal: str
+    role: str
+    authority: dict[str, list[str]] = {}
+
+
+class RenewBody(_Body):
+    """The replacement secret the caller generated for itself; IAM stores its digest and never returns it."""
+
+    credential: str
+
+
+class AuthorizeBody(_Body):
+    """One call to decide; the caller's credential travels in a header, never in the body."""
+
+    operation: str
+    target: str | None = None
+
+
+def bearer(header: str | None) -> str:
+    """The token in an ``Authorization``-style header, else 401."""
+    if not header or not header.startswith(BEARER):
+        raise Unauthenticated("send a credential as a bearer token")
+    return header.removeprefix(BEARER)
+
+
+def create_app(iam: Iam) -> FastAPI:
+    """The API over ``iam``. Handlers are ``async``: one event loop serializes access to the store."""
+    app = FastAPI(title="Meridian IAM", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.exception_handler(IamError)
+    async def iam_error(_: Request, exc: IamError) -> JSONResponse:
+        return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=exc.status)
+
+    @app.get("/health", response_class=PlainTextResponse)
+    async def health() -> str:
+        return "ok"
+
+    @app.post("/authorize")
+    async def authorize(
+        body: AuthorizeBody,
+        authorization: Auth = None,
+        caller: Annotated[str | None, Header(alias=CALLER_HEADER)] = None,
+    ) -> dict[str, Any]:
+        caller_token = bearer(caller) if caller else None
+        return dataclasses.asdict(
+            iam.authorize(bearer(authorization), caller_token, body.operation, body.target),
+        )
+
+    @app.post("/credentials/renew")
+    async def renew(body: RenewBody, authorization: Auth = None) -> dict[str, Any]:
+        return iam.renew_credential(bearer(authorization), body.credential)
+
+    @app.post("/teams/{team}/members")
+    async def add_member(team: str, body: MemberBody, key: Key, authorization: Auth = None) -> dict[str, Any]:
+        return iam.add_team_member(
+            bearer(authorization),
+            team,
+            body.principal,
+            body.role,
+            body.authority,
+            key,
+        )
+
+    @app.delete("/teams/{team}/members/{principal}")
+    async def remove_member(
+        team: str,
+        principal: str,
+        key: Key,
+        authorization: Auth = None,
+    ) -> dict[str, Any]:
+        return iam.remove_team_member(bearer(authorization), team, principal, key)
+
+    @app.post("/principals/{principal}/disable")
+    async def disable(principal: str, key: Key, authorization: Auth = None) -> dict[str, Any]:
+        return iam.disable_principal_as(bearer(authorization), principal, key)
+
+    @app.get("/whoami")
+    async def whoami(audience: str, authorization: Auth = None) -> dict[str, str]:
+        return {"principal": iam.identify(bearer(authorization), audience)}
+
+    @app.get("/access")
+    async def access(authorization: Auth = None) -> dict[str, list[str]]:
+        return iam.effective_access(bearer(authorization))
+
+    @app.get("/grants")
+    async def grants(resource: str, authorization: Auth = None) -> dict[str, list[str]]:
+        return iam.grants_for(bearer(authorization), resource)
+
+    @app.get("/catalog/{resource}")
+    async def catalog(resource: str, authorization: Auth = None) -> list[str]:
+        iam.authenticate(bearer(authorization))  # any credential that manages IAM may read the catalog
+        try:
+            return iam.requestable(resource)
+        except Invalid:
+            return []  # an unknown resource looks like one with nothing requestable
+
+    @app.post("/requests", status_code=201)
+    async def submit(
+        body: SubmitBody,
+        key: Key,
+        authorization: Auth = None,
+    ) -> dict[str, Any]:
+        return iam.submit_request(
+            bearer(authorization),
+            body.resource,
+            body.permissions,
+            body.reason,
+            body.until,
+            key,
+        )
+
+    @app.get("/requests")
+    async def my_requests(authorization: Auth = None) -> list[dict[str, Any]]:
+        return iam.my_requests(bearer(authorization))
+
+    @app.get("/requests/{request_id}")
+    async def one_request(request_id: str, authorization: Auth = None) -> dict[str, Any]:
+        return iam.get_request(bearer(authorization), request_id)
+
+    @app.get("/queue/{resource}")
+    async def queue(resource: str, authorization: Auth = None) -> list[dict[str, Any]]:
+        return iam.owner_queue(bearer(authorization), resource)
+
+    @app.post("/requests/{request_id}/decision")
+    async def decide(
+        request_id: str,
+        body: DecideBody,
+        key: Key,
+        authorization: Auth = None,
+    ) -> dict[str, Any]:
+        return iam.decide(
+            bearer(authorization),
+            request_id,
+            approve=body.approve,
+            key=key,
+            permissions=body.permissions,
+            until=body.until,
+            reason=body.reason,
+        )
+
+    @app.post("/grants")
+    async def grant(
+        body: GrantBody,
+        key: Key,
+        authorization: Auth = None,
+    ) -> dict[str, Any]:
+        return iam.grant(
+            bearer(authorization),
+            body.principal,
+            body.resource,
+            body.permissions,
+            body.until,
+            key,
+        )
+
+    @app.post("/grants/revoke")
+    async def revoke(
+        body: RevokeBody,
+        key: Key,
+        authorization: Auth = None,
+    ) -> dict[str, Any]:
+        return iam.revoke(bearer(authorization), body.principal, body.resource, body.permissions, key)
+
+    return app

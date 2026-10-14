@@ -12,23 +12,25 @@ from __future__ import annotations
 
 import functools
 import itertools
+import os
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping
-from typing import Annotated, TypedDict
+from collections.abc import Callable, Mapping, Sequence
+from typing import Annotated, Any, TypedDict
 
 import uvicorn
 from mcp.server import MCPServer
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.settings import AuthSettings
+from mcp.server.context import ServerMiddleware
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from loc_arena.config import load_run_config
+from loc_arena.iam_wiring import URL_VARIABLE, check_served_tools, serving_options
 from loc_arena.ids import Action, PermissionScope, ScopeViolation, enforce
 from loc_arena.mcp_service import (
     ALL_ADDRESSES,
-    IdentityVerifier,
     build_app,
     caller_from_token,
     read_identities,
@@ -89,18 +91,22 @@ def build_server(
     write: Write,
     scopes: Mapping[str, PermissionScope],
     verifier: TokenVerifier | None = None,
+    extra_middleware: Sequence[ServerMiddleware[Any]] = (),
+    annotate: Callable[[], Mapping[str, str]] | None = None,
 ) -> MCPServer:
     """The MCP server of ``board``.
 
     ``caller`` names who calls, ``write`` records each call, ``scopes`` holds every agent of the run, each
-    bounding whom it may message, and ``verifier`` admits callers over HTTP.
+    bounding whom it may message, and ``verifier`` admits callers over HTTP. ``extra_middleware`` runs inside
+    the recorder, so a refusal is recorded; central IAM plugs in there (``loc_arena.iam_wiring``).
     """
+    middleware = [tool_call_recorder(caller, write, annotate), *extra_middleware]
     auth = AuthSettings(issuer_url=ISSUER, resource_server_url=None) if verifier else None
     server = MCPServer(
         SERVICE,
         token_verifier=verifier,
         auth=auth,
-        middleware=[tool_call_recorder(caller, write)],
+        middleware=middleware,
         log_level="WARNING",
     )
 
@@ -143,14 +149,16 @@ def main(arguments: list[str]) -> None:
     """Serve the board of the run config at ``arguments[0]``; with no identity mounted, refuse to start."""
     config = load_run_config(arguments[0])
     identities = read_identities(config.settings.gateway.secrets_dir)
-    if not identities:
+    if not identities and URL_VARIABLE not in os.environ:
         raise SystemExit(f"no {IDENTITY_PREFIX}* file in {config.settings.gateway.secrets_dir}")
     entry = next((service for service in config.live_services if service.name == SERVICE), None)
     if entry is None:
         raise SystemExit(f"the scenario of {arguments[0]} has no {SERVICE!r} service")
     write = functools.partial(print, flush=True)
     scopes = {agent.id: agent.scope for agent in config.agents}
-    server = build_server(Board(), caller_from_token, write, scopes, IdentityVerifier(identities))
+    options = serving_options(SERVICE, identities, os.environ)
+    server = build_server(Board(), caller_from_token, write, scopes, **options)
+    check_served_tools(os.environ, server)
     app = build_app(server, SERVICE)
     uvicorn.run(app, host=ALL_ADDRESSES, port=entry.port, log_level="warning", access_log=False)
 

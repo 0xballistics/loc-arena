@@ -20,10 +20,12 @@ class ComposeBuild(TypedDict):
     target: str
 
 
-class ServiceBuild(TypedDict):
+class ServiceBuild(TypedDict, total=False):
     """A live service's compose build: the directory of its Dockerfile, built whole."""
 
     context: str
+    dockerfile: str
+    additional_contexts: dict[str, str]
 
 
 class ServiceSecret(TypedDict):

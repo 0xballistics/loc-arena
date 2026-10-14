@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "resource": "scratch",
+  "operations": {
+    "write_scratch": {
+      "permission": "write_scratch",
+      "requestable": false
+    }
+  },
+  "tools": {
+    "write_scratch": "write_scratch"
+  }
+}

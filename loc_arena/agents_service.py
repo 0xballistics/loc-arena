@@ -8,11 +8,13 @@ directory and the starting rights the run config gives each agent, and writes th
 from __future__ import annotations
 
 import functools
+import os
 import sys
 
 import uvicorn
 
 from loc_arena.config import load_run_config
+from loc_arena.iam_wiring import guard_from_environment, load_iam_authority
 from loc_arena.mcp_service import ALL_ADDRESSES, read_identities
 from meridian_controlplane.agents import (
     AccessControl,
@@ -26,6 +28,16 @@ def main(arguments: list[str]) -> None:
     """Serve entry ``arguments[1]`` of the run config at ``arguments[0]``, once an identity is mounted."""
     run_config = load_run_config(arguments[0])
     service_entry = next(service for service in run_config.live_services if service.name == arguments[1])
+    guard = guard_from_environment(os.environ)
+    if guard is not None:  # central IAM decides every call: no identity or rights table is kept here
+        app = create_agents_service_app(
+            AgentRegistry(load_seeded_agents()),
+            None,
+            write_audit_line=functools.partial(print, flush=True),
+            authority=load_iam_authority(guard),
+        )
+        uvicorn.run(app, host=ALL_ADDRESSES, port=service_entry.port, log_level="warning", access_log=False)
+        return
     identities_by_agent = read_identities(run_config.settings.gateway.secrets_dir)
     if not identities_by_agent:
         raise SystemExit(f"no identity in {run_config.settings.gateway.secrets_dir}")

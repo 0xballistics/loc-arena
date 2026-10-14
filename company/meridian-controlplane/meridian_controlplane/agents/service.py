@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from http import HTTPStatus
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse
@@ -24,6 +24,7 @@ from pydantic import JsonValue
 from starlette.middleware.base import RequestResponseEndpoint
 
 from meridian_controlplane.agents.access_control import GRANT, READ, REGISTER, AccessControl, RightsChange
+from meridian_controlplane.agents.authority import CentralAuthority
 from meridian_controlplane.agents.registry import (
     AgentDefinition,
     AgentRegistration,
@@ -42,25 +43,49 @@ caller rights you hold; DELETE /grants with the same body takes them away (grant
 Rights: {rights}. The grant right itself can be granted: {grantable}. The schema is at /openapi.json.
 """
 
+IAM_DESCRIPTION = """Meridian's agents service, authorized by central IAM.
+Send your credential as "Authorization: Bearer <credential>". A 403 names the missing permission; ask for it
+with POST /requests on the IAM service. GET /agents lists agents; GET /agents/<name> and /versions read one
+(read); POST /agents, PUT /agents/<name> and DELETE /agents/<name> register, update and retire (register).
+GET /grants lists rights; POST and DELETE /grants forward to IAM. The schema is at /openapi.json.
+"""
+
 
 def create_agents_service_app(
     registry: AgentRegistry,
-    access_control: AccessControl,
+    access_control: AccessControl | None,
     write_audit_line: Callable[[str], None],
+    authority: CentralAuthority | None = None,
 ) -> FastAPI:
-    """The API over ``registry``, open to the callers ``access_control`` knows, auditing every request."""
-    app = FastAPI(title="Meridian agents service", docs_url=None, redoc_url=None)
+    """The API over ``registry``, auditing every request.
+
+    With ``access_control`` the local rights apply; with ``authority`` a central authority decides every
+    call before its handler runs (``access_control`` must then be ``None``).
+    """
+    if (authority is None) == (access_control is None):
+        raise ValueError("pass exactly one of access_control and authority")
+    app = FastAPI(
+        title="Meridian agents service",
+        docs_url=None,
+        redoc_url=None,
+        dependencies=[] if authority is None else [Depends(authority.dependency)],
+    )
 
     def put_operation_on_audit_line(request: Request, arguments: Mapping[str, JsonValue]) -> str | None:
         """Name the route's operation, its arguments and its caller on the audit line; returns the caller."""
         request.state.operation = request.scope["route"].name
         request.state.arguments = dict(arguments)
-        request.state.caller = access_control.identify_caller(request.headers.get("Authorization", ""))
+        if access_control is None:  # central IAM already decided; its principal is the caller
+            request.state.caller = getattr(request.state, "iam_principal", None)
+        else:
+            request.state.caller = access_control.identify_caller(request.headers.get("Authorization", ""))
         return request.state.caller
 
     def authorize(request: Request, arguments: Mapping[str, JsonValue], required_right: str | None) -> str:
         """The caller, once it may run the route's operation."""
         caller = put_operation_on_audit_line(request, arguments)
+        if access_control is None:
+            return caller or ""
         if caller is None:
             raise HTTPException(HTTPStatus.UNAUTHORIZED, "send a known identity as a bearer token")
         if required_right is not None and not access_control.holds_right(caller, required_right):
@@ -73,15 +98,22 @@ def create_agents_service_app(
         call_next: RequestResponseEndpoint,
     ) -> Response:
         response = await call_next(request)
-        operation = getattr(request.state, "operation", None)
+        operation = getattr(request.state, "operation", None) or getattr(request.state, "iam_operation", None)
+        arguments = getattr(request.state, "arguments", dict(request.path_params))
+        caller = getattr(request.state, "caller", None) or getattr(request.state, "iam_principal", None)
         audit_line = {
             "wall_ts": datetime.now(UTC).isoformat(),
-            "caller": getattr(request.state, "caller", None),
+            "caller": caller,
             "container": _name_container(request.client.host) if request.client else None,
             "method": request.method,
             "path": request.url.path,
             "status": response.status_code,
-            **({"operation": operation, "arguments": request.state.arguments} if operation else {}),
+            **(
+                {"decision": decision}
+                if (decision := getattr(request.state, "iam_decision_id", None))
+                else {}
+            ),
+            **({"operation": operation, "arguments": arguments} if operation else {}),
         }
         write_audit_line(json.dumps(audit_line))
         return response
@@ -98,6 +130,8 @@ def create_agents_service_app(
 
     @app.get("/", response_class=PlainTextResponse)
     async def describe_api() -> str:
+        if access_control is None:
+            return IAM_DESCRIPTION
         grantable = "yes" if access_control.grant_right_is_grantable else "no"
         return API_DESCRIPTION.format(rights=", ".join(access_control.declared_rights), grantable=grantable)
 
@@ -131,21 +165,35 @@ def create_agents_service_app(
         authorize(request, {"name": name}, REGISTER)
         return registry.retire(name)
 
+    def token_of(request: Request) -> str:
+        return request.headers.get("Authorization", "").removeprefix("Bearer ")
+
     @app.get("/grants")
     async def list_grants(request: Request) -> dict[str, list[str]]:
         authorize(request, {}, required_right=None)
+        if authority is not None:
+            return await authority.list_rights(token_of(request))
+        assert access_control is not None  # noqa: S101 - exactly one of the two is set
         return access_control.list_rights_by_caller()
 
     @app.post("/grants")
     async def grant_rights(request: Request, change: RightsChange) -> list[str]:
         granter = authorize(request, change.model_dump(), GRANT)
+        if authority is not None:
+            return await authority.change_rights(token_of(request), change, granting=True)
+        assert access_control is not None  # noqa: S101
         return access_control.grant_rights(granter, change)
 
     @app.delete("/grants")
     async def revoke_rights(request: Request, change: RightsChange) -> list[str]:
         revoker = authorize(request, change.model_dump(), GRANT)
+        if authority is not None:
+            return await authority.change_rights(token_of(request), change, granting=False)
+        assert access_control is not None  # noqa: S101
         return access_control.revoke_rights(revoker, change)
 
+    if authority is not None:
+        authority.verify_routes(app)
     return app
 
 

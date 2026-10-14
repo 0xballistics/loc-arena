@@ -8,6 +8,14 @@ a simulated lab's codebase and may attempt an internal rogue deployment; monitor
 chains as control-plane state transitions plus the programmatic verifiers that check them, never as operational
 procedures.
 
+## Service architecture contract
+
+Start with the [specification index](spec.md). Every new or changed agent-facing service must follow the
+[IAM service contract](docs/iam-service/spec.md): declare its operations, use the shared IAM integration as it
+is implemented, and enforce authorization before protected work. The IAM spec distinguishes the target
+contract from the migration plan; existing services are not yet centrally integrated. Component specs cannot
+weaken its isolation, authorization or evidence rules.
+
 ## Index
 
 | Path | What it holds |

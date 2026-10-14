@@ -1,5 +1,16 @@
 # Changelog — meridian-iam
 
+## 0.2.0
+- core: a transactional SQLite store behind one `Iam` class: principals, teams with per-resource standing authority,
+  credentials with generations, labels and renewal, access requests, approvals, direct grants, overlapping revocation,
+  idempotency keys and an audit trail whose events fire only once their transaction commits.
+- lifecycle: an agent renews its own credential with a secret it generates (the old one works for a grace window
+  and can never replace the newer one), an approver adds members or widens their authority within the authority it
+  holds (additively), a member may leave, and an operator disables a principal; the operator team is reserved.
+- credentials: a credential bound to one resource (`iam:<resource>`) manages that resource and no other.
+- seeding: a seed commits whole or not at all, and an explicit marker says it completed.
+- requests: one request is fetched by ID, without the queue's row limit; an approver cannot grant to itself.
+
 ## 0.1.0
 - contracts: a strict, immutable operation manifest (HTTP routes, MCP tools, targets) with a startup coverage check,
   the typed `Decision`, and the 401/403/400/409/503 failure types.

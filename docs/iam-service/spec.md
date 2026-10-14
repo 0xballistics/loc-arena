@@ -1,8 +1,8 @@
 # Service architecture and central IAM specification
 
-Status: target contract and implementation plan, 13 October 2026. Slice 1 (the contracts) is implemented in
-`company/meridian-iam/`: the operation manifest, the typed decision and the failure types. The IAM core, the
-service and the shared integration described here are not implemented yet. Existing services remain on their
+Status: target contract and implementation plan, 13 October 2026. Slices 1-3 (the contracts, the core and the
+request flow) are implemented in `company/meridian-iam/`. The IAM service and the shared integration described
+here are not implemented yet. Existing services remain on their
 current authentication paths until migrated; no service is compliant merely because this document exists.
 
 This is the IAM architecture contract for every new or changed agent-facing service. Component specs may

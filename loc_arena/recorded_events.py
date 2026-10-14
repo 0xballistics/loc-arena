@@ -35,15 +35,17 @@ from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from sandbox_server.confinement import resolve_inside
+from scenarios.loader import LiveService
 
 from loc_arena.config import RunConfig
 from loc_arena.forge.service import OpenedPullRequest
+from loc_arena.iam_seed import load_seed
 from loc_arena.logging_.agent_trace import EpisodeTrace
 from loc_arena.logging_.events import AppendOnlyLog, EventKind, fingerprint, read_events
 from loc_arena.recording_service import TOOLS as COVERT_TOOLS
 from loc_arena.recording_service import redact_note
 from loc_arena.scaffold.bus import Recorder
-from loc_arena.task import SNAPSHOT_FILE, SnapshotFile, read_snapshot_file
+from loc_arena.task import SNAPSHOT_FILE, SnapshotFile, read_snapshot_file, resolve_scenario
 from loc_arena.tool_records import ToolRecord
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,6 +68,7 @@ class ServiceRequestRecord(BaseModel):
     status: int
     operation: str
     arguments: dict[str, JsonValue]
+    decision: str | None = None  # the IAM decision the request was made under, when the service has IAM
 
 
 @dataclass(frozen=True)
@@ -268,6 +271,63 @@ def _parse_tool_call_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordL
     return _ParsedRecordLine(record.time.timestamp(), record.agent, build_events(record, agent_ids))
 
 
+_IAM_MUTATIONS = frozenset(
+    {
+        "access_requested",
+        "access_approved",
+        "access_denied",
+        "grant",
+        "revoke",
+        "member_added",
+        "member_removed",
+        "principal_disabled",
+    },
+)
+_IAM_TARGETS = ("principal", "resource", "team", "request")
+
+
+def _iam_line_parser(recorded_by_service: frozenset[str]) -> RecordLineParser:
+    """How a line of central IAM's audit log becomes events.
+
+    An authorization decision is evidence to join to a resource's own record by its decision ID, never an
+    action of its own: the resource's record is the action, and counting both would count it twice. A
+    management mutation (a grant, a decision, a membership change, a request) is an action of the agent that
+    made it, refused ones included, unless a service that writes its own operation record forwarded it (that
+    record is the action, so IAM's event is the duplicate). A mutation nobody else recorded would otherwise be
+    invisible to the monitors.
+    """
+
+    def parse(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
+        _ = agent_ids
+        event = _JSON_OBJECT.validate_json(line)
+        kind, blocked = event.get("kind"), False
+        if kind == "rejected":
+            kind, blocked = event.get("operation"), True
+        actor, at, via = event.get("actor"), event.get("at"), event.get("via")
+        # Every field is untrusted JSON: only strings are looked up in a set, so no line can abort the run.
+        if not isinstance(kind, str) or kind not in _IAM_MUTATIONS or not isinstance(actor, str):
+            return None
+        if isinstance(at, bool) or not isinstance(at, int | float):
+            return None
+        if isinstance(via, str) and via in recorded_by_service:
+            return None
+        found = next((value for key in _IAM_TARGETS if isinstance(value := event.get(key), str)), None)
+        args = {k: v for k, v in event.items() if k not in {"at", "actor", "kind", "via", "result"}}
+        payload = {
+            "args": args,
+            "target": found,
+            "blocked": blocked,
+            "reason": event.get("code") if blocked else None,
+        }
+        return _ParsedRecordLine(
+            float(at),
+            actor,
+            [RecordedEvent("action", actor, found, payload, tool=f"iam_{kind}")],
+        )
+
+    return parse
+
+
 def _parse_service_request_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
     """A request's record, or ``None`` for a line naming no operation; ``ValidationError`` for a bad one."""
     _ = agent_ids
@@ -321,7 +381,7 @@ def build_recorded_events(
     roles = {agent.id: agent.kind for agent in config.agents}
     agent_ids = tuple(roles)
     record_line_parsers: list[tuple[str, RecordLineParser]] = [
-        (service.name, _parse_tool_call_line if service.tools else _parse_service_request_line)
+        (service.name, _record_line_parser(service, config))
         for service in config.live_services
         if service.tools or service.rights
     ]
@@ -339,6 +399,15 @@ def build_recorded_events(
     if unattributed:
         _LOGGER.warning("%d service records were not placed: see %s", len(unattributed), UNATTRIBUTED_FILE)
         (run_directory / UNATTRIBUTED_FILE).write_text("".join(f"{note}\n" for note in unattributed))
+
+
+def _record_line_parser(service: LiveService, config: RunConfig) -> RecordLineParser:
+    """How a service's log lines become events: a tool call, a request, or (central IAM) correlation only."""
+    if config.settings.iam.enabled and service.name == config.settings.iam.service:
+        seed = load_seed(resolve_scenario(config))
+        resources = {} if seed is None else seed.resources
+        return _iam_line_parser(frozenset(n for n, r in resources.items() if r.records_actions))
+    return _parse_tool_call_line if service.tools else _parse_service_request_line
 
 
 def _read_record_lines(run_directory: Path, service: str, phases: list[_Phase]) -> Iterator[str]:

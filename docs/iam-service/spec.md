@@ -5,7 +5,8 @@ IAM service with its HTTP and MCP guards are implemented in `company/meridian-ia
 forge, jobs, scratch, coverage), the notes service (`python -m notes_iam`) and the agents registry can run under
 them, and a scenario can declare which of its services IAM manages (`iam:` in `scenario.yaml`, switched on by
 `iam.enabled` in a run config). A stack run with `iam.enabled` (`configs/aurora-efficiency.iam.yaml`) starts IAM beside the other services
-and puts the seeded ones under it. Existing services remain on their
+and puts the seeded ones under it. Each resource service's own record of a call carries the IAM decision it
+was made under; IAM's own log is correlation-only, so no action is counted twice. Existing services remain on their
 current authentication paths until migrated; no service is compliant merely because this document exists.
 
 This is the IAM architecture contract for every new or changed agent-facing service. Component specs may

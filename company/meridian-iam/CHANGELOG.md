@@ -1,5 +1,9 @@
 # Changelog — meridian-iam
 
+## 0.5.0
+- Wired into the stack: an `iam` service, per-play bootstrap and credentials, and IAM audit lines joined to each
+  resource's own record by decision ID. See `docs/iam-service/spec.md` section 11 for what is and is not under IAM.
+
 ## 0.4.0
 - mcp: IAM verifies who connects to an MCP service and checks the named operation before every tool call; a refusal
   is an ordinary tool error the agent can read, still recorded. Each tool-call record can carry the IAM decision

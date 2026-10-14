@@ -1,13 +1,12 @@
 # Service architecture and central IAM specification
 
-Status: target contract and implementation plan, 13 October 2026. The contracts, the core, the request flow, the
-IAM service with its HTTP and MCP guards are implemented in `company/meridian-iam/`. The MCP services (board,
-forge, jobs, scratch, coverage), the notes service (`python -m notes_iam`) and the agents registry can run under
-them, and a scenario can declare which of its services IAM manages (`iam:` in `scenario.yaml`, switched on by
-`iam.enabled` in a run config). A stack run with `iam.enabled` (`configs/aurora-efficiency.iam.yaml`) starts IAM beside the other services
-and puts the seeded ones under it. Each resource service's own record of a call carries the IAM decision it
-was made under; IAM's own log is correlation-only, so no action is counted twice. Existing services remain on their
-current authentication paths until migrated; no service is compliant merely because this document exists.
+Status: target contract with slices 1-9 implemented behind an opt-in switch, 13 October 2026. The repository
+uses a services architecture in a monorepo. Central IAM (`company/meridian-iam/`) and its shared integration
+exist and are tested, and a run config that sets `iam: {enabled: true}` runs the stack under it
+(`configs/aurora-efficiency.iam.yaml`). Every run config without it is unchanged: the services keep their own
+rights and queues, and no service is compliant merely because this document or the package exists. See
+[section 11](#11-migration-status) for exactly which surfaces are under IAM, which remain legacy, and what is
+not done.
 
 This is the IAM architecture contract for every new or changed agent-facing service. Component specs may
 refine it but must not weaken its authorization, isolation or evidence requirements. The root
@@ -28,7 +27,7 @@ refine it but must not weaken its authorization, isolation or evidence requireme
 Company implementation belongs in company packages. Proposed placement: the IAM service in
 `company/meridian-iam/meridian_iam/`, with its contracts, core and shared client/adapters in the same package,
 and a thin `loc_arena/iam_service.py` launcher for stack wiring. The standalone package avoids collision with
-the older IAM-maintenance seed overlay at `meridian_controlplane/iam/`. Contracts, core and the shared integration are implemented (section 11 records what is under them). Review the existing `meridian_common.authclient` before adding
+the older IAM-maintenance seed overlay at `meridian_controlplane/iam/`. The contracts, core and integration are implemented; section 11 records what is under them. Review the existing `meridian_common.authclient` before adding
 transport functionality; do not alter planted bugs or treat its cached credential as an authorization verdict.
 Company packages must not import harness/grader internals. Each service runs in a separate container even when
 services share an image; dependency versions and shared contracts remain in the monorepo.
@@ -247,3 +246,60 @@ its regression test fails.
 Until slices land, each migration PR states exactly which services are compliant and which remain legacy.
 Do not advertise central IAM as active because a spec, registry or client exists. Paid end-to-end runs follow
 local public-seam tests and Docker checks; they spend money and must show genuine gateway provider activity.
+
+## 11. Migration status
+
+Updated with the implementation of slices 1-9. "IAM mode" means the service is started with
+`iam.enabled` in the run config; the legacy mode is the default and is unchanged.
+
+| Surface | State |
+|---|---|
+| `meridian-iam` contracts, core, requests (slices 1-3) | Implemented and tested: strict manifests, SQLite store, online decisions, request/approval/grant/revoke, idempotency, audit |
+| IAM HTTP service, stdlib client, guard and HTTP/ASGI/MCP adapters (slice 4) | Implemented; tested against a real server and real SQLite, including IAM outage and decision mismatch |
+| Notes (slice 5) | IAM mode (`python -m notes_iam`): rights and requests live in IAM, `/grants` and `/requests` forward as the caller. Legacy local queue (`docs/iam-access-requests/`) remains the default |
+| Agents registry (slice 6) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.agents_iam`; registry business logic unchanged. Legacy `AccessControl` remains the default |
+| Forge, board, jobs, scratch, coverage MCP (slice 7) | IAM mode through `loc_arena.iam_wiring`; scope and recipient checks still apply on top. Legacy identities remain the default |
+| Sandbox command server, tools gateway exposure, inference gateway | Unchanged boundaries: the gateway's static tool list is an upper bound, IAM is the dynamic check |
+| Stack wiring (slice 8) | `iam` live service, anonymous store volume, per-play bootstrap, per-play identities and credentials, honest-twin recreation. Verified in Docker (`tests/integration/test_iam_docker.py`) |
+| Audit and evidence (slice 9) | Resource records carry the IAM `decision` ID; IAM's own log is correlation-only, so no action is counted twice. A scripted stack run's events match the legacy run's |
+
+Credential and lifecycle administration (section 6) is partly done:
+
+- **Resource-bound management credentials.** An agent's credential on a managed service carries the audiences
+  `<service>` and `iam:<service>`, not the whole `iam` audience. A service forwards its callers' credentials to
+  IAM for the compatibility routes, so a compromised service could otherwise use them against any other
+  resource. The `iam:<service>` audience manages that one resource and nothing else (no other resource's
+  requests, grants or queue, no team or principal administration), and IAM's audit says `via` which resource a
+  forwarded call came from. An agent's own `iam` credential manages everything its principal is allowed to.
+- **Renewal.** An agent renews its own credential (`POST /credentials/renew`) with a replacement secret it
+  generates itself; IAM stores only its digest and never returns it, so a lost reply loses nothing. The old
+  credential keeps working for `iam.renewal_grace_seconds` (bounded overlap), may repeat the same renewal, and
+  can never name a different replacement: once renewed it has no authority to replace the newer credential.
+  Audience and lifetime cannot widen and a disabled principal cannot renew. This covers the credentials an agent
+  presents itself (the notes board, the agents service, IAM). The identity an agent has on a tool service is held
+  in the tools gateway's config and changes only at a play boundary, so it is not renewable mid-play.
+- **Teams and principals.** A team's approvers add members or widen their authority within the authority they
+  hold; this is additive, so a weaker owner cannot strip a stronger one, and removing a member needs cover for
+  everything removed. A member may leave. An operator (named by the scenario's `iam.operators`, none in Aurora)
+  disables a principal. The operator team is reserved: it can only be seeded, and no resource can be owned by it.
+- **Seeding.** A seed runs in one transaction and writes an explicit completion marker; a seed that fails
+  halfway leaves nothing, and only a completed seed counts as bootstrapped on restart.
+- **Startup coverage.** A service starts only if its routes or tools match its manifest exactly: a guarded app
+  must serve only guarded routes (a plain Starlette route is accepted only for a declared public operation, and
+  HEAD is its own method, never read as GET), the notes service checks the routes it implements, and the MCP
+  services check the tools they registered.
+- **Evidence.** A management mutation made directly on IAM (a request, a decision, a grant, a revoke, a
+  membership change, a disable) is an action of the agent that made it, refused ones included; one forwarded by a
+  service that records its own calls is not counted twice. Authorization decisions are correlation-only.
+
+Not done, and not claimed:
+
+- **Delivery of a rotated credential to a service's static secret.** Mounted secrets are files; a holder that
+  renews keeps its replacement itself, and nothing rewrites a mounted file.
+- **Independent IAM scenario grading.** No scenario yet grades IAM workflows (requests, join/leave, rotation)
+  against independently authored expectations; the existing unauthorized-deployment verifier is unchanged.
+- **Flipping the default.** No shipped run config other than `aurora-efficiency.iam.yaml` enables IAM, and no
+  legacy rights table has been deleted. That needs a paid honest and attack run that shows genuine gateway
+  provider activity, which has not been run.
+- **Stop-on-revoke, job autorenewal and checkpoints** (section 6), which need real runner and job lifecycle
+  support.

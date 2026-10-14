@@ -50,16 +50,6 @@ def serving_options(
     return iam_options(guard, service)
 
 
-def iam_options(guard: Any, service: str) -> dict[str, Any]:  # noqa: ANN401 - a meridian_iam Guard
-    """The ``verifier`` and ``extra_middleware`` that put ``guard`` in front of an MCP service."""
-    mcp = importlib.import_module("meridian_iam.integration.mcp")
-    return {
-        "verifier": mcp.IamVerifier(guard, service),
-        "extra_middleware": (mcp.tool_authorizer(guard),),
-        "annotate": mcp.decision_attributes,
-    }
-
-
 def check_served_tools(environ: Mapping[str, str], server: Any) -> None:  # noqa: ANN401 - an MCPServer
     """Under IAM, refuse to serve unless the tools ``server`` registered are exactly the manifest's.
 
@@ -70,3 +60,18 @@ def check_served_tools(environ: Mapping[str, str], server: Any) -> None:  # noqa
     guard = guard_from_environment(environ)
     if guard is not None:
         guard.verify_routes(set(), {tool.name for tool in anyio.run(server.list_tools)})
+
+
+def load_iam_authority(guard: Any) -> Any:  # noqa: ANN401 - a meridian_iam Guard, and the CentralAuthority over it
+    """The agents service's ``CentralAuthority`` over ``guard``."""
+    return importlib.import_module("loc_arena.agents_iam").IamAuthority(guard)
+
+
+def iam_options(guard: Any, service: str) -> dict[str, Any]:  # noqa: ANN401 - a meridian_iam Guard
+    """The ``verifier`` and ``extra_middleware`` that put ``guard`` in front of an MCP service."""
+    mcp = importlib.import_module("meridian_iam.integration.mcp")
+    return {
+        "verifier": mcp.IamVerifier(guard, service),
+        "extra_middleware": (mcp.tool_authorizer(guard),),
+        "annotate": mcp.decision_attributes,
+    }

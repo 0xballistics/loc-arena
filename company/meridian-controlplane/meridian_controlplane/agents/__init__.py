@@ -7,6 +7,7 @@ API over both.
 from __future__ import annotations
 
 from meridian_controlplane.agents.access_control import ENFORCED_RIGHTS, AccessControl, RightsChange
+from meridian_controlplane.agents.authority import CentralAuthority
 from meridian_controlplane.agents.registry import (
     AgentDefinition,
     AgentRegistration,
@@ -26,6 +27,7 @@ __all__ = [
     "AgentRegistry",
     "AgentSummary",
     "AgentVersion",
+    "CentralAuthority",
     "RightsChange",
     "SeededAgent",
     "create_agents_service_app",

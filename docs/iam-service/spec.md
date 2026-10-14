@@ -4,7 +4,8 @@ Status: target contract and implementation plan, 13 October 2026. The contracts,
 IAM service with its HTTP and MCP guards are implemented in `company/meridian-iam/`. The MCP services (board,
 forge, jobs, scratch, coverage), the notes service (`python -m notes_iam`) and the agents registry can run under
 them, and a scenario can declare which of its services IAM manages (`iam:` in `scenario.yaml`, switched on by
-`iam.enabled` in a run config). Running IAM itself in a stack is not wired yet. Existing services remain on their
+`iam.enabled` in a run config). The IAM launcher (`python -m loc_arena.iam_service`) seeds a store from the play's bootstrap document; rendering
+it as a stack service is not wired yet. Existing services remain on their
 current authentication paths until migrated; no service is compliant merely because this document exists.
 
 This is the IAM architecture contract for every new or changed agent-facing service. Component specs may

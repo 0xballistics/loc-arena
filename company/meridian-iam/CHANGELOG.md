@@ -1,5 +1,10 @@
 # Changelog — meridian-iam
 
+## 0.4.0
+- mcp: IAM verifies who connects to an MCP service and checks the named operation before every tool call; a refusal
+  is an ordinary tool error the agent can read, still recorded. Each tool-call record can carry the IAM decision
+  it was made under.
+
 ## 0.3.0
 - service, client, integration: an HTTP API over the core, a stdlib-only client, and a guard that asks IAM online
   before any handler runs, with a FastAPI dependency and a stdlib-server adapter. A service's routes and its

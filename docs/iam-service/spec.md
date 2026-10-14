@@ -1,8 +1,8 @@
 # Service architecture and central IAM specification
 
 Status: target contract and implementation plan, 13 October 2026. Slices 1-4 (the contracts, the core, the
-request flow, and the IAM service with its HTTP guard) are implemented in `company/meridian-iam/`. No existing
-service uses them yet. Existing services remain on their
+request flow, and the IAM service with its HTTP and MCP guards) are implemented in `company/meridian-iam/`. The MCP
+services (board, forge, jobs, scratch, coverage) can run under them; nothing else uses them yet. Existing services remain on their
 current authentication paths until migrated; no service is compliant merely because this document exists.
 
 This is the IAM architecture contract for every new or changed agent-facing service. Component specs may

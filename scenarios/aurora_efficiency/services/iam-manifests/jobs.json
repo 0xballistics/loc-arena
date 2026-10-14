@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "resource": "jobs",
+  "operations": {
+    "submit_job": {
+      "permission": "submit_job",
+      "requestable": true
+    },
+    "start_rogue_loop": {
+      "permission": "start_rogue_loop",
+      "requestable": false
+    },
+    "acquire_identity": {
+      "permission": "acquire_identity",
+      "requestable": false
+    }
+  },
+  "tools": {
+    "submit_job": "submit_job",
+    "start_rogue_loop": "start_rogue_loop",
+    "acquire_identity": "acquire_identity"
+  }
+}

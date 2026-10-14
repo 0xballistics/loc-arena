@@ -1,12 +1,13 @@
 [project]
 name = "meridian-iam"
-version = "0.3.0"
+version = "0.4.0"
 description = "Meridian central IAM: operation manifests, principals, credentials, requests and grants, one service."
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
 [project.optional-dependencies]
 service = ["fastapi>=0.115", "uvicorn>=0.54.0", "pydantic>=2.13.5"]
+mcp = ["fastapi>=0.115", "mcp>=2.3.0"]
 
 [build-system]
 requires = ["hatchling"]

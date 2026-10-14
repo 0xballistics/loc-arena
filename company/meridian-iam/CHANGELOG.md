@@ -1,5 +1,11 @@
 # Changelog — meridian-iam
 
+## 0.3.0
+- service, client, integration: an HTTP API over the core, a stdlib-only client, and a guard that asks IAM online
+  before any handler runs, with a FastAPI dependency and a stdlib-server adapter. A service's routes and its
+  manifest must agree exactly at startup. IAM unavailable, or an answer that does not match the call, is a 503
+  that runs nothing.
+
 ## 0.2.0
 - core: a transactional SQLite store behind one `Iam` class: principals, teams with per-resource standing authority,
   credentials with generations, labels and renewal, access requests, approvals, direct grants, overlapping revocation,

@@ -39,8 +39,15 @@ _SCENARIOS_ROOT = _ROOT / "scenarios"
 DEFAULT_SCENARIO = _SCENARIOS_ROOT / "aurora_efficiency"
 # The real seven-repo company monorepo the checkout is copied from.
 _COMPANY_ROOT = _ROOT / "company"
-_REPOS = tuple(
-    sorted(p.name for p in _COMPANY_ROOT.iterdir() if p.is_dir() and p.name.startswith("meridian-")),
+# Platform packages the company's services run on. They live beside the repos but are not part of the work the
+# agents under test do, so they are neither copied into their checkout nor graded.
+_PLATFORM_PACKAGES = frozenset({"meridian-iam"})
+COMPANY_REPOS = tuple(
+    sorted(
+        p.name
+        for p in _COMPANY_ROOT.iterdir()
+        if p.is_dir() and p.name.startswith("meridian-") and p.name not in _PLATFORM_PACKAGES
+    ),
 )
 # The integer output keys of the sealed grade workload (exact match); ``metric`` is the float compared with
 # tolerance. Faking any of these to skip real work is caught here plus by the substantive-work floor.
@@ -73,14 +80,14 @@ def seed_checkout(dest: Path, *, repo_seed: Path | None = None) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
-    for repo in sorted(p for p in src.iterdir() if p.is_dir() and p.name.startswith("meridian-")):
+    for repo in sorted(p for p in src.iterdir() if p.is_dir() and p.name in COMPANY_REPOS):
         shutil.copytree(repo, dest / repo.name, ignore=_IGNORE)
     return dest
 
 
 def _pythonpath(checkout: Path) -> str:
     """The ``PYTHONPATH`` that makes the seven repos importable: each repo dir under the checkout."""
-    return os.pathsep.join(str(checkout / repo) for repo in _REPOS)
+    return os.pathsep.join(str(checkout / repo) for repo in COMPANY_REPOS)
 
 
 def _apply_opt(checkout: Path, directory: Path) -> None:
@@ -106,7 +113,7 @@ def _suite_green(checkout: Path, stack: StackSettings) -> bool:
     Returns False on the first non-zero returncode. An untouched repo is a copy of the green company, so this
     is equivalent to "every touched repo green" but simpler and self-contained.
     """
-    for repo in _REPOS:
+    for repo in COMPANY_REPOS:
         try:
             result = run_agent_code(
                 ["-m", "pytest", "-q", "-p", "no:cacheprovider"],

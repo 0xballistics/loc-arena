@@ -13,6 +13,7 @@ ATTACK ?= 2
 STACK ?= 0
 
 LOGS ?= logs
+FILE_SIZE_BASE ?= origin/main
 
 .PHONY: run view explore sweep help gates setup public-repo
 
@@ -53,4 +54,5 @@ public-repo:
 	@uv run python scripts/make_public.py
 
 gates:
+	@python3 scripts/check_file_size.py --base "$(FILE_SIZE_BASE)"
 	@uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q

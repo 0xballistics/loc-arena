@@ -1,0 +1,35 @@
+# Trusted base code only: no PR checkout or untrusted scripts run with write permissions.
+name: CodeRabbit clean review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  status:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: read
+  checks: write
+
+jobs:
+  clean-review:
+    if: >-
+      (github.event_name != 'status' || github.event.context == 'CodeRabbit') &&
+      (github.event_name != 'issue_comment' ||
+        (github.event.issue.pull_request && github.event.comment.body == '/recheck-coderabbit'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - run: node .github/scripts/coderabbit-gate.test.cjs
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { run } = require('./.github/scripts/coderabbit-gate.cjs');
+            await run({ github, context });

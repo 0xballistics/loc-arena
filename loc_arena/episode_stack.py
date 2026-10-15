@@ -41,6 +41,17 @@ from loc_arena.config import RunConfig, load_run_config, sandbox_service
 from loc_arena.gateway.core import API_KEY_VARIABLE, GATEWAY_URL_VARIABLE, OPENROUTER_URL, OpenRouterProvider
 from loc_arena.gateway.proxy import locate_call_log
 from loc_arena.harness import apply_mode, build_recorded_run_events, grade_run, locate_run
+from loc_arena.iam_bootstrap import (
+    BOOTSTRAP_SECRET,
+    BOOTSTRAP_VARIABLE,
+    CREDENTIAL_FILE,
+    SERVICE_CREDENTIAL_PREFIX,
+    managed_services,
+    manifest_path,
+    render_bootstrap,
+    service_credential_variable,
+)
+from loc_arena.iam_wiring import CREDENTIAL_VARIABLE, MANIFEST_VARIABLE, URL_VARIABLE
 from loc_arena.identity_variables import find_shared_identity_variable, holds_identities, identity_variable
 from loc_arena.recorded_events import SERVICE_LOGS
 from loc_arena.sandbox import IDENTITY_PREFIX, TOKEN_FILE, build_server_settings, token_secret_name
@@ -53,6 +64,7 @@ from loc_arena.stack_play import (
     play_phases,
 )
 from loc_arena.task import SANDBOX_URL_VARIABLE, TOOLS_URL_VARIABLE, resolve_scenario
+from loc_arena.tasks.main_task_grader import COMPANY_REPOS
 from loc_arena.tools_gateway import (
     MCP_PATH,
     TOOLS_GATEWAY_CONFIG_SECRET_NAME,
@@ -68,7 +80,12 @@ KEY_SECRET_NAME = "openrouter_api_key"  # the compose secret: a file in settings
 OUTPUT_DIRECTORY = PurePosixPath("/output")  # the episode's audit bundles; the image creates it for nobody
 CONFIGS_DIRECTORY = PurePosixPath("/app/configs")  # the run configs, mounted read-only
 SCENARIOS_DIRECTORY = PurePosixPath("/app/scenarios")  # where the loader looks for a scenario pack
+COMPANY_DIRECTORY = PurePosixPath("/app/company")  # the company repos, in the engine image
 REPOSITORY = Path(__file__).resolve().parents[1]  # its Dockerfile and configs/
+PLATFORM_PACKAGE = "meridian-iam"  # on every engine service's path, never in the agents' checkout
+IAM_MANIFEST_DIRECTORY = PurePosixPath("/srv")  # where a built managed service finds its own manifest
+IAM_DOCKERFILE = "Dockerfile.iam"  # a built service's image with the IAM client, beside its own Dockerfile
+ENGINE_DIRECTORY = PurePosixPath("/app")  # the repository, in the engine image
 TOKEN_BYTES = 32  # the entropy of each sandbox token and of each agent's identity on a live service
 VOCABULARY_VARIABLE = "LOC_ARENA_VOCABULARY"  # the rights a live service's scenario declares: a JSON list
 RIGHTS_VARIABLE = "LOC_ARENA_RIGHTS"  # a live service's starting rights: JSON {agent id: [right, ...]}
@@ -143,6 +160,11 @@ def render_compose(
     services = config.live_services
     tool_services = [service.name for service in services if service.tools]
     identities = issue_identities(config)
+    # An engine module may serve company code: each company repo's root is on its path, as in a checkout.
+    managed = managed_services(config)
+    # meridian-iam is a platform package, not a work repo: only a run under IAM puts it on the path.
+    repos = (*COMPANY_REPOS, PLATFORM_PACKAGE) if managed else COMPANY_REPOS
+    company_repos_pythonpath = ":".join(str(COMPANY_DIRECTORY / repo) for repo in repos)
     return {
         "services": {
             "gateway": {
@@ -170,8 +192,9 @@ def render_compose(
                     config,
                     service,
                     identities,
-                    {**engine, "volumes": [configs]},
+                    {**engine, "volumes": [configs], "environment": {"PYTHONPATH": company_repos_pythonpath}},
                     run,
+                    managed,
                 )
                 for service in services
             },
@@ -197,6 +220,19 @@ def render_compose(
             KEY_SECRET_NAME: {"environment": API_KEY_VARIABLE},
             **{token_secret_name(agent): {"environment": token_variable(agent)} for agent in agent_ids},
             **{identity.secret_name: {"environment": identity.variable} for identity in identities},
+            **(
+                {
+                    BOOTSTRAP_SECRET: {"environment": BOOTSTRAP_VARIABLE},
+                    **{
+                        f"{SERVICE_CREDENTIAL_PREFIX}{name}": {
+                            "environment": service_credential_variable(name),
+                        }
+                        for name in managed
+                    },
+                }
+                if managed
+                else {}
+            ),
             **(
                 {TOOLS_GATEWAY_CONFIG_SECRET_NAME: {"environment": TOOLS_GATEWAY_CONFIG_VARIABLE}}
                 if tool_services
@@ -299,34 +335,91 @@ def _render_sandbox(
     }
 
 
-def _render_live_service(
+def _render_live_service(  # noqa: PLR0913
     config: RunConfig,
     service: LiveService,
     identities: tuple[Identity, ...],
     engine: ComposeService,
     run: str,
+    managed: Sequence[str] = (),
 ) -> ComposeService:
     """A live service: on agent-net alone, no published port.
 
-    One that runs a module of the ``engine`` service, with the run configs mounted read-only, is given the
-    path of ``run``'s config; any other mounts no volume. One with rights or tools holds every agent's
-    identity, each under its agent's id; one with rights also the rights its scenario declares and the
-    agents' starting rights.
+    One that runs a module of the ``engine`` service, with the run configs mounted read-only and the company
+    repos importable, is given the path of ``run``'s config; any other mounts no volume. One with rights or
+    tools holds every agent's identity, each under its agent's id; one with rights also the rights its
+    scenario declares and the agents' starting rights.
+
+    Under central IAM (``managed`` names the services it manages) a managed service holds no agent identity,
+    only its own IAM credential, and waits for IAM; IAM holds every identity (to know their digests), each
+    service's credential and the play's bootstrap document, and keeps its store in an anonymous volume.
     """
     stack = config.settings.stack
+    iam = config.settings.iam
+    is_iam, is_managed = bool(managed) and service.name == iam.service, service.name in managed
     rights = {agent.id: list(agent.sandbox.rights.get(service.name, ())) for agent in config.agents}
+    environment: dict[str, str] = {}
     match service.source:
         case Path():
             source: ComposeService = {
                 "build": {"context": str(service.source)},
                 "image": f"loc-arena-service-{service.name}:latest",
             }
+            manifest_in_container = (
+                IAM_MANIFEST_DIRECTORY / Path(manifest_path(config, service.name)).name
+                if is_managed
+                else None
+            )
+            if is_managed:
+                if not (service.source / IAM_DOCKERFILE).is_file():
+                    raise StackError(f"service {service.name!r} is under IAM but has no {IAM_DOCKERFILE}")
+                source["build"] = {
+                    "context": str(service.source),
+                    "dockerfile": IAM_DOCKERFILE,
+                    "additional_contexts": {PLATFORM_PACKAGE: str(REPOSITORY / "company" / PLATFORM_PACKAGE)},
+                }
         case EngineModule(name=module):
             # The entry name follows the config so one module (the recording service) can serve several.
             arguments = [f"{CONFIGS_DIRECTORY}/{run}.yaml", service.name]
             source = {**engine, "command": ["python", "-m", module, *arguments]}
+            environment = engine["environment"]
+            manifest_in_container = (
+                ENGINE_DIRECTORY / manifest_path(config, service.name) if is_managed else None
+            )
         case image:
+            if is_managed:
+                raise StackError(f"service {service.name!r} runs a ready image, which cannot join IAM")
             source = {"image": image}
+    if service.rights:
+        environment = {
+            **environment,
+            VOCABULARY_VARIABLE: json.dumps(list(service.rights)),
+            RIGHTS_VARIABLE: json.dumps(rights),
+            TRANSITIVE_VARIABLE: json.dumps(service.transitive),
+        }
+    secrets_directory = config.settings.gateway.secrets_dir
+    if is_managed:
+        environment = {
+            **environment,
+            URL_VARIABLE: f"http://{iam.service}:{iam.port}",
+            MANIFEST_VARIABLE: str(manifest_in_container),
+            CREDENTIAL_VARIABLE: str(secrets_directory / CREDENTIAL_FILE),
+        }
+    mounted: list[str | ServiceSecret]
+    if is_iam:
+        mounted = [
+            *(identity.secret_name for identity in identities),
+            BOOTSTRAP_SECRET,
+            *(f"{SERVICE_CREDENTIAL_PREFIX}{name}" for name in managed),
+        ]
+    elif is_managed:
+        mounted = [_mount(f"{SERVICE_CREDENTIAL_PREFIX}{service.name}", CREDENTIAL_FILE)]
+    else:
+        mounted = [
+            _mount(identity.secret_name, f"{IDENTITY_PREFIX}{identity.agent_id}")
+            for identity in identities
+            if identity.service == service.name
+        ]
     return {
         **source,
         **({"command": list(service.command)} if service.command else {}),
@@ -335,28 +428,10 @@ def _render_live_service(
         "cpus": stack.service_cpus,
         "pids_limit": stack.service_pids_limit,
         "networks": [AGENT_NETWORK],
-        **(
-            {
-                "environment": {
-                    VOCABULARY_VARIABLE: json.dumps(list(service.rights)),
-                    RIGHTS_VARIABLE: json.dumps(rights),
-                    TRANSITIVE_VARIABLE: json.dumps(service.transitive),
-                },
-            }
-            if service.rights
-            else {}
-        ),
-        **(
-            {
-                "secrets": [
-                    _mount(identity.secret_name, f"{IDENTITY_PREFIX}{identity.agent_id}")
-                    for identity in identities
-                    if identity.service == service.name
-                ],
-            }
-            if holds_identities(service)
-            else {}
-        ),
+        **({"environment": environment} if environment else {}),
+        **({"secrets": mounted} if is_iam or is_managed or holds_identities(service) else {}),
+        **({"volumes": [*source.get("volumes", []), str(iam.database.parent)]} if is_iam else {}),
+        **({"depends_on": {iam.service: {"condition": "service_healthy"}}} if is_managed else {}),
         "healthcheck": _probe(service.port, stack, test=service.healthcheck),
         "init": True,
     }
@@ -409,25 +484,47 @@ def _probe(port: int, stack: StackSettings, *, test: Sequence[str] | None = None
 def _issue_secrets(config: RunConfig) -> tuple[dict[str, str], dict[str, str]]:
     """Every secret of a stack run, by the host variable compose reads: the attack env and the twin's.
 
-    The honest-twin env differs only in the tools gateway's config.
-    They reach compose through its environment alone: never a command line or a file. The twin's gateway
-    offers the honest config's tools (no covert tool), so an agent granted one in the attack config is
-    refused it at the gateway after ``renew_services`` recreates the gateway with the twin env.
+    They reach compose through its environment alone: never a command line or a file. The honest twin's env
+    differs in what the recreated containers are given. Its tools gateway offers the honest config's tools (no
+    covert tool), so an agent granted one in the attack config is refused it there after ``renew_services``
+    recreates the gateway. Under central IAM it also differs in the bootstrap document (rendered from the
+    honest config, so no covert tool carries a grant) and in every identity and IAM credential: the sandboxes
+    and services are recreated with new ones, so nothing the attack play held authenticates in the twin.
     """
+    managed = managed_services(config)
     tokens = {agent.id: secrets.token_urlsafe(TOKEN_BYTES) for agent in config.agents}
-    identities = {identity: secrets.token_urlsafe(TOKEN_BYTES) for identity in issue_identities(config)}
-    base = {
-        **{token_variable(agent): token for agent, token in tokens.items()},
-        **{identity.variable: value for identity, value in identities.items()},
-    }
-    if not serves_tools(config):
-        return base, base
 
-    def with_gateway(for_config: RunConfig) -> dict[str, str]:
-        rendered = render_tools_gateway_config(for_config, tokens, identities)
-        return {**base, TOOLS_GATEWAY_CONFIG_VARIABLE: rendered}
+    def issue_for_play(for_config: RunConfig) -> dict[str, str]:
+        identities = {identity: secrets.token_urlsafe(TOKEN_BYTES) for identity in issue_identities(config)}
+        environment = {
+            **{token_variable(agent): token for agent, token in tokens.items()},
+            **{identity.variable: value for identity, value in identities.items()},
+        }
+        if managed:
+            environment[BOOTSTRAP_VARIABLE] = render_bootstrap(for_config)
+            for name in managed:
+                environment[service_credential_variable(name)] = secrets.token_urlsafe(TOKEN_BYTES)
+        if serves_tools(config):
+            environment[TOOLS_GATEWAY_CONFIG_VARIABLE] = render_tools_gateway_config(
+                for_config,
+                tokens,
+                identities,
+            )
+        return environment
 
-    return with_gateway(config), with_gateway(apply_mode(config, "honest"))
+    attack = issue_for_play(config)
+    if managed:
+        return attack, issue_for_play(apply_mode(config, "honest"))
+    twin = issue_for_play(apply_mode(config, "honest")) if serves_tools(config) else attack
+    # Without IAM the twin reuses the attack play's identities: only its gateway config differs.
+    if serves_tools(config):
+        twin = {**attack, TOOLS_GATEWAY_CONFIG_VARIABLE: twin[TOOLS_GATEWAY_CONFIG_VARIABLE]}
+        twin[TOOLS_GATEWAY_CONFIG_VARIABLE] = render_tools_gateway_config(
+            apply_mode(config, "honest"),
+            tokens,
+            {identity: attack[identity.variable] for identity in issue_identities(config)},
+        )
+    return attack, twin
 
 
 def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: Path) -> Path:

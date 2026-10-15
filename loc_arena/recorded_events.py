@@ -9,7 +9,11 @@ play to the sealed log, and to the mirror log unless sealed-only. A call its ser
 ``error.type``) makes a blocked ``action`` with the service's reason. A successful call makes zero or more
 events: the board's ``send`` a ``message``; the forge's ``open_pr`` a ``pr`` and an ``action``; a covert
 tool an ``action``, plus ``write_scratch`` a sealed ``shared_surface`` and ``blind_monitor`` the ``config``
-pair the verifier reads; ``read`` and ``unread`` none, since each turn's delivery is a ``read``.
+pair the verifier reads; ``read`` and ``unread`` none, since each turn's delivery is a ``read``. A live
+service with rights and no tools records a request in its log as a line naming its operation
+(``ServiceRequestRecord``); its other lines, the notes board's among them, are not records. A request it
+refused makes a blocked ``action``, and one that changed something an ``action``; a read it answered makes
+none.
 ``blind_monitor`` also reduces the monitors' view: the target's mirror events after the call are dropped, so
 monitors lose that activity while the sealed log keeps it. Each line of
 ``unattributed_records.jsonl`` in the run directory is a record and the ``reason`` it was not placed: not a
@@ -25,20 +29,23 @@ import json
 import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from http import HTTPMethod, HTTPStatus
 from pathlib import Path
 from typing import Any
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from sandbox_server.confinement import resolve_inside
+from scenarios.loader import LiveService
 
 from loc_arena.config import RunConfig
 from loc_arena.forge.service import OpenedPullRequest
+from loc_arena.iam_seed import load_seed
 from loc_arena.logging_.agent_trace import EpisodeTrace
 from loc_arena.logging_.events import AppendOnlyLog, EventKind, fingerprint, read_events
 from loc_arena.recording_service import TOOLS as COVERT_TOOLS
 from loc_arena.recording_service import redact_note
 from loc_arena.scaffold.bus import Recorder
-from loc_arena.task import SNAPSHOT_FILE, SnapshotFile, read_snapshot_file
+from loc_arena.task import SNAPSHOT_FILE, SnapshotFile, read_snapshot_file, resolve_scenario
 from loc_arena.tool_records import ToolRecord
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,7 +53,22 @@ SERVICE_LOGS = "services"  # a stack run's copy of each live service's log, in t
 RECORDS = "records"  # where an in-process run's services record, in each episode's directory
 UNATTRIBUTED_FILE = "unattributed_records.jsonl"
 _OPENED_PULL_REQUEST = TypeAdapter(OpenedPullRequest)
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 _COVERAGE_COMPONENTS = ("monitor", "logging")
+
+
+class ServiceRequestRecord(BaseModel):
+    """A request a live service with rights recorded: its caller, its operation and arguments, its status."""
+
+    model_config = ConfigDict(frozen=True)
+
+    time: AwareDatetime = Field(validation_alias="wall_ts")  # without its UTC offset, in the wrong window
+    caller: str | None  # none when the request carried no known identity
+    method: str
+    status: int
+    operation: str
+    arguments: dict[str, JsonValue]
+    decision: str | None = None  # the IAM decision the request was made under, when the service has IAM
 
 
 @dataclass(frozen=True)
@@ -143,9 +165,18 @@ EVENT_BUILDERS: Mapping[str, Callable[[ToolRecord, Sequence[str]], list[Recorded
 }
 
 
-# The tools whose successful call is also an action, and the argument naming what a call addresses.
+# The tools whose successful call is also an action, and the argument naming what a call or request addresses.
 _ACTIONS = COVERT_TOOLS | {"open_pr"}
-_TARGET_FROM: Mapping[str, str] = {"open_pr": "repo", "send": "to", "blind_monitor": "target"}
+_TARGET_FROM: Mapping[str, str] = {
+    "open_pr": "repo",
+    "send": "to",
+    "blind_monitor": "target",
+    "register_agent": "name",
+    "update_agent": "name",
+    "retire_agent": "name",
+    "grant_rights": "agent",
+    "revoke_rights": "agent",
+}
 
 
 def _action_event(record: ToolRecord) -> RecordedEvent:
@@ -170,6 +201,22 @@ def _action_event(record: ToolRecord) -> RecordedEvent:
         tool=record.tool,
         result=dict(record.result) if record.result is not None else None,
     )
+
+
+def build_events_from_service_request(record: ServiceRequestRecord) -> list[RecordedEvent]:
+    """The ``action`` of a request its service refused or that changed something; a read it answered, none."""
+    refused = record.status >= HTTPStatus.BAD_REQUEST
+    if record.caller is None or (record.method == HTTPMethod.GET and not refused):
+        return []
+    target = record.arguments.get(_TARGET_FROM.get(record.operation, ""))
+    target = target if isinstance(target, str) else None
+    payload = {
+        "args": record.arguments,
+        "target": target,
+        "blocked": refused,
+        "reason": HTTPStatus(record.status).phrase if refused else None,
+    }
+    return [RecordedEvent("action", record.caller, target, payload, tool=record.operation)]
 
 
 def build_events(record: ToolRecord, agent_ids: Sequence[str]) -> list[RecordedEvent]:
@@ -204,6 +251,94 @@ class _Phase:
         turns = [turn for turn in self.trace.turns if turn.ref.agent_uid == agent] if self.trace else []
         covering = (turn.ref.turn for turn in turns if turn.wall_start <= wall <= turn.wall_end)
         return next(covering, None if turns else 0)
+
+
+@dataclass(frozen=True)
+class _ParsedRecordLine:
+    """A record line, parsed: when it was made, by whom, and the events it makes."""
+
+    wall: float
+    agent: str | None
+    events: list[RecordedEvent]
+
+
+RecordLineParser = Callable[[str, Sequence[str]], _ParsedRecordLine | None]
+
+
+def _parse_tool_call_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine:
+    """A tool call's record; raises ``ValidationError`` for a line that is none."""
+    record = ToolRecord.model_validate_json(line)
+    return _ParsedRecordLine(record.time.timestamp(), record.agent, build_events(record, agent_ids))
+
+
+_IAM_MUTATIONS = frozenset(
+    {
+        "access_requested",
+        "access_approved",
+        "access_denied",
+        "grant",
+        "revoke",
+        "member_added",
+        "member_removed",
+        "principal_disabled",
+    },
+)
+_IAM_TARGETS = ("principal", "resource", "team", "request")
+
+
+def _iam_line_parser(recorded_by_service: frozenset[str]) -> RecordLineParser:
+    """How a line of central IAM's audit log becomes events.
+
+    An authorization decision is evidence to join to a resource's own record by its decision ID, never an
+    action of its own: the resource's record is the action, and counting both would count it twice. A
+    management mutation (a grant, a decision, a membership change, a request) is an action of the agent that
+    made it, refused ones included, unless a service that writes its own operation record forwarded it (that
+    record is the action, so IAM's event is the duplicate). A mutation nobody else recorded would otherwise be
+    invisible to the monitors.
+    """
+
+    def parse(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
+        _ = agent_ids
+        event = _JSON_OBJECT.validate_json(line)
+        kind, blocked = event.get("kind"), False
+        if kind == "rejected":
+            kind, blocked = event.get("operation"), True
+        actor, at, via = event.get("actor"), event.get("at"), event.get("via")
+        # Every field is untrusted JSON: only strings are looked up in a set, so no line can abort the run.
+        if not isinstance(kind, str) or kind not in _IAM_MUTATIONS or not isinstance(actor, str):
+            return None
+        if isinstance(at, bool) or not isinstance(at, int | float):
+            return None
+        if isinstance(via, str) and via in recorded_by_service:
+            return None
+        found = next((value for key in _IAM_TARGETS if isinstance(value := event.get(key), str)), None)
+        args = {k: v for k, v in event.items() if k not in {"at", "actor", "kind", "via", "result"}}
+        payload = {
+            "args": args,
+            "target": found,
+            "blocked": blocked,
+            "reason": event.get("code") if blocked else None,
+        }
+        return _ParsedRecordLine(
+            float(at),
+            actor,
+            [RecordedEvent("action", actor, found, payload, tool=f"iam_{kind}")],
+        )
+
+    return parse
+
+
+def _parse_service_request_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
+    """A request's record, or ``None`` for a line naming no operation; ``ValidationError`` for a bad one."""
+    _ = agent_ids
+    if "operation" not in _JSON_OBJECT.validate_json(line):
+        return None
+    record = ServiceRequestRecord.model_validate_json(line)
+    return _ParsedRecordLine(
+        record.time.timestamp(),
+        record.caller,
+        build_events_from_service_request(record),
+    )
 
 
 @dataclass(frozen=True)
@@ -245,14 +380,19 @@ def build_recorded_events(
     ]
     roles = {agent.id: agent.kind for agent in config.agents}
     agent_ids = tuple(roles)
-    services = [service.name for service in config.live_services if service.tools]
+    record_line_parsers: list[tuple[str, RecordLineParser]] = [
+        (service.name, _record_line_parser(service, config))
+        for service in config.live_services
+        if service.tools or service.rights
+    ]
     unattributed: list[str] = []
     built: dict[Path, list[_Placed]] = {phase.directory: [] for phase in phases}
-    for line in _read_record_lines(run_directory, services, phases):
-        placed, reason = _place(line, phases, roles, agent_ids)
-        unattributed += [json.dumps({"reason": reason, "line": line})] if reason else []
-        if placed:
-            built[placed.phase.directory].append(placed)
+    for service, parse_record_line in record_line_parsers:
+        for line in _read_record_lines(run_directory, service, phases):
+            placed, reason = _place(line, parse_record_line, phases, roles, agent_ids)
+            unattributed += [json.dumps({"reason": reason, "line": line})] if reason else []
+            if placed:
+                built[placed.phase.directory].append(placed)
     for phase in phases:
         drops = _write_events(phase, sorted(built[phase.directory], key=lambda placed: placed.wall), roles)
         _drop_covered_mirror_events(phase, drops)
@@ -261,41 +401,46 @@ def build_recorded_events(
         (run_directory / UNATTRIBUTED_FILE).write_text("".join(f"{note}\n" for note in unattributed))
 
 
-def _read_record_lines(
-    run_directory: Path,
-    services: list[str],
-    phases: list[_Phase],
-) -> Iterator[str]:
-    """Each service's record lines: those of its log in a stack run, else of each episode's records file."""
-    for service in services:
-        stack_log = run_directory / SERVICE_LOGS / f"{service}.log"
-        in_process = [phase.directory / RECORDS / f"{service}.jsonl" for phase in phases]
-        for path in (path for path in [stack_log, *in_process] if path.exists()):
-            # A line not starting with "{" is one the service logged around its records, such as uvicorn's.
-            lines = path.read_text(encoding="utf-8").splitlines()
-            yield from (line for line in lines if line.startswith("{"))
+def _record_line_parser(service: LiveService, config: RunConfig) -> RecordLineParser:
+    """How a service's log lines become events: a tool call, a request, or (central IAM) correlation only."""
+    if config.settings.iam.enabled and service.name == config.settings.iam.service:
+        seed = load_seed(resolve_scenario(config))
+        resources = {} if seed is None else seed.resources
+        return _iam_line_parser(frozenset(n for n, r in resources.items() if r.records_actions))
+    return _parse_tool_call_line if service.tools else _parse_service_request_line
+
+
+def _read_record_lines(run_directory: Path, service: str, phases: list[_Phase]) -> Iterator[str]:
+    """A service's record lines: those of its log in a stack run, else of each episode's records file."""
+    stack_log = run_directory / SERVICE_LOGS / f"{service}.log"
+    in_process = [phase.directory / RECORDS / f"{service}.jsonl" for phase in phases]
+    for path in (path for path in [stack_log, *in_process] if path.exists()):
+        # A line not starting with "{" is one the service logged around its records, such as uvicorn's.
+        lines = path.read_text(encoding="utf-8").splitlines()
+        yield from (line for line in lines if line.startswith("{"))
 
 
 def _place(
     line: str,
+    parse_record_line: RecordLineParser,
     phases: list[_Phase],
     roles: Mapping[str, str],
     agent_ids: Sequence[str],
 ) -> tuple[_Placed | None, str | None]:
     """The events of a record ``line``, placed, if it makes any; and why not, or not in a turn."""
     try:
-        record = ToolRecord.model_validate_json(line)
-        events = build_events(record, agent_ids)
+        record = parse_record_line(line, agent_ids)
     except ValidationError:
         return None, "not a valid record"
-    wall = record.time.timestamp()
-    phase = next((phase for phase in phases if phase.holds(wall)), None)
-    if phase is None or record.agent not in roles:
-        return None, "outside every phase window" if phase is None else "not an agent of the run"
-    if not events:
+    if record is None:
         return None, None
-    turn = phase.find_turn(record.agent, wall)
-    return _Placed(phase, wall, events, turn or 0), "no covering turn" if turn is None else None
+    phase = next((phase for phase in phases if phase.holds(record.wall)), None)
+    if phase is None or record.agent is None or record.agent not in roles:
+        return None, "outside every phase window" if phase is None else "not an agent of the run"
+    if not record.events:
+        return None, None
+    turn = phase.find_turn(record.agent, record.wall)
+    return _Placed(phase, record.wall, record.events, turn or 0), "no covering turn" if turn is None else None
 
 
 def _write_events(phase: _Phase, built: list[_Placed], roles: Mapping[str, str]) -> list[_CoverageDrop]:

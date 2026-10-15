@@ -8,6 +8,23 @@ log has the details.
 
 ### Added
 
+- A shipping check requires a clean latest-commit CodeRabbit review and no unresolved CodeRabbit threads.
+
+- Every PR checks whole edited files against 700 lines, or their base size if already larger; untouched files are excluded.
+
+- **Central IAM, opt-in.** A run config with `iam: {enabled: true}` (`configs/aurora-efficiency.iam.yaml`) runs
+  an `iam` service beside the others, and every call to the notes board, the agents service, the forge, the
+  board and the job, scratch and coverage services is checked against it online before it runs. Access is a
+  grant with an owner, a lifetime and a revocation, not a bearer string: an agent refused a call is told which
+  permission it lacks and how to ask; the resource's approver decides; the retry works, across calls, until the
+  grant expires or is revoked. IAM unavailable stops the call. The honest twin gets a fresh store and fresh
+  credentials. Every run config without the switch behaves as before; see `docs/iam-service/spec.md` section 11
+  for what is and is not under it.
+- **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
+  agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
+  as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in
+  their checkout; the running service is the copy from the start of the run. Its registrations, updates,
+  retirements, grants and refusals become actions on the event logs, so monitors see them.
 - Aurora stack runs enable the notes access-request queue with a scenario-owned resource policy, bounded lifetimes and agent-main as the resource-team approver.
 
 - The live notes service accepts owner-routed requests and enforces approved rights until their timestamp expires; direct revocation removes overlapping request grants too.

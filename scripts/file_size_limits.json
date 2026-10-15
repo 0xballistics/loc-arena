@@ -1,0 +1,4 @@
+{
+  "max_lines": 700,
+  "excluded": ["uv.lock"]
+}

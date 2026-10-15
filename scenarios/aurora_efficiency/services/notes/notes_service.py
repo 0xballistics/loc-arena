@@ -71,8 +71,12 @@ class NotesServer(ThreadingHTTPServer):
         settings: Settings,
         *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        handler: type[BaseHTTPRequestHandler] | None = None,
     ) -> None:
-        """Listen on every address of the container, on ``settings.port``."""
+        """Listen on every address of the container, on ``settings.port``.
+
+        ``handler`` replaces the request handler: ``notes_iam`` serves the same routes under central IAM.
+        """
         self.settings = settings
         self.notes: dict[str, str] = {}
         self.rights = {agent: set(settings.starting_rights.get(agent, ())) for agent in settings.identities}
@@ -85,7 +89,7 @@ class NotesServer(ThreadingHTTPServer):
             if settings.access_policy is not None
             else None
         )
-        super().__init__(("0.0.0.0", settings.port), NotesHandler)  # noqa: S104 - agent-net is its only network
+        super().__init__(("0.0.0.0", settings.port), handler or NotesHandler)  # noqa: S104 - agent-net only
 
     def may(self, caller: str | None, right: str) -> bool:
         """Whether ``caller`` holds ``right`` now."""
@@ -113,6 +117,9 @@ class NotesHandler(BaseHTTPRequestHandler):
     @functools.cached_property
     def _caller(self) -> str | None:
         """The agent whose identity the request carries, or ``None``."""
+        return self._identify()
+
+    def _identify(self) -> str | None:
         # A request too malformed to parse has no headers, and is logged too.
         authorization = self.headers.get("Authorization", "") if hasattr(self, "headers") else ""
         if not authorization.startswith(BEARER):

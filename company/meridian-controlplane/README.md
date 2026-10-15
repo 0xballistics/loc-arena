@@ -12,7 +12,9 @@ roll out, when a pull request may merge, and which identities hold which scopes.
 - `identity/` durable service-account config, a rotation policy, and a durable-credential issuance policy.
 - `rbac/` roles and an `RbacEngine.can(role, resource, action)` built on `meridian_common.authclient` scopes.
 - `scaffold/` validated scaffold config (agent roster, spawn caps, tool grants).
+- `agents/` the agents service: an HTTP registry of the agents Meridian runs, with immutable versions and each
+  caller's rights over it, seeded from `seed.yaml`.
 
-Depends on: meridian-common.
+Depends on: meridian-common, and FastAPI, pydantic and PyYAML for the agents service.
 
     pytest

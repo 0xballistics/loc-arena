@@ -8,6 +8,14 @@ a simulated lab's codebase and may attempt an internal rogue deployment; monitor
 chains as control-plane state transitions plus the programmatic verifiers that check them, never as operational
 procedures.
 
+## Service architecture contract
+
+Start with the [specification index](spec.md). Every new or changed agent-facing service must follow the
+[IAM service contract](docs/iam-service/spec.md): declare its operations, use the shared IAM integration as it
+is implemented, and enforce authorization before protected work. The IAM spec distinguishes the target
+contract from the migration plan; existing services are not yet centrally integrated. Component specs cannot
+weaken its isolation, authorization or evidence rules.
+
 ## Index
 
 | Path | What it holds |
@@ -25,6 +33,7 @@ procedures.
 | `loc_arena/metrics.py` | safety and usefulness metrics |
 | `loc_arena/forge/`, `loc_arena/npcs/` | the git forge and the seeded company world, and its MCP service (`service.py`); the scripted coworkers |
 | `loc_arena/scaffold/mcp_client.py`, `loc_arena/tool_records.py`, `loc_arena/mcp_service.py` | each agent's MCP client; every MCP service's record of the tool calls made to it; who calls a service, and how it is served |
+| `loc_arena/agents_service.py`, `company/meridian-controlplane/meridian_controlplane/agents/`, `docs/agents-service.md` | the agents service: Meridian's registry of its agents, company code a stack run serves as a live service with rights; its plan |
 | `loc_arena/recording_service.py` | the `jobs`, `scratch` and `coverage` services: each tool enforces the caller's scope, records the request and returns a canned result |
 | `loc_arena/recorded_events.py` | after play, before grading: the events monitors read, built from the services' records |
 | `loc_arena/logging_/` | the sealed and mirror event logs, the per-agent Inspect export, `transcript.html`, `report.html` |
@@ -36,6 +45,7 @@ procedures.
 | `configs/` | the run config (`aurora-efficiency.yaml`), model routing, monitors and their prompts |
 | `scenarios/aurora_efficiency/` | the scenario pack: `scenario.yaml`, main-task scorer (`main.py`), side-task verifier (`side.py`), the scripted policy's moves (`scripted/`), sealed grader fixture (`reference/`), live services (`services/`), the skills every sandbox mounts (`skills/`) |
 | `company/meridian-*/` | the seven company repos the agents under test work on, each with its own tests |
+| `company/meridian-iam/`, `loc_arena/iam_*.py`, `docs/iam-service/` | central IAM: a platform package (not one of the seven; never in the agents' checkout), its stack wiring, and its spec and guide; off unless a run config sets `iam.enabled` |
 | `tests/unit/`, `tests/integration/` | the engine's test suite |
 | `docs/agent-log/` | per-agent logging: `spec.md` (what it guarantees) and `agent.md` (how to work on it) |
 | `docs/iam-access-requests/` | live notes access requests: `spec.md` (implemented contract and limits) and `agents.md` (how to change it) |
@@ -96,7 +106,20 @@ The deterministic config is a test fixture for the engine; its scores are not re
 - **Access requests** on the live notes service follow `docs/iam-access-requests/spec.md` and
   `docs/iam-access-requests/agents.md`; preserve standing authority, bounded approvals and revocation.
 
+## File size gate
+
+Every PR runs `scripts/check_file_size.py`, also the first check in `make gates`. Each added, modified or
+renamed UTF-8 text file is checked in full, comments and blank lines included. Files at or below 700 lines
+must stay at or below 700; files already larger cannot exceed their size in the PR base. Untouched files are
+not checked. Binary files, symlinks and generated `uv.lock` are excluded; there are no legacy
+filename-specific ceilings. The check compares against the PR base's merge ancestor, not just changed lines.
+Locally it includes tracked working-tree/staged edits; use `make gates FILE_SIZE_BASE=<target-ref>` for a stack
+branch targeting another branch. Fetch the target first. Split oversized edited files by responsibility.
+
 ## Code review
+
+Shipping requires a fresh CodeRabbit review with zero findings and no unresolved CodeRabbit threads; see
+[CI rules](docs/ci-rules.md). CI verifies review metadata, not whether a fix is substantively correct.
 
 CodeRabbit reviews each pull request out of draft and reads this file as its criteria. Treat each finding as a
 claim to verify: fix what holds, and reply on the thread why the rest does not. `@coderabbitai review` reviews

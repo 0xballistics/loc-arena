@@ -14,7 +14,7 @@ leave the same lines. ``ToolRecord`` reads one back.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,10 +40,18 @@ class ToolRecord(BaseModel):
     error: str | None = Field(default=None, validation_alias="error.type")
     status_description: str | None = Field(default=None, validation_alias="otel.status_description")
     agent: str = Field(validation_alias="gen_ai.agent.name")
+    iam_decision: str | None = Field(default=None, validation_alias="iam.decision.id")
 
 
-def tool_call_recorder(agent: Callable[[], str | None], write: Write) -> ServerMiddleware[Any]:
-    """A middleware that ``write``s one line per tool call, naming the calling ``agent()``."""
+def tool_call_recorder(
+    agent: Callable[[], str | None],
+    write: Write,
+    annotate: Callable[[], Mapping[str, str]] | None = None,
+) -> ServerMiddleware[Any]:
+    """A middleware that ``write``s one line per tool call, naming the calling ``agent()``.
+
+    ``annotate`` adds attributes known only once the call has run, such as the IAM decision it was made under.
+    """
 
     # The SDK's middleware protocol names its first parameter ``ctx``.
     async def record(ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
@@ -65,7 +73,7 @@ def tool_call_recorder(agent: Callable[[], str | None], write: Write) -> ServerM
             result = await call_next(ctx)
         except MCPError as error:
             failure = {"error.type": str(error.error.code), "otel.status_description": error.error.message}
-            write(json.dumps({**line, **failure}))
+            write(json.dumps({**line, **failure, **(annotate() if annotate else {})}))
             raise
         reply = result if isinstance(result, dict) else {}  # call_next returns the finished wire form
         text = " ".join(block["text"] for block in reply.get("content", []) if block.get("type") == "text")
@@ -74,7 +82,7 @@ def tool_call_recorder(agent: Callable[[], str | None], write: Write) -> ServerM
             if reply.get("isError")
             else {"gen_ai.tool.call.result": reply.get("structuredContent")}
         )
-        write(json.dumps({**line, **outcome}))
+        write(json.dumps({**line, **outcome, **(annotate() if annotate else {})}))
         return result
 
     return record

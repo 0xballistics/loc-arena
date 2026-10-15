@@ -485,6 +485,90 @@ def test_a_covert_call_becomes_an_action_event_the_action_monitor_reads(tmp_path
     assert actions == [("serving-agent", "submit_job", {"spec": "benchmark"})]
 
 
+def request_line(at: datetime, method: str, status: int, operation: str) -> str:
+    """serving-agent's request for ``operation`` on agent ``triager``, as the agents service records it."""
+    return json.dumps(
+        {
+            "wall_ts": at.isoformat(),
+            "caller": "serving-agent",
+            "container": "sandbox-serving-agent",
+            "method": method,
+            "path": "/agents",
+            "status": status,
+            "operation": operation,
+            "arguments": {"name": "triager"},
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "status", "operation", "actions"),
+    [
+        ("POST", 201, "register_agent", [("register_agent", "triager", False, None)]),
+        ("POST", 403, "register_agent", [("register_agent", "triager", True, "Forbidden")]),
+        ("GET", 200, "read_agent", []),
+    ],
+    ids=["a registration", "a refused registration", "an answered read"],
+)
+def test_a_request_the_agents_service_recorded_is_an_action_unless_an_answered_read(
+    tmp_path: Path,
+    method: str,
+    status: int,
+    operation: str,
+    actions: list[tuple[str, str, bool, str | None]],
+) -> None:
+    run = play(tmp_path / "run", episode=[LOOK_AROUND])
+    started, _ = read_window(run / "episode")
+    write_log(run, "agents", request_line(started, method, status, operation))
+
+    build_recorded_run_events(LIVE, run)
+
+    built = [
+        (e.tool, e.target_id, e.payload["blocked"], e.payload["reason"])
+        for e in events_of(run / "episode", MIRROR, "action", "serving-agent")
+        if e.tool == operation
+    ]
+    assert built == actions
+
+
+@pytest.mark.parametrize(
+    ("service", "line", "unattributed_reasons"),
+    [
+        (
+            "notes",
+            {"caller": "serving-agent", "method": "GET", "path": "/notes", "status": 200},
+            [],
+        ),
+        (
+            "agents",
+            {
+                "caller": None,
+                "method": "POST",
+                "path": "/agents",
+                "status": 401,
+                "operation": "register_agent",
+            },
+            ["not an agent of the run"],
+        ),
+    ],
+    ids=["a line naming no operation", "a request with no known identity"],
+)
+def test_a_service_line_that_is_no_agents_request_builds_no_event(
+    tmp_path: Path,
+    service: str,
+    line: dict[str, object],
+    unattributed_reasons: list[str],
+) -> None:
+    run = play(tmp_path / "run", episode=[LOOK_AROUND])
+    started, _ = read_window(run / "episode")
+    write_log(run, service, json.dumps({"wall_ts": started.isoformat(), "arguments": {}, **line}))
+
+    build_recorded_run_events(LIVE, run)
+
+    built = [e for e in events_of(run / "episode", MIRROR, "action") if e.tool == line.get("operation")]
+    assert (built, read_unattributed_reasons(run)) == ([], unattributed_reasons)
+
+
 def test_blind_monitor_drops_the_targets_later_mirror_events_but_keeps_them_sealed(tmp_path: Path) -> None:
     run = play(tmp_path / "run", episode=[LOOK_AROUND])
     started, _ = read_window(run / "episode")

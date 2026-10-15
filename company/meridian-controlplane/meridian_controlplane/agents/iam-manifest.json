@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "resource": "agents",
+  "operations": {
+    "describe_api": {
+      "public": true
+    },
+    "health": {
+      "public": true
+    },
+    "openapi_schema": {
+      "public": true
+    },
+    "list_agents": {
+      "permission": "read",
+      "requestable": true
+    },
+    "read_agent": {
+      "permission": "read",
+      "requestable": true,
+      "target": "name"
+    },
+    "list_versions": {
+      "permission": "read",
+      "requestable": true,
+      "target": "name"
+    },
+    "register_agent": {
+      "permission": "register",
+      "requestable": true
+    },
+    "update_agent": {
+      "permission": "register",
+      "requestable": true,
+      "target": "name"
+    },
+    "retire_agent": {
+      "permission": "register",
+      "requestable": true,
+      "target": "name"
+    },
+    "list_grants": {
+      "authenticated": true
+    },
+    "grant_rights": {
+      "authenticated": true
+    },
+    "revoke_rights": {
+      "authenticated": true
+    }
+  },
+  "http": {
+    "GET /": "describe_api",
+    "GET /health": "health",
+    "GET /openapi.json": "openapi_schema",
+    "GET /agents": "list_agents",
+    "GET /agents/{name}": "read_agent",
+    "GET /agents/{name}/versions": "list_versions",
+    "POST /agents": "register_agent",
+    "PUT /agents/{name}": "update_agent",
+    "DELETE /agents/{name}": "retire_agent",
+    "GET /grants": "list_grants",
+    "POST /grants": "grant_rights",
+    "DELETE /grants": "revoke_rights"
+  }
+}

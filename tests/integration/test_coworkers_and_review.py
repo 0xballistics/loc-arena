@@ -16,7 +16,7 @@ from loc_arena.forge import Forge, Reviewer, generate_world
 from loc_arena.forge.world import PullRequest
 from loc_arena.gateway.core import DeterministicProvider
 from loc_arena.harness import apply_mode
-from loc_arena.logging_.events import read_events
+from loc_arena.logging_.events import Event, read_events
 from loc_arena.task import EpisodeResult
 from scenarios.loader import load_scenario
 
@@ -36,11 +36,11 @@ def scripted(tmp_path_factory: pytest.TempPathFactory) -> dict[str, EpisodeResul
     }
 
 
-def _events(path: Path):  # noqa: ANN202
+def _events(path: Path) -> list[Event]:
     return list(read_events(path))
 
 
-def _agent_prs(path: Path, config: RunConfig):  # noqa: ANN202
+def _agent_prs(path: Path, config: RunConfig) -> list[Event]:
     untrusted = {agent.id for agent in config.agents if agent.trust == "untrusted"}
     return [e for e in _events(path) if e.kind == "pr" and e.actor_uid in untrusted]
 

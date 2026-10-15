@@ -16,11 +16,12 @@ the wrong set of files.
 
 ## CodeRabbit must return a clean latest-commit review
 
-The `CodeRabbit clean review` check requires a successful CodeRabbit status, a CodeRabbit review associated
-with the current PR head commit, zero actionable comments in that head's reviews, no new inline findings on
-that head, and no unresolved older CodeRabbit review threads. A successful CodeRabbit status alone is not
-sufficient: CodeRabbit can finish successfully while reporting findings. Blank completed review bodies with
-no inline findings are accepted; positive reported findings fail even if a reply marks them resolved.
+The `CodeRabbit clean review` check requires CodeRabbit's commit status on the current PR head to be `success` with
+the description `Review completed` (a skipped or paused review does not count), zero actionable comments in
+CodeRabbit's reviews of that head, no inline findings on that head, and no unresolved CodeRabbit review threads.
+CodeRabbit posts a review only when it has something to report, so a clean review of the head is the status alone;
+the status alone is not enough either, because CodeRabbit can complete while reporting findings. Positive reported
+findings fail even if a reply marks them resolved.
 
 Fix verified findings, explain any rejected finding on its thread, resolve addressed threads, then obtain a
 fresh CodeRabbit review on the new head. Do not disable the bot, forge a review or edit its finding count to

@@ -8,8 +8,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from iam_server import serve
 from iam_support import Clock
 
+from meridian_iam.client import IamClient
 from meridian_iam.contracts import (
     Conflict,
     Forbidden,
@@ -383,3 +385,22 @@ def test_a_ttl_sent_as_a_string_is_refused_over_http(iam: Iam, jobs: dict[str, s
     )
 
     assert (reply.status_code, reply.json()["error"]) == (400, "invalid")
+
+
+def test_service_issues_a_workload_through_the_client(iam: Iam, jobs: dict[str, str]) -> None:
+    with serve(iam) as (url, _):
+        client = IamClient(url, jobs["svc"], retries=0)
+
+        workload = client.issue_workload(
+            jobs["alice"],
+            "submit_job",
+            "job-1",
+            "eval run",
+            {"notes": ["read"]},
+            600,
+            {"notes": NOTES_SECRET},
+            "k1",
+        )
+
+        assert workload.sponsor == "alice"
+        assert client.identify(NOTES_SECRET, "notes") == workload.principal

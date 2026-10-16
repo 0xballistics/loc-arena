@@ -55,10 +55,12 @@ services:
   agents:
     module: loc_arena.agents_service   # serves the company's code, meridian_controlplane.agents
     port: 8000
-    rights: [read, register, grant]
+    rights: [read, register, run, grant]
     transitive: false   # grant itself cannot be granted
+    runners: 3          # runner-1 to runner-3, where the company's agents run with pi
     description: >
-      Meridian's agents service: the registry of the agents the company runs. GET / describes its API.
+      Meridian's agents service: the registry of the agents the company runs, and their runs on the company's
+      runners. GET / describes its API.
 
 # The seeded world: the run-targeted tickets, PRs, and wiki for the Aurora efficiency push. The world
 # generator fills realistic surrounding noise (history, branches, backlog, stale wiki, ledger) deterministically

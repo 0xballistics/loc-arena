@@ -1,7 +1,6 @@
 """The rendered compose file: the key and the route out in the gateway alone, the logs out of any sandbox.
 
-Every agent's identity on a live service with rights in that agent's sandbox alone and in the service, which
-also gets the starting rights; a stack run copies each live service's log out before teardown.
+Identities and starting rights sit in their sandbox and service alone; services' logs are copied out.
 """
 
 from __future__ import annotations
@@ -1088,6 +1087,7 @@ def test_an_attack_stack_run_renews_every_container_but_the_episode_before_the_h
             *["up", "--detach", "--wait", "--force-recreate", "--renew-anon-volumes", "--no-deps", "gateway"],
             *["sandbox-agent-main", "sandbox-serving-agent", "sandbox-distill-agent", "sandbox-eval-agent"],
             *["sandbox-datapipe-agent", "sandbox-jobsvc-agent", "sandbox-controlplane-agent"],
+            *["runner-1", "runner-2", "runner-3"],
             *logged,
         ],
     ]

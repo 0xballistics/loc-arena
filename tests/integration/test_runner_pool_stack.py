@@ -1,12 +1,11 @@
-"""The runner pool in a stack run: who may drive a runner, what a runner holds, and how far its pi reaches.
+"""The runner pool in a stack run: who may drive a runner, what it holds, how far its pi reaches, executions.
 
-Starts the gateway, the agents service with two runners, and agent-main's sandbox from the compose file a
+Starts the gateway, the agents service with its runners, and agent-main's sandbox from the compose file a
 stack run renders. The gateway's key is a placeholder; the only model call made is one the gateway refuses.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 import secrets
@@ -17,7 +16,7 @@ from http import HTTPStatus
 
 import pytest
 import yaml
-from loc_arena.config import RunConfig, load_run_config, sandbox_service
+from loc_arena.config import load_run_config, sandbox_service
 from loc_arena.episode_stack import REPOSITORY, issue_identities, render_compose, token_variable
 from loc_arena.gateway.core import API_KEY_VARIABLE
 from loc_arena.gateway.proxy import PROJECT_PREFIX, GatewayCall, name_compose_service
@@ -32,15 +31,7 @@ SANDBOX = sandbox_service("agent-main")
 COSTLY_MODEL = "costly/model"  # on no runner's list of models
 
 
-def with_runners(config: RunConfig, count: int) -> RunConfig:
-    services = tuple(
-        dataclasses.replace(service, runners=count if service.name == OWNER else 0)
-        for service in config.live_services
-    )
-    return dataclasses.replace(config, live_services=services)
-
-
-CONFIG = with_runners(load_run_config(REPOSITORY / "configs" / f"{RUN}.yaml"), 2)
+CONFIG = load_run_config(REPOSITORY / "configs" / f"{RUN}.yaml")  # its agents service has three runners
 pytestmark = pytest.mark.skipif(
     not image_exists(CONFIG.settings.stack.image),
     reason=f"needs Docker and the {CONFIG.settings.stack.image} image",
@@ -60,6 +51,26 @@ try:
         print(json.dumps([response.status, json.loads(response.read() or b"null")]))
 except urllib.error.HTTPError as error:
     print(json.dumps([error.code, json.loads(error.read() or b"null")]))
+"""
+
+
+# Run in agent-main's sandbox: registers an agent on ``sys.argv[1]`` and runs it; prints the ended execution.
+RUN_AN_AGENT = """
+import json, sys, time, urllib.request
+identity = open("/run/secrets/identity_agents").read().strip()
+def call(method, path, body=None):
+    data = None if body is None else json.dumps(body).encode()
+    headers = {"authorization": f"Bearer {identity}", "content-type": "application/json"}
+    request = urllib.request.Request(f"http://agents:8000{path}", data, headers, method=method)
+    with urllib.request.urlopen(request) as reply:
+        return json.loads(reply.read())
+call("POST", "/agents", {"name": "costly-summarizer", "model": sys.argv[1], "system_prompt": "Summarize."})
+execution = call("POST", "/executions", {"agent": "costly-summarizer", "input": sys.argv[2]})
+deadline = time.monotonic() + 120
+while execution["state"] in ("queued", "running") and time.monotonic() < deadline:
+    time.sleep(0.5)
+    execution = call("GET", f"/executions/{execution['id']}")
+print(json.dumps(execution))
 """
 
 
@@ -96,6 +107,11 @@ class RunnerPool:
         assert status == HTTPStatus.OK, result
         assert isinstance(result, dict)
         return result
+
+    def read_gateway_calls(self) -> list[GatewayCall]:
+        """Every call the gateway has logged so far."""
+        log = self.run_in("gateway", "cat", str(CONFIG.settings.gateway.call_log))
+        return [GatewayCall.model_validate_json(line) for line in log.splitlines()]
 
 
 def run_docker(*arguments: str, environment: dict[str, str]) -> str:
@@ -209,11 +225,26 @@ def test_a_reset_leaves_a_runners_workspace_and_home_empty(pool: RunnerPool) -> 
 def test_the_gateway_names_a_runners_pi_and_refuses_it_a_model_runners_may_not_call(pool: RunnerPool) -> None:
     result = pool.run_on_runner("runner-1", "pi-on-gateway", COSTLY_MODEL, "-p", "--no-session", "--", "hi")
 
-    log = pool.run_in("gateway", "cat", str(CONFIG.settings.gateway.call_log))
-    calls = [GatewayCall.model_validate_json(line) for line in log.splitlines()]
     by_runner = {
         (name_compose_service(call.caller), call.status, call.request["model"])
-        for call in calls
-        if isinstance(call.request, dict)
+        for call in pool.read_gateway_calls()
+        if isinstance(call.request, dict) and call.request["model"] == COSTLY_MODEL
     }
     assert (result["returncode"], by_runner) == (1, {("runner-1", HTTPStatus.FORBIDDEN, COSTLY_MODEL)})
+
+
+def test_an_execution_runs_pi_on_a_runner_whose_model_calls_the_gateway_answers(pool: RunnerPool) -> None:
+    task = "Summarize the eval run of 2026-10-15."
+
+    execution = json.loads(pool.run_in(SANDBOX, "python", "-c", RUN_AN_AGENT, COSTLY_MODEL, task))
+
+    refused_from = {
+        name_compose_service(call.caller)
+        for call in pool.read_gateway_calls()
+        if call.status == HTTPStatus.FORBIDDEN and task in json.dumps(call.request)
+    }
+    assert (execution["state"], execution["started_by"], refused_from) == (
+        "failed",
+        "agent-main",
+        {execution["runner"]},
+    )

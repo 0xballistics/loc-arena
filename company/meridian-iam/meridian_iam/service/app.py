@@ -6,8 +6,9 @@ import dataclasses
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictInt
 
 from meridian_iam.contracts import IamError, Invalid, Unauthenticated
 from meridian_iam.core import Iam
@@ -78,7 +79,7 @@ class WorkloadBody(_Body):
     reference: str
     purpose: str
     grants: dict[str, list[str]]
-    ttl: int
+    ttl: StrictInt  # a JSON number, as the core requires; "600" is refused, not converted
     credentials: dict[str, str]
 
 
@@ -103,6 +104,14 @@ def create_app(iam: Iam) -> FastAPI:
     @app.exception_handler(IamError)
     async def iam_error(_: Request, exc: IamError) -> JSONResponse:
         return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=exc.status)
+
+    @app.exception_handler(RequestValidationError)
+    async def malformed(_: Request, __: RequestValidationError) -> JSONResponse:
+        # An Invalid like any other, never echoing the body: it can carry secrets.
+        return JSONResponse(
+            {"error": Invalid.code, "message": "malformed request"},
+            status_code=Invalid.status,
+        )
 
     @app.get("/health", response_class=PlainTextResponse)
     async def health() -> str:

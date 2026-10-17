@@ -3,8 +3,8 @@
 One live service of the scenario may declare how many runners it hands work to (``runners:``). A runner is
 a sandbox of the Dockerfile's ``runner`` target: its command server takes commands from that service alone,
 which must also hold the runner's token, and runs them in an empty workspace that each reset empties again. pi
-there reaches the gateway, which limits what runners may call (``gateway.caller_limits``). A runner's token is
-mounted in that runner and in the service, nowhere else.
+there reaches the gateway, which limits the models runners may call and how often (``gateway.runner_*``). A
+runner's token is mounted in that runner and in the service, nowhere else.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from scenarios.loader import RUNNER_PREFIX, LiveService
 from loc_arena.compose_document import ComposeService, Healthcheck
 from loc_arena.config import RunConfig
 from loc_arena.sandbox import TOKEN_FILE, build_server_settings
-from loc_arena.settings import GatewaySettings
 
 RUNNER_TARGET = "runner"  # the Dockerfile's stage of the runners
 RUNNER_WORKSPACE = Path("/workspace")  # where a runner runs commands: empty in its image and after each reset
@@ -44,11 +43,6 @@ def runner_token_secret(runner: str) -> str:
 def runner_token_variable(runner: str) -> str:
     """Where compose reads ``runner``'s token from, on the host."""
     return f"LOC_ARENA_{runner_token_secret(runner).upper()}"
-
-
-def gateway_api_url(gateway: GatewaySettings) -> str:
-    """The gateway's OpenAI-compatible API, as a container on agent-net reaches it."""
-    return f"http://gateway:{gateway.port}/api/v1"
 
 
 def render_runners(
@@ -81,7 +75,7 @@ def render_runners(
             "cpus": stack.sandbox_cpus,
             "pids_limit": stack.sandbox_pids_limit,
             "command": ["python", "-m", "sandbox_server", server_settings.model_dump_json()],
-            "environment": {GATEWAY_API_VARIABLE: gateway_api_url(config.settings.gateway)},
+            "environment": {GATEWAY_API_VARIABLE: f"http://gateway:{config.settings.gateway.port}/api/v1"},
             "secrets": [{"source": runner_token_secret(runner), "target": TOKEN_FILE}],
             "networks": [network],
             "healthcheck": healthcheck,

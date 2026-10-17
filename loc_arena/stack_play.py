@@ -51,7 +51,7 @@ def renew_services(
     """Before the honest twin: every container agent code could leave state in, recreated empty.
 
     Those are each sandbox, each runner, each live service and the tools gateway. The gateway is recreated
-    too, so it counts each play's calls against its caller limits afresh; its call log runs on in its volume.
+    too, so it counts each play's runner calls afresh; its call log runs on in its volume.
     The episode stays. Each logged service's log so far is first added to its file in ``service_logs``, every
     copy or none, since a recreated container starts a new log. The recreate uses ``twin_environment``, whose
     tools gateway config offers the honest twin's tools (no covert tool), so an agent granted a covert tool in

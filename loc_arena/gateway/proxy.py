@@ -4,8 +4,8 @@ Anything that works against OpenRouter works against the gateway by changing its
 included. The gateway replaces the caller's ``Authorization`` header with the real key, forwards a request on
 an allowed path to the one upstream in ``settings.gateway``, and returns the reply unchanged. Each call
 appends one line to the sealed call log, which only the gateway's container mounts. The caller is named by
-the reverse DNS name of its address: on a compose network, the container name. A caller whose compose service
-has a limit (``settings.gateway.caller_limits``) may call only its listed models, and only so many times.
+the reverse DNS name of its address: on a compose network, the container name. A runner, where the company's
+own agents run, may call only ``settings.gateway.runner_models``, and only so many times a play.
 
 The gateway does not retry: a caller's own bounded retries (``OpenRouterProvider``) would multiply with them.
 """
@@ -18,7 +18,6 @@ import json
 import re
 import socket
 import time
-from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPMethod, HTTPStatus
@@ -32,6 +31,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from scenarios.loader import RUNNER_PREFIX
 
 from loc_arena.config import load_settings
 from loc_arena.settings import GatewaySettings
@@ -144,21 +144,22 @@ def create_proxy_app(
         base_url=str(settings.upstream),
         timeout=settings.timeout_seconds,
     )
-    forwarded_under_limit: Counter[str] = Counter()
+    forwarded_runner_calls = 0
 
-    def refuse_beyond_caller_limit(caller: str, body: bytes) -> tuple[HTTPStatus, str] | None:
-        """Why the caller's limit refuses this call, if it does; a call it admits counts against it."""
-        service = name_compose_service(caller)
-        prefix = next((prefix for prefix in settings.caller_limits if service.startswith(prefix)), None)
-        if prefix is None:
+    def refuse_beyond_runner_limits(caller: str, body: bytes) -> tuple[HTTPStatus, str] | None:
+        """Why a runner's call is refused, if it is; a call the limits admit counts against them."""
+        nonlocal forwarded_runner_calls
+        if not name_compose_service(caller).startswith(RUNNER_PREFIX):
             return None
-        limit = settings.caller_limits[prefix]
         requested = parse_body(body)
-        if not isinstance(requested, dict) or requested.get("model") not in limit.models:
-            return HTTPStatus.FORBIDDEN, f"{service} may call only {', '.join(limit.models)}"
-        if forwarded_under_limit[prefix] >= limit.max_calls:
-            return HTTPStatus.TOO_MANY_REQUESTS, f"{prefix}* made all {limit.max_calls} of this play's calls"
-        forwarded_under_limit[prefix] += 1
+        if not isinstance(requested, dict) or requested.get("model") not in settings.runner_models:
+            return HTTPStatus.FORBIDDEN, f"runners may call only {', '.join(settings.runner_models)}"
+        if forwarded_runner_calls >= settings.runner_calls_per_play:
+            return (
+                HTTPStatus.TOO_MANY_REQUESTS,
+                f"the runners made this play's {forwarded_runner_calls} calls",
+            )
+        forwarded_runner_calls += 1
         return None
 
     async def record(request: Request, body: bytes, status: int, reply: bytes, *, complete: bool) -> None:
@@ -201,14 +202,14 @@ def create_proxy_app(
     @app.api_route("/{path:path}", methods=[method.value for method in HTTPMethod])
     async def forward(path: str, request: Request) -> Response:
         request.state.started_at = time.time()
-        with anyio.CancelScope(shield=True):  # naming the caller may block on DNS
-            request.state.caller = await run_in_threadpool(
-                lambda: resolve_caller_name(request.client.host) if request.client else UNKNOWN_CALLER,
-            )
+        # Off the event loop: naming the caller may block on DNS.
+        request.state.caller = await run_in_threadpool(
+            lambda: resolve_caller_name(request.client.host) if request.client else UNKNOWN_CALLER,
+        )
         body = await request.body()
         if path not in settings.allowed_paths:
             return await refuse(request, body, HTTPStatus.FORBIDDEN, f"the gateway does not forward /{path}")
-        if refusal := refuse_beyond_caller_limit(request.state.caller, body):
+        if refusal := refuse_beyond_runner_limits(request.state.caller, body):
             return await refuse(request, body, *refusal)
         headers = {
             name: value for name, value in request.headers.items() if name not in DROPPED_REQUEST_HEADERS

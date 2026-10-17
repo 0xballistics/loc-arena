@@ -20,7 +20,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from loc_arena.gateway.proxy import GatewayCall, GatewaySecrets, create_proxy_app, name_compose_service
-from loc_arena.settings import CallerLimit, GatewaySettings
+from loc_arena.settings import GatewaySettings
 from pydantic import SecretStr, ValidationError
 
 KEY = "sk-real-key-only-the-gateway-holds"
@@ -30,8 +30,8 @@ COMPLETION = {
     "choices": [{"message": {"content": "hi"}}],
     "usage": {"prompt_tokens": 3, "completion_tokens": 1},
 }
-# The test client's caller is named localhost, so this limit applies to it: two calls, of some/model only.
-LIMITED_TO_TWO_CALLS = {"localhost": CallerLimit(max_calls=2, models=("some/model",))}
+# A caller no address resolves to, named by its first label: a runner's compose service.
+RUNNER = "runner-1.invalid"
 STREAM = b'data: {"choices":[{"delta":{"content":"h"}}]}\n\ndata: {"choices":[{"delta":{"content":"i"}}]}\n\n'
 
 Upstream = Callable[[httpx2.Request], httpx2.Response]
@@ -72,12 +72,8 @@ class SlowStream(httpx2.AsyncByteStream):
         yield STREAM[20:]
 
 
-def build_gateway_app(
-    tmp_path: Path,
-    upstream: Upstream,
-    caller_limits: dict[str, CallerLimit] | None = None,
-) -> FastAPI:
-    settings = GatewaySettings(call_log=tmp_path / "calls.jsonl", caller_limits=caller_limits or {})
+def build_gateway_app(tmp_path: Path, upstream: Upstream, **runner_limits: object) -> FastAPI:
+    settings = GatewaySettings.model_validate({"call_log": tmp_path / "calls.jsonl", **runner_limits})
     client = httpx2.AsyncClient(base_url=str(settings.upstream), transport=httpx2.MockTransport(upstream))
     return create_proxy_app(settings, SecretStr(KEY), upstream_client=client)
 
@@ -85,10 +81,11 @@ def build_gateway_app(
 def open_gateway(
     tmp_path: Path,
     upstream: Upstream,
-    caller_limits: dict[str, CallerLimit] | None = None,
+    caller: str = "127.0.0.1",
+    **runner_limits: object,
 ) -> TestClient:
-    app = build_gateway_app(tmp_path, upstream, caller_limits)
-    return TestClient(app, client=("127.0.0.1", 50000), raise_server_exceptions=False)
+    app = build_gateway_app(tmp_path, upstream, **runner_limits)
+    return TestClient(app, client=(caller, 50000), raise_server_exceptions=False)
 
 
 def wait_for_calls(tmp_path: Path, timeout_seconds: float = 5.0) -> list[GatewayCall]:
@@ -271,9 +268,9 @@ def test_a_caller_is_named_by_its_compose_service(caller: str, service: str) -> 
     assert name_compose_service(caller) == service
 
 
-def test_a_limited_caller_is_refused_a_model_it_may_not_call(tmp_path: Path) -> None:
+def test_a_runner_is_refused_a_model_runners_may_not_call(tmp_path: Path) -> None:
     seen: list[httpx2.Request] = []
-    gateway = open_gateway(tmp_path, record_into(seen), LIMITED_TO_TWO_CALLS)
+    gateway = open_gateway(tmp_path, record_into(seen), RUNNER, runner_models=["some/model"])
 
     status = gateway.post(CHAT, json={**BODY, "model": "costly/model"}).status_code
 
@@ -282,9 +279,15 @@ def test_a_limited_caller_is_refused_a_model_it_may_not_call(tmp_path: Path) -> 
     assert (status, len(seen), call.status, call.complete) == (refused, 0, refused, False)
 
 
-def test_a_limited_caller_is_refused_once_it_has_made_its_calls(tmp_path: Path) -> None:
+def test_a_runner_is_refused_once_the_runners_have_made_their_calls(tmp_path: Path) -> None:
     seen: list[httpx2.Request] = []
-    gateway = open_gateway(tmp_path, record_into(seen), LIMITED_TO_TWO_CALLS)
+    gateway = open_gateway(
+        tmp_path,
+        record_into(seen),
+        RUNNER,
+        runner_models=["some/model"],
+        runner_calls_per_play=2,
+    )
 
     statuses = [gateway.post(CHAT, json=BODY).status_code for _ in range(3)]
 

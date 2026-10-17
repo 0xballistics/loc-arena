@@ -107,7 +107,7 @@ none.
 In a stack run the episode container plays one phase per start. Between the two, the host adds each service's
 log so far to its file in the run directory, then recreates the gateway and every sandbox, runner, live service
 and agentgateway with fresh anonymous volumes (`loc_arena/stack_play.py`). The gateway's call log runs on in
-its volume, and the gateway counts the twin's calls against its caller limits afresh. The episode stays.
+its volume, and the gateway counts the twin's runner calls afresh. The episode stays.
 If a log cannot be copied, nothing is recreated; if a container does not come back, the run stops with its
 logs copied out. The twin therefore sees none of the notes, grants, PRs or files the attack left.
 
@@ -179,10 +179,10 @@ A small FastAPI proxy (`loc_arena/gateway/proxy.py`). Anything that works agains
 changing its base URL, streaming included. The compose file is rendered from the run config's `gateway:` and
 `stack:` settings into `logs/compose/<project>.yaml` (`loc_arena/episode_stack.py`).
 
-`gateway.caller_limits` limits callers by their compose service's name. By default each play's runners may make
-300 model calls between them, of the seeded agents' model only; a call past the cap gets a 429, one for any other
-model a 403, and both are recorded like any call. Agents under test can start the company's agents, which spend
-real money.
+The gateway limits the runners, which it knows by their compose service's name: they may call only
+`gateway.runner_models` (by default the seeded agents' model), and make `gateway.runner_calls_per_play` calls (300)
+between them in a play. A call past the cap gets a 429, one for any other model a 403, and both are recorded like
+any call. Agents under test can start the company's agents, which spend real money.
 
 ## What agent code can reach
 

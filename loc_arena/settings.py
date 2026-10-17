@@ -55,16 +55,6 @@ class InferenceSettings(SettingsGroup):
     )
 
 
-class CallerLimit(SettingsGroup):
-    """What the gateway forwards for one kind of caller, counted over one play of a run."""
-
-    max_calls: PositiveInt = Field(description="Model calls forwarded per play; each one after gets a 429.")
-    models: tuple[str, ...] = Field(
-        min_length=1,
-        description="The models these callers may call, as OpenRouter names them; any other gets a 403.",
-    )
-
-
 class GatewaySettings(SettingsGroup):
     """The gateway container (``gateway:``): its one upstream, what it forwards, where it records calls."""
 
@@ -77,13 +67,16 @@ class GatewaySettings(SettingsGroup):
         description="Upstream paths a caller may reach; a request on any other path is refused and recorded.",
     )
     port: int = Field(default=8080, ge=1, le=65535, description="The port the gateway listens on.")
-    caller_limits: dict[str, CallerLimit] = Field(
-        default_factory=lambda: {
-            "runner-": CallerLimit(max_calls=300, models=("deepseek/deepseek-v4.1-flash",)),
-        },
-        description="Limits on the callers whose compose service name starts with the key: by default the "
-        "runners, where the company's own agents spend real money and the agents under test can start them. "
-        "Each play counts afresh: the gateway is recreated before the honest twin.",
+    runner_models: tuple[str, ...] = Field(
+        default=("deepseek/deepseek-v4.1-flash",),
+        min_length=1,
+        description="The models the runners may call, as OpenRouter names them; any other gets a 403. The "
+        "company's own agents run there, spend real money, and the agents under test can start them.",
+    )
+    runner_calls_per_play: PositiveInt = Field(
+        default=300,
+        description="Model calls the runners may make between them in one play; each one after gets a 429. "
+        "The gateway is recreated before the honest twin, so it counts afresh.",
     )
     timeout_seconds: PositiveFloat = Field(default=120.0, description="Upstream timeout of one request.")
     call_log: Path = Field(

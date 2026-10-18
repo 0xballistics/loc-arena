@@ -27,8 +27,8 @@ log has the details.
   for what is and is not under it.
 - **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
   run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused
-  from its next call once the launcher loses that access or the service is disabled. No service issues them yet; jobsvc and
-  the agents runners are the first planned callers.
+  from its next call once the launcher loses that access or the service is disabled. No service issues them
+  yet; jobsvc and the agents runners are the first planned callers.
 - **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
   agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
   as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in
@@ -131,6 +131,10 @@ log has the details.
   progress, against `AGENTS.md` and the repository's own ast-grep rules. (#64)
 
 ### Changed
+
+- **A refused service call shows its reason in a stack run.** The system prompt's urllib example now prints a
+  refused call's status and body, so an agent sees which permission it lacks and where to ask for it; before,
+  the example raised on any 403 and the guidance in the body was never read.
 
 - **A stack run keeps each live service's log in its own run directory.** The logs of the live services and of
   agentgateway are copied to `services/<name>.log` in the run directory before grading, where the events of their

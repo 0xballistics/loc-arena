@@ -4,6 +4,7 @@
 - service: `GET /` describes the API to anyone: how to see access, ask for more and decide requests.
 - service: a malformed request's 400 names each bad field and its problem (`body.reason: missing`) but never
   what it held, not even an unexpected key's name; the stdlib client keeps the full list on the error.
+- requests: a decision's answer names the requester, so its audit line joins to the request it decides.
 
 ## 0.6.0
 - workloads: a service issues the work its caller launches a principal of its own (`POST /workloads`,

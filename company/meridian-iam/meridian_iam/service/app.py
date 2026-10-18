@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, StrictInt
 
-from meridian_iam.contracts import IamError, Invalid, Unauthenticated
+from meridian_iam.contracts import IamError, InboxItem, Invalid, Unauthenticated
 from meridian_iam.core import Iam
 
 BEARER = "Bearer "
@@ -27,7 +27,8 @@ GET /access lists your rights everywhere; GET /catalog/<service> what you may as
 GET /grants?resource=<service> who holds what there.
 POST /requests with {"resource": "<service>", "permissions": [...], "reason": "...", "until": <unix time>}
 asks for access; omit "until" for ongoing access where the service allows it. GET /requests lists your
-requests and their decisions; GET /requests/<id> reads one.
+requests and their decisions; GET /requests/<id> reads one. GET /inbox lists the pending requests you may
+decide and your own requests' outcomes.
 Approvers: GET /queue/<service> lists a service's requests, decided ones too. Decide a pending one, never
 your own, with POST /requests/<id>/decision and {"approve": true or false, "reason": "...", "permissions":
 [...], "until": <unix time>}; permissions and until may only narrow the request.
@@ -248,6 +249,10 @@ def create_app(iam: Iam) -> FastAPI:
             body.until,
             key,
         )
+
+    @app.get("/inbox")
+    async def inbox(authorization: Auth = None) -> list[InboxItem]:
+        return iam.inbox(bearer(authorization))
 
     @app.get("/requests")
     async def my_requests(authorization: Auth = None) -> list[dict[str, Any]]:

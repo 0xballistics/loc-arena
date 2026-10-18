@@ -167,6 +167,13 @@ def test_public_routes_need_no_credential(notes: str) -> None:
     assert call(f"{notes}/")[0] == HTTPStatus.OK
 
 
+def test_the_description_says_how_to_ask_for_access_and_decide_through_iam(notes: str) -> None:
+    _, description = call(f"{notes}/")
+
+    for route in ("POST /requests", "GET /requests", "POST /requests/<id>/decision", "IAM service"):
+        assert route in description.decode()
+
+
 def test_unknown_identity_is_401_and_missing_right_is_403_with_guidance(notes: str, world: World) -> None:
     assert call(f"{notes}/notes", token="junk")[0] == HTTPStatus.UNAUTHORIZED
     assert call(f"{notes}/notes")[0] == HTTPStatus.UNAUTHORIZED

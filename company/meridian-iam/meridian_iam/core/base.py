@@ -25,6 +25,9 @@ OPERATOR_TEAM = "iam-operators"  # reserved: only a bootstrap seed makes a membe
 OPERATOR_ROLE = "operator"
 IAM_AUDIENCE = "iam"  # a credential with it manages every resource IAM holds
 SCOPE_PREFIX = "iam:"  # ``iam:<resource>`` manages that resource alone: what a resource service is handed
+# ``iam-inbox`` reads its holder's inbox and nothing else: no management path accepts it (it is not ``iam``
+# or ``iam:<resource>``), so the tools gateway that delivers the inbox never holds a credential managing IAM.
+INBOX_AUDIENCE = "iam-inbox"
 ACTIVE = "revoked_at IS NULL AND starts_at <= :now AND (expires_at IS NULL OR :now < expires_at)"
 
 

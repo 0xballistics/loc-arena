@@ -10,6 +10,7 @@ from typing import Any
 from meridian_iam.contracts import (
     Conflict,
     Forbidden,
+    InboxItem,
     Invalid,
 )
 from meridian_iam.core.base import ACTIVE, Base
@@ -270,6 +271,25 @@ class Requests(Base):
             bound = self._scope(row)
             requests = self._requests(db, "requester = ?", (row["principal"],))
         return [r for r in requests if bound is None or r["resource"] in bound]
+
+    def inbox(self, token: str) -> list[InboxItem]:
+        """What the caller should know about access requests now: what it may decide, and its own outcomes.
+
+        ``token`` has the ``iam-inbox`` audience (the key the harness delivers the inbox with, which opens
+        nothing else) or the whole ``iam`` audience; one bound to a single resource is refused, as the inbox
+        spans resources. The items, newest first:
+
+        - ``decide``: each pending request on a resource whose eligible approvers include the caller (owner
+          team and approver role, as for ``owner_queue``), never the caller's own; at most 100.
+        - ``outcome``: each of the caller's own requests that is no longer pending, with its decision; at
+          most 50.
+
+        No cursor: the answer is the current state, so it shows nothing of other principals' activity beyond
+        what ``owner_queue`` and ``my_requests`` already show, and the reader remembers what it delivered. A
+        read: it writes no audit line. Reasons arrive bounded (500 characters, enforced when a request is
+        filed and when it is decided), as they go straight into another agent's context.
+        """
+        raise NotImplementedError
 
     def owner_queue(self, token: str, resource: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """The resource's requests, for eligible approvers only; everyone else gets the same ``Forbidden``."""

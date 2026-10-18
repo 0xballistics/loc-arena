@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from meridian_iam.contracts.decision import Decision
 from meridian_iam.contracts.errors import Conflict, Forbidden, IamError, Invalid, Unauthenticated, Unavailable
+from meridian_iam.contracts.inbox import InboxItem
 from meridian_iam.contracts.manifest import (
     Manifest,
     ManifestError,
@@ -19,6 +20,7 @@ __all__ = [
     "Decision",
     "Forbidden",
     "IamError",
+    "InboxItem",
     "Invalid",
     "Manifest",
     "ManifestError",

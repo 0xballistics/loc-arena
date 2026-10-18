@@ -16,6 +16,8 @@ from meridian_iam.contracts import (
 )
 from meridian_iam.core.base import ACTIVE, IAM_AUDIENCE, INBOX_AUDIENCE, SCOPE_PREFIX, Base
 
+MAX_REASON = 500  # characters in a request's or a decision's reason, which other agents read
+
 
 class Requests(Base):
     """Everything an authenticated agent does about access, as itself and never as a name in a body."""
@@ -42,8 +44,8 @@ class Requests(Base):
             )
             if row is None or not wanted or not set(wanted) <= requestable:
                 raise Invalid("unknown resource or permission")
-            if not isinstance(reason, str) or not 0 < len(reason.strip()) <= 500:
-                raise Invalid("a reason of 1-500 characters is required")
+            if not isinstance(reason, str) or not 0 < len(reason.strip()) <= MAX_REASON:
+                raise Invalid(f"a reason of 1-{MAX_REASON} characters is required")
             self._lifetime(row, until)
             pending = db.execute(
                 "SELECT COUNT(*) FROM requests WHERE requester = ? AND resource = ? AND state = 'pending'",
@@ -82,6 +84,11 @@ class Requests(Base):
         }
 
         def run(db: sqlite3.Connection, actor: str) -> dict[str, Any]:
+            # The requester reads what a decision says in its own context (its inbox), so it is bounded.
+            if not isinstance(reason, str) or len(reason.strip()) > MAX_REASON:
+                raise Invalid(f"a decision reason is at most {MAX_REASON} characters")
+            if not approve and (narrowed is not None or until is not None):
+                raise Invalid("a denial grants nothing: send no permissions or until")
             req = db.execute("SELECT * FROM requests WHERE id = ?", (request,)).fetchone()
             if req is None:
                 raise Forbidden("not an eligible approver")
@@ -121,7 +128,7 @@ class Requests(Base):
             db.execute("UPDATE requests SET state = ? WHERE id = ?", (state, request))
             db.execute(
                 "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (request, actor, approve, json.dumps(sorted(granted)), expiry, reason, self._now()),
+                (request, actor, approve, json.dumps(sorted(granted)), expiry, reason.strip(), self._now()),
             )
             return {"request": request, "state": state, "requester": req["requester"]}
 

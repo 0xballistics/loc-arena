@@ -88,6 +88,37 @@ def test_only_eligible_owner_with_authority_decides(iam: Iam, tokens: dict[str, 
     assert not allowed(iam, tokens, "alice")
 
 
+def test_a_decision_reason_is_stripped_and_bounded_like_a_requests(iam: Iam, tokens: dict[str, str]) -> None:
+    request = submit(iam, tokens["alice"])
+    with pytest.raises(Invalid):
+        iam.decide(tokens["lead"], request, approve=False, key="long", reason="x" * 501)
+
+    iam.decide(tokens["lead"], request, approve=False, key="ok", reason=" " * 450 + "x" * 100)
+
+    assert iam.my_requests(tokens["alice"])[0]["decision_reason"] == "x" * 100
+
+
+@pytest.mark.parametrize(("permissions", "until"), [(["write"], None), (None, 1500)])
+def test_a_denial_grants_nothing_so_it_names_no_permission_or_deadline(
+    iam: Iam,
+    tokens: dict[str, str],
+    permissions: list[str] | None,
+    until: int | None,
+) -> None:
+    request = submit(iam, tokens["alice"])
+
+    with pytest.raises(Invalid):
+        iam.decide(
+            tokens["lead"],
+            request,
+            approve=False,
+            key="d",
+            reason="no",
+            permissions=permissions,
+            until=until,
+        )
+
+
 def test_no_self_approval_and_no_repeat_decision(iam: Iam, tokens: dict[str, str]) -> None:
     req = submit(iam, tokens["lead"])
     with pytest.raises(Forbidden):

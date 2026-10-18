@@ -31,7 +31,8 @@ requests and their decisions; GET /requests/<id> reads one. GET /inbox lists the
 decide and your own requests' outcomes.
 Approvers: GET /queue/<service> lists a service's requests, decided ones too. Decide a pending one, never
 your own, with POST /requests/<id>/decision and {"approve": true or false, "reason": "...", "permissions":
-[...], "until": <unix time>}; permissions and until may only narrow the request.
+[...], "until": <unix time>}; permissions and until may only narrow an approval, and a denial sends neither.
+A decision's reason, like a request's, is at most 500 characters.
 POST /grants with {"principal", "resource", "permissions", "until"?} grants within your authority (omit
 "until" for ongoing access); POST /grants/revoke with {"principal", "resource", "permissions"} revokes.
 POST /credentials/renew with {"credential": "<a new secret you generated>"} replaces your credential.

@@ -80,7 +80,12 @@ class IamClient:
     def _error(exc: urllib.error.HTTPError) -> IamError:
         try:
             payload = json.loads(exc.read())
-            return _BY_CODE[payload["error"]](str(payload.get("message", "")))
+            message, fields = str(payload.get("message", "")), payload.get("fields")
+            listed = isinstance(fields, list) and all(isinstance(field, str) for field in fields)
+            bad = tuple(fields) if listed and fields else ()
+            if bad:
+                message = f"{message}: {'; '.join(bad)}"  # where a malformed request went wrong; cut at 200
+            return _BY_CODE[payload["error"]](message, fields=bad)
         except (ValueError, KeyError, TypeError):
             return Unavailable("malformed IAM answer")
 

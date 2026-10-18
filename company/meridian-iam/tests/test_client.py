@@ -12,7 +12,7 @@ import pytest
 from iam_support import NOTES
 
 from meridian_iam.client import IamClient
-from meridian_iam.contracts import Decision, Unauthenticated, Unavailable, load_manifest
+from meridian_iam.contracts import Decision, Invalid, Unauthenticated, Unavailable, load_manifest
 from meridian_iam.integration import Guard
 
 GOOD: dict[str, Any] = {
@@ -106,6 +106,16 @@ def test_a_4xx_is_the_iam_error_it_names_and_is_not_retried(fake_with) -> None: 
     with pytest.raises(Unauthenticated):
         IamClient(refused.url, "t", retries=2).authorize("c", "read_note", "k")
     assert refused.hits == 1
+
+
+def test_every_field_a_malformed_request_got_wrong_reaches_the_caller(fake_with) -> None:  # noqa: ANN001
+    fields = [f"body.field_{index}: missing" for index in range(12)]  # far past the 200-character message
+    refused = fake_with(lambda: (400, {"error": "invalid", "message": "malformed request", "fields": fields}))
+
+    with pytest.raises(Invalid, match="body.field_0: missing") as caught:
+        IamClient(refused.url, "t").submit_request("c", {"resource": "notes"}, "key")
+
+    assert caught.value.fields == tuple(fields)
 
 
 def test_no_credential_means_no_call_to_iam_at_all(fake_with) -> None:  # noqa: ANN001

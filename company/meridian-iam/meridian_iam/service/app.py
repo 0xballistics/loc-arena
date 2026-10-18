@@ -116,6 +116,21 @@ def bearer(header: str | None) -> str:
     return header.removeprefix(BEARER)
 
 
+def malformed_fields(error: RequestValidationError) -> list[str]:
+    """Each malformed part of a request as ``<where>.<declared field>: <problem>``, never its value.
+
+    A value can be a secret, and so can the name of a key the request should not have sent, or a key inside a
+    field (a secret's audience is fine, but a caller can put anything there): only the location and a
+    declared top-level field name are kept.
+    """
+    parts = set()
+    for problem in error.errors():
+        where, kind = problem["loc"], problem["type"]
+        declared = kind != "extra_forbidden" and len(where) > 1 and isinstance(where[1], str)
+        parts.add(f"{where[0]}.{where[1]}: {kind}" if declared else f"{where[0]}: {kind}")
+    return sorted(parts)
+
+
 def create_app(iam: Iam) -> FastAPI:
     """The API over ``iam``. Handlers are ``async``: one event loop serializes access to the store."""
     app = FastAPI(title="Meridian IAM", docs_url=None, redoc_url=None, openapi_url=None)
@@ -125,10 +140,10 @@ def create_app(iam: Iam) -> FastAPI:
         return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=exc.status)
 
     @app.exception_handler(RequestValidationError)
-    async def malformed(_: Request, __: RequestValidationError) -> JSONResponse:
-        # An Invalid like any other, never echoing the body: it can carry secrets.
+    async def malformed(_: Request, error: RequestValidationError) -> JSONResponse:
+        # An Invalid like any other, naming where and how the request was malformed, never what it held.
         return JSONResponse(
-            {"error": Invalid.code, "message": "malformed request"},
+            {"error": Invalid.code, "message": "malformed request", "fields": malformed_fields(error)},
             status_code=Invalid.status,
         )
 

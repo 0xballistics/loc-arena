@@ -282,3 +282,34 @@ def test_iam_tells_anyone_how_to_ask_for_access_and_how_to_decide(iam: Iam) -> N
         "POST /requests/<id>/decision",
     )
     assert all(route in reply.text for route in routes)
+
+
+def test_a_malformed_request_names_bad_fields_never_contents(
+    iam: Iam,
+    tokens: dict[str, str],
+) -> None:
+    value, key = "mi_a_value_that_must_never_be_echoed", "mi_a_key_name_that_must_never_be_echoed"
+    body = {"resource": "notes", "permissions": value, key: 1}
+
+    reply = TestClient(create_app(iam)).post("/requests", headers=bearer(tokens["alice"]), json=body)
+
+    assert reply.status_code == HTTPStatus.BAD_REQUEST
+    assert reply.json()["fields"] == [
+        "body.permissions: list_type",
+        "body.reason: missing",
+        "body: extra_forbidden",
+        "header.Idempotency-Key: missing",
+    ]
+    assert value not in reply.text
+    assert key not in reply.text
+
+
+def test_a_malformed_dict_field_never_echoes_its_keys(iam: Iam, tokens: dict[str, str]) -> None:
+    audience = "mi_an_audience_name_that_must_never_be_echoed"
+    body = {"operation": "submit_job", "reference": "r", "purpose": "p", "grants": {}, "ttl": 60}
+    body["credentials"] = {audience: 5}
+
+    reply = TestClient(create_app(iam)).post("/workloads", headers=bearer(tokens["svc"]), json=body)
+
+    assert reply.json()["fields"] == ["body.credentials: string_type", "header.Idempotency-Key: missing"]
+    assert audience not in reply.text

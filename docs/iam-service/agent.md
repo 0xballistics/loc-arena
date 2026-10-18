@@ -63,11 +63,12 @@ service is not specified yet.
 3. **Check at startup.** FastAPI: `integration.asgi.verify_app(guard, app)`, which also refuses a route
    without the guard's dependency. MCP: `iam_wiring.check_served_tools`. Stdlib: `Guard.verify_routes(routes)`.
    A route you forgot, or one you removed, stops the service.
-4. **Enforce before work.** FastAPI: `integration.asgi.dependency(guard)` on every route. MCP:
-   `iam_wiring.serving_options`, whose middleware also turns a denial into a tool-error result. Stdlib:
-   `Guard.check_http`, mapping `Unauthenticated` to 401, `AccessDenied` to 403 with its `guidance`, and
-   `Unavailable` to 503 with nothing run. Handlers take the principal from the decision, never from the body,
-   and record its `decision_id` beside the outcome.
+4. **Enforce before work.** FastAPI: `integration.asgi.dependency(guard)` on every route; it answers each
+   refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: `iam_wiring.serving_options`, whose
+   middleware turns a refusal or an IAM outage into a tool-error result, with no tool run. Stdlib:
+   `Guard.check_http` raises, so the server maps `Unauthenticated` to 401, `AccessDenied` to 403 with its
+   `guidance`, and `Unavailable` to 503 with nothing run. Handlers take the principal from the decision, never
+   from the body, and record its `decision_id` beside the outcome.
 5. **Seed.** Name it in the scenario's `iam:` block with its manifest and owner policy (`owner_team`,
    `approver_role`, `max_seconds`, `allow_ongoing`). Each agent's run-config rights on it (other than `grant`)
    and the permissions of its tools become baseline grants, so the service's `rights:` must use the manifest's
@@ -102,8 +103,14 @@ service is not specified yet.
    ```python
    secrets_by_audience = {"notes": secrets.token_urlsafe(32)}  # one per audience the grants need
    workload = guard.client.issue_workload(
-       caller_token, "submit_job", reference=job_id, purpose="nightly eval of run 12",
-       grants={"notes": ["read"]}, ttl=3600, credentials=secrets_by_audience, key=job_id,
+       caller_token,
+       "submit_job",
+       reference=job_id,
+       purpose="nightly eval of run 12",
+       grants={"notes": ["read"]},
+       ttl=3600,
+       credentials=secrets_by_audience,
+       key=job_id,
    )
    ```
 
@@ -115,12 +122,13 @@ service is not specified yet.
 5. **Hand each secret to that work only.** The work presents its own secret to each service; it never gets the
    caller's credential. Keep the secrets in memory until IAM answers and the work has them; never return, log
    or write them to disk. IAM keeps only digests.
-6. **Expect it to stop.** Revoking the caller's grant denies the workload's next call, and disabling the caller
-   or the issuing service stops its credential authenticating; stop the work on that 401 or 403. Nothing stops
-   work already running or ends a workload when its job finishes yet.
+6. **Expect it to stop.** Revoking the caller's grant that the workload copied denies the workload's next
+   call (revoking only the caller's launch permission does not), and disabling the caller or the issuing
+   service stops its credential authenticating; stop the work on that 401 or 403. Nothing stops work already
+   running or ends a workload when its job finishes yet.
 7. **Test** the refusals `company/meridian-iam/tests/test_workloads.py` checks on the core (a caller without
    the launch permission, a grant outside the delegation, a grant the caller lacks, a revoked or disabled
-   caller, a disabled issuer, a retry under the same key) through a real IAM server, as
+   caller, a disabled issuer, a retry under the same key with different content) through a real IAM server, as
    `tests/unit/test_notes_iam.py` does for guarding.
 
 ## Checks

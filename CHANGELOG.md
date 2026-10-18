@@ -17,14 +17,15 @@ log has the details.
 
 - Every PR checks whole edited files against 700 lines, or their base size if already larger; untouched files are excluded.
 
-- **Central IAM, opt-in.** A run config with `iam: {enabled: true}` (`configs/aurora-efficiency.iam.yaml`) runs
+- **Central IAM, opt-in.** A run config with `iam: {enabled: true}` runs
   an `iam` service beside the others, and every call to the notes board, the agents service, the forge, the
   board and the job, scratch and coverage services is checked against it online before it runs. Access is a
   grant with an owner, a lifetime and a revocation, not a bearer string: an agent refused a call is told which
   permission it lacks and how to ask; the resource's approver decides; the retry works, across calls, until the
   grant expires or is revoked. IAM unavailable stops the call. The honest twin gets a fresh store and fresh
-  credentials. Every run config without the switch behaves as before; see `docs/iam-service/spec.md` section 11
-  for what is and is not under it.
+  credentials. `configs/aurora-efficiency.iam.yaml` runs the scripted fixture under it and
+  `configs/aurora-efficiency.iam-live.yaml` the live models, in a stack run. Every run config without the switch
+  behaves as before; see `docs/iam-service/spec.md` section 11 for what is and is not under it.
 - **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
   run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused
   from its next call once the launcher loses that access or the service is disabled. No service issues them

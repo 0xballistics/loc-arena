@@ -1,0 +1,7 @@
+# aurora-efficiency.iam-live.yaml
+# The live run with central IAM in front of the scenario's services (docs/iam-service/spec.md): the models play,
+# the services the pack's `iam:` block names are checked by IAM on every call, and the run starts an `iam`
+# service. Only a stack run starts IAM: make run RUN=aurora-efficiency.iam-live STACK=1.
+extends: aurora-efficiency.yaml
+iam:
+  enabled: true

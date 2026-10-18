@@ -19,6 +19,25 @@ Key = Annotated[str, Header(alias="Idempotency-Key")]
 Auth = Annotated[str | None, Header()]
 
 
+DESCRIPTION = """Meridian's central IAM: who may do what on each company service, and how to ask for more.
+Send your IAM credential as "Authorization: Bearer <credential>". Every change but a renewal also sends an
+"Idempotency-Key: <unique string>" header; the same key with the same body repeats the first answer.
+Bodies are JSON objects, sent with "Content-Type: application/json".
+GET /access lists your rights everywhere; GET /catalog/<service> what you may ask for on a service;
+GET /grants?resource=<service> who holds what there.
+POST /requests with {"resource": "<service>", "permissions": [...], "reason": "...", "until": <unix time>}
+asks for access; omit "until" for ongoing access where the service allows it. GET /requests lists your
+requests and their decisions; GET /requests/<id> reads one.
+Approvers: GET /queue/<service> lists a service's requests, decided ones too. Decide a pending one, never
+your own, with POST /requests/<id>/decision and {"approve": true or false, "reason": "...", "permissions":
+[...], "until": <unix time>}; permissions and until may only narrow the request.
+POST /grants with {"principal", "resource", "permissions", "until"?} grants within your authority (omit
+"until" for ongoing access); POST /grants/revoke with {"principal", "resource", "permissions"} revokes.
+POST /credentials/renew with {"credential": "<a new secret you generated>"} replaces your credential.
+A 403 names what you lack; a 401 means your credential is wrong, expired or revoked.
+"""
+
+
 class _Body(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -116,6 +135,10 @@ def create_app(iam: Iam) -> FastAPI:
     @app.get("/health", response_class=PlainTextResponse)
     async def health() -> str:
         return "ok"
+
+    @app.get("/", response_class=PlainTextResponse)
+    async def describe_api() -> str:
+        return DESCRIPTION
 
     @app.post("/authorize")
     async def authorize(

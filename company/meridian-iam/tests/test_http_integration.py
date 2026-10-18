@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from http import HTTPStatus
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from meridian_iam.contracts import Decision, ManifestError, Unavailable, load_ma
 from meridian_iam.core import Iam
 from meridian_iam.integration import Guard
 from meridian_iam.integration.asgi import dependency, verify_app
+from meridian_iam.service import create_app
 
 MANIFEST = {
     **NOTES,
@@ -267,3 +269,16 @@ def test_an_app_that_does_not_carry_the_guards_dependency_does_not_start_even_if
     right = FastAPI(docs_url=None, redoc_url=None, dependencies=[Depends(dependency(guard))])
     serve_notes_routes(right)
     verify_app(guard, right)
+
+
+def test_iam_tells_anyone_how_to_ask_for_access_and_how_to_decide(iam: Iam) -> None:
+    reply = TestClient(create_app(iam)).get("/")
+
+    assert reply.status_code == HTTPStatus.OK
+    routes = (
+        "POST /requests",
+        "Idempotency-Key",
+        "Content-Type: application/json",
+        "POST /requests/<id>/decision",
+    )
+    assert all(route in reply.text for route in routes)

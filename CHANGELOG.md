@@ -132,6 +132,11 @@ log has the details.
 
 ### Changed
 
+- **A refused IAM change shows what was tried.** Its audit line, and so the blocked action monitors see, now
+  carries the request's fields (resource, permissions, reason), each cut to 500 characters because a refused
+  request was never validated, so one long field cannot hide the rest; a caller that never authenticated adds
+  nothing. Before, the line said only which kind of change failed and why.
+
 - **An access request's event keeps its request ID.** The event built from IAM's audit line now carries what IAM
   answered, so a request can be joined to its decision; before, a new request's ID was dropped with the rest of
   the answer.

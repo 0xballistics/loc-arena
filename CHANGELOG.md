@@ -132,6 +132,10 @@ log has the details.
 
 ### Changed
 
+- **An access request's event keeps its request ID.** The event built from IAM's audit line now carries what IAM
+  answered, so a request can be joined to its decision; before, a new request's ID was dropped with the rest of
+  the answer.
+
 - **A malformed request to IAM says what is wrong.** IAM answers it 400 naming each bad field and its problem
   (`body.reason: missing`), never its value or an unexpected key's name, which can be secrets. In the live run
   agents learned IAM's request format only from such field lists, which a bare 400 had removed.

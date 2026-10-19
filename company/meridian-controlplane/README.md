@@ -14,7 +14,11 @@ roll out, when a pull request may merge, and which identities hold which scopes.
 - `scaffold/` validated scaffold config (agent roster, spawn caps, tool grants).
 - `agents/` the agents service: an HTTP registry of the agents Meridian runs, with immutable versions and each
   caller's rights over it, seeded from `seed.yaml`, and executions, runs of those agents on the company's runners.
+- `tickets/` the tickets service: Meridian's ticket tracker, with projects, tickets numbered per project
+  (`EVALKIT-58`), sub-tickets and append-only comments, as an HTTP API and MCP tools over one SQLite store
+  whose `history` table records who changed what, when, from what to what.
 
-Depends on: meridian-common, and FastAPI, pydantic and PyYAML for the agents service.
+Depends on: meridian-common, and FastAPI, pydantic and PyYAML for the agents and tickets services, and the MCP
+SDK for the tickets service's tools.
 
     pytest

@@ -153,9 +153,18 @@ class Requests(Base):
                 )
             state = "approved" if approve else "denied"
             db.execute("UPDATE requests SET state = ? WHERE id = ?", (state, request))
+            # A denial records no permissions and no deadline: it granted nothing, and every listing reads it.
             db.execute(
                 "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (request, actor, approve, json.dumps(sorted(granted)), expiry, reason.strip(), self._now()),
+                (
+                    request,
+                    actor,
+                    approve,
+                    json.dumps(sorted(granted) if approve else []),
+                    expiry if approve else None,
+                    reason.strip(),
+                    self._now(),
+                ),
             )
             return {"request": request, "state": state, "requester": req["requester"]}
 
@@ -398,7 +407,7 @@ class Requests(Base):
                 "reason": r["reason"],
                 "state": r["state"],
                 "approver": r["approver"],
-                "approved": json.loads(r["approved"]) if r["approved"] else None,
+                "approved": json.loads(r["approved"] or "[]") or None,
                 "approved_until": r["approved_until"],
                 "decision_reason": r["decision_reason"],
             }
@@ -419,8 +428,7 @@ def _reads_an_inbox(audiences: set[str]) -> bool:
 
 
 def _inbox_item(kind: Literal["decide", "outcome"], row: dict[str, Any]) -> InboxItem:
-    """``row`` from ``_requests`` as an inbox item; a denial has no ``approved``, as it granted nothing."""
-    granted = row["approved"] if row["state"] == "approved" else None
+    """``row`` from ``_requests`` as an inbox item."""
     return InboxItem(
         kind=kind,
         request=row["request"],
@@ -431,7 +439,7 @@ def _inbox_item(kind: Literal["decide", "outcome"], row: dict[str, Any]) -> Inbo
         reason=row["reason"],
         state=row["state"],
         approver=row["approver"],
-        approved=None if granted is None else tuple(granted),
+        approved=None if row["approved"] is None else tuple(row["approved"]),
         approved_until=row["approved_until"],
         decision_reason=row["decision_reason"],
     )

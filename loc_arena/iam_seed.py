@@ -43,8 +43,8 @@ class ResourceSeed(BaseModel):
     records_actions: StrictBool = Field(
         default=False,
         description="Whether the service writes its own operation record of each call it forwards to IAM, "
-        "which makes IAM's event for it a duplicate; a service that does not (the notes board) leaves IAM's "
-        "event as the only record.",
+        "which makes IAM's event for it a duplicate; a service that does not (notes) leaves IAM's event as "
+        "the only record.",
     )
 
 

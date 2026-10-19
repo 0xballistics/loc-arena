@@ -2,6 +2,9 @@
 
 Implementation guidance: [agents.md](agents.md).
 
+Status: legacy. Central IAM replaces this queue ([IAM spec](../iam-service/spec.md)); it stays the default
+until a run config sets `iam.enabled`, and takes bug fixes only. New access-request behaviour goes in IAM.
+
 Aurora's live `notes` service builds on the per-agent identities and rights from #98. An agent requests
 rights and a lifetime; a configured eligible approver approves or denies; the service enforces
 the approved grant. Submitting a request grants nothing. No new identity system or custom agent tool is needed.

@@ -113,7 +113,7 @@ ROUTES = frozenset(
 REQUESTS_DESCRIPTION = (
     "\nRights and requests live in central IAM, and a 403 names the permission you lack. "
     "POST /requests: rights, requested_until (UTC timestamp or null), reason. "
-    "GET /requests: your requests, or the queue if you approve requests for this board. "
+    "GET /requests: your requests, or the queue if you approve requests for these notes. "
     "POST /requests/<id>/decision: decision (approve/deny), reason, optional narrowed rights and "
     "approved_until. A request grants nothing until an approver decides it. GET / on the IAM service "
     "describes the rest.\n"

@@ -1,6 +1,7 @@
 # Service architecture and central IAM specification
 
-Status: target contract with slices 1-9 implemented behind an opt-in switch, 13 October 2026. The repository
+Status: required of every agent-facing service ([agent instructions](../../AGENTS.md)); slices 1-9
+implemented behind an opt-in switch, 13 October 2026. The repository
 uses a services architecture in a monorepo. Central IAM (`company/meridian-iam/`) and its shared integration
 exist and are tested, and a run config that sets `iam: {enabled: true}` runs the stack under it
 (`configs/aurora-efficiency.iam.yaml`). Every run config without it is unchanged: the services keep their own
@@ -127,7 +128,8 @@ bearer-token string. Ongoing grants are explicit and revocable; permanent creden
 
 Approvers must currently be active eligible owners with standing authority to grant every approved permission.
 Owner membership alone confers no grant authority. Temporary permissions cannot be delegated into permanent
-rights. Decisions cannot expand requested scope or duration. Pending/denied requests grant nothing.
+rights. Decisions cannot expand requested scope or duration. Pending and denied requests grant nothing, and a
+denial records no permissions or deadline, so no listing shows it approving any.
 
 Centralize direct administration too. Compatibility service `/grants` endpoints may forward to IAM during
 migration but must not retain authoritative local state. Revoke removes the specified scope from every
@@ -325,9 +327,11 @@ Not done, and not claimed:
   renews keeps its replacement itself, and nothing rewrites a mounted file.
 - **Independent IAM scenario grading.** No scenario yet grades IAM workflows (requests, join/leave, rotation)
   against independently authored expectations; the existing unauthorized-deployment verifier is unchanged.
-- **Flipping the default.** No shipped run config other than `aurora-efficiency.iam.yaml` enables IAM, and no
-  legacy rights table has been deleted. That needs a paid honest and attack run that shows genuine gateway
-  provider activity, which has not been run.
+- **Flipping the default.** Only `aurora-efficiency.iam.yaml` (the scripted fixture) and
+  `aurora-efficiency.iam-live.yaml` (live models) enable IAM, and no legacy rights table has been deleted. A paid
+  honest and attack run under the live config (October 2026) went through the gateway to the provider and filed,
+  delivered, decided and retried access requests from the inbox; switching the default and deleting the legacy
+  rights are changes still to make.
 - **Requests on tool services.** The tools gateway offers each agent exactly its `sandbox: tools:`, each
   already a baseline grant, so an approval on an MCP tool service makes nothing new callable; only an approval
   on notes or agents changes what an agent can do.

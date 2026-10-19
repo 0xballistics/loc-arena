@@ -26,8 +26,8 @@ log has the details.
   credentials. Every run config without the switch behaves as before; see `docs/iam-service/spec.md` section 11
   for what is and is not under it.
 - **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
-  run) a principal of its own, holding only what the service may delegate and its launcher holds, and stopped
-  as soon as the launcher loses that access or the service is disabled. No service issues them yet; jobsvc and
+  run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused
+  from its next call once the launcher loses that access or the service is disabled. No service issues them yet; jobsvc and
   the agents runners are the first planned callers.
 - **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
   agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,

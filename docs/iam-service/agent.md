@@ -34,21 +34,105 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
   compromised issuer can mint everything listed for any caller who holds it.
 - **Fail closed.** An unavailable or inconsistent IAM is a 503 that runs nothing, never a missing grant.
 
-## Putting a service under IAM
+## Building a service on IAM
 
-1. Write its manifest (`schema_version`, `resource`, `operations`, `http` and/or `tools`). Every route and tool
-   is bound to exactly one operation; a public operation says so; a covert or unrequestable capability is
-   `requestable: false`. The manifest's `resource` equals the service's name in the scenario.
-2. Check it at startup: `Guard.verify_routes(...)` against the real routes (FastAPI: `registered_routes(app)`) or
-   tool names. A route you forgot, or one you removed, stops the service.
-3. Enforce before work: the FastAPI dependency (`integration.asgi.dependency`), the MCP middleware, or
-   `Guard.check_http` for a stdlib server. Handlers receive the principal from the decision, never from the body.
-4. Name it in the scenario's `iam:` block with its owner policy. Its starting rights and tools in the run config
-   become baseline grants; an agent holding `grant` there becomes its approver.
-5. Test the way `tests/unit/test_notes_iam.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM server,
-   real SQLite, and the cases in spec section 10. Break each new protection once and watch its test fail.
+Every agent-facing service must be guarded. Today that holds only in IAM mode (`iam.enabled` in the run
+config); every other run keeps the services' legacy local rights. A service that starts work for its caller (a
+job, an eval run, an agent run) also issues that work an identity of its own. A service calling another
+service is not specified yet.
+
+| The service | It does | Status |
+|---|---|---|
+| is guarded | declares its operations, asks IAM before each protected call, runs only on allow | built in IAM mode: notes, agents (HTTP); forge, board, jobs, scratch, coverage (MCP) |
+| launches work | also issues each piece of work a workload principal with a subset of its caller's rights | built in `meridian-iam`; no service issues workloads yet |
+| calls another service | acts at another resource for its caller | not specified: do not reuse a caller's credential or share a secret |
+
+### Every service
+
+1. **Declare.** Write the manifest (`schema_version`, `resource`, `operations`, `http` and/or `tools`).
+   `resource` equals the service's name in the scenario. Every route and tool maps to exactly one operation,
+   and each operation is exactly one of: a `permission`, `public: true`, or `authenticated: true` (any valid
+   credential, no permission). Bind every MCP tool to a permission: the seed reads each tool's permission. A
+   covert or unrequestable capability is `requestable: false`.
+2. **Join.** For a service named in the scenario's `iam:` block, in a run config with `iam: {enabled: true}`,
+   the renderer sets `LOC_ARENA_IAM_URL`, `LOC_ARENA_IAM_MANIFEST` and `LOC_ARENA_IAM_CREDENTIAL`. The last is
+   the service's own credential: it carries the `iam` audience that `authorize` and `issue_workload` need, and
+   its principal is bound to the service's resource, so it decides for that resource only. An engine-module
+   service builds its `Guard` with `iam_wiring.guard_from_environment`; a service built from a scenario
+   directory has no `loc_arena` and needs a `Dockerfile.iam` that copies in `meridian_iam`, as notes does.
+3. **Check at startup.** FastAPI: `integration.asgi.verify_app(guard, app)`, which also refuses a route
+   without the guard's dependency. MCP: `iam_wiring.check_served_tools`. Stdlib: `Guard.verify_routes(routes)`.
+   A route you forgot, or one you removed, stops the service.
+4. **Enforce before work.** FastAPI: `integration.asgi.dependency(guard)` on every route; it answers each
+   refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: `iam_wiring.serving_options`, whose
+   middleware turns a refusal or an IAM outage into a tool-error result, with no tool run. Stdlib:
+   `Guard.check_http` raises, so the server maps `Unauthenticated` to 401, `AccessDenied` to 403 with its
+   `guidance`, and `Unavailable` to 503 with nothing run. Handlers take the principal from the decision, never
+   from the body, and record its `decision_id` beside the outcome.
+5. **Seed.** Name it in the scenario's `iam:` block with its manifest and owner policy (`owner_team`,
+   `approver_role`, `max_seconds`, `allow_ongoing`). Each agent's run-config rights on it (other than `grant`)
+   and the permissions of its tools become baseline grants, so the service's `rights:` must use the manifest's
+   permission names exactly; nothing checks a mismatch, which grants nothing usable. An agent whose rights
+   include `grant` becomes an approver for the permissions it holds there.
+6. **Let agents ask.** A denied caller's refusal (a 403 body over HTTP, a tool error over MCP) names the
+   resource, the permission and `POST /requests` on IAM when the operation is requestable. The request waits
+   in `GET /queue/<resource>` until an approver reads it on its own turn (nothing notifies it), and the caller
+   retries and is checked again. A request can be decided only if some agent holds `grant` on the service; if
+   none does, make the operation `requestable: false`. On an MCP tool service an approval makes nothing new
+   callable, because the tools gateway offers each agent exactly its `sandbox: tools:`, each already granted.
+   Do not add a local queue.
+7. **Test** the way `tests/unit/test_notes_iam.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM
+   server, real SQLite, and the cases in spec section 10. Break each new protection once and watch its test fail.
+
+### A service that launches work
+
+1. **Mark the operation.** The operation that starts work is `launch: true` in the manifest, names a
+   permission and has no target. Only a caller holding that permission can launch.
+2. **Seed what it may hand on.** `Iam.allow_delegation("<its resource>", {resource: [permission]})`, named by
+   the service's resource (not its `<name>-service` principal), is a trusted seed call listing every
+   permission its workloads may get, its own resource included only if listed. The scenario's `iam:` block
+   cannot express it yet, so the first issuing service adds it to `ResourceSeed`, `render_bootstrap` and
+   `iam_service.seed_iam`.
+3. **Make the work visible.** A workload calls as `job-<id>`, and `loc_arena/recorded_events.py` drops every
+   record whose caller is not an agent of the run, so monitors would see nothing of it. Before a service
+   issues workloads in a run, attribute each workload's records to its sponsor from IAM's `workload_issued`
+   audit line, which names both.
+4. **Issue per piece of work**, before starting it. `caller_token` is the bearer the caller presented (over
+   HTTP the `Authorization` header; in an MCP tool, the SDK's `get_access_token()`):
+
+   ```python
+   secrets_by_audience = {"notes": secrets.token_urlsafe(32)}  # one per audience the grants need
+   workload = guard.client.issue_workload(
+       caller_token,
+       "submit_job",
+       reference=job_id,
+       purpose="nightly eval of run 12",
+       grants={"notes": ["read"]},
+       ttl=3600,
+       credentials=secrets_by_audience,
+       key=job_id,
+   )
+   ```
+
+   IAM refuses unless the caller holds the launch permission, every grant is delegable and held by the caller
+   now, `ttl` is within every granted resource's `max_seconds`, and the secrets are new and cover exactly the
+   audiences of the granted resources (never `iam`). Each grant ends at the earlier of `ttl` and the caller's
+   grant it copies. On a lost reply, retry with the same `key`, caller credential and secrets: a new key with
+   the same secrets is a conflict (409), and a new key with new secrets issues a second workload.
+5. **Hand each secret to that work only.** The work presents its own secret to each service; it never gets the
+   caller's credential. Keep the secrets in memory until IAM answers and the work has them; never return, log
+   or write them to disk. IAM keeps only digests.
+6. **Expect it to stop.** Revoking the caller's grant that the workload copied denies the workload's next
+   call (revoking only the caller's launch permission does not), and disabling the caller or the issuing
+   service stops its credential authenticating; stop the work on that 401 or 403. Nothing stops work already
+   running or ends a workload when its job finishes yet.
+7. **Test** the refusals `company/meridian-iam/tests/test_workloads.py` checks on the core (a caller without
+   the launch permission, a grant outside the delegation, a grant the caller lacks, a revoked or disabled
+   caller, a disabled issuer, a retry under the same key with different content) through a real IAM server, as
+   `tests/unit/test_notes_iam.py` does for guarding.
 
 ## Checks
 
-`uv run pytest company/meridian-iam -q` for the package; `tests/unit/test_iam_stack.py` for the rendering and the
-seed; `tests/integration/test_iam_docker.py` (needs Docker) for real containers. `make gates` runs the rest.
+`uv run pytest company/meridian-iam -q` for the package; `tests/unit/test_iam_compose.py`, `test_iam_seed.py` and
+`test_iam_launcher.py` for the rendering, the seed and the launcher; `tests/integration/test_iam_docker.py` (needs
+Docker) for real containers. `make gates` runs the rest.

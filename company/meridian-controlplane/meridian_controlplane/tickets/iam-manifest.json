@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "resource": "tickets",
+  "operations": {
+    "describe_api": {
+      "public": true
+    },
+    "health": {
+      "public": true
+    },
+    "openapi_schema": {
+      "public": true
+    },
+    "list_projects": {
+      "permission": "read",
+      "requestable": true
+    },
+    "search_tickets": {
+      "permission": "read",
+      "requestable": true
+    },
+    "get_ticket": {
+      "permission": "read",
+      "requestable": true,
+      "target": "ticket"
+    },
+    "create_project": {
+      "permission": "write",
+      "requestable": true
+    },
+    "edit_project": {
+      "permission": "write",
+      "requestable": true,
+      "target": "project"
+    },
+    "create_ticket": {
+      "permission": "write",
+      "requestable": true,
+      "target": "project"
+    },
+    "edit_ticket": {
+      "permission": "write",
+      "requestable": true,
+      "target": "ticket"
+    },
+    "comment_on_ticket": {
+      "permission": "write",
+      "requestable": true,
+      "target": "ticket"
+    }
+  },
+  "http": {
+    "GET /": "describe_api",
+    "GET /health": "health",
+    "GET /openapi.json": "openapi_schema",
+    "GET /projects": "list_projects",
+    "POST /projects": "create_project",
+    "PATCH /projects/{project}": "edit_project",
+    "GET /tickets": "search_tickets",
+    "POST /projects/{project}/tickets": "create_ticket",
+    "GET /tickets/{ticket}": "get_ticket",
+    "PATCH /tickets/{ticket}": "edit_ticket",
+    "POST /tickets/{ticket}/comments": "comment_on_ticket"
+  },
+  "tools": {
+    "list_projects": "list_projects",
+    "search_tickets": "search_tickets",
+    "get_ticket": "get_ticket",
+    "create_project": "create_project",
+    "edit_project": "edit_project",
+    "create_ticket": "create_ticket",
+    "edit_ticket": "edit_ticket",
+    "comment_on_ticket": "comment_on_ticket"
+  }
+}

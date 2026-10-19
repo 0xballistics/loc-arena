@@ -1,5 +1,10 @@
 # Changelog — meridian-controlplane
 
+## 0.7.0
+- tickets: a tickets service, Meridian's ticket tracker, with projects, their tickets and the comments on each,
+  served as an HTTP API and as MCP tools over one SQLite store that records the history of every change.
+- agents: its audit record is written by `request_audit`, which the tickets service shares.
+
 ## 0.6.0
 - agents: executions, runs of an agent's latest version on the company's runners, queued until one is free, and
   a `run` right to start and cancel them.

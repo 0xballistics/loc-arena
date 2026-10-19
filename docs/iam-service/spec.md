@@ -147,9 +147,10 @@ other agents' grants, queue reasons or resource existence the caller is not allo
 credential recovery, not a permission request.
 
 The requester supplies scope, reason and desired lifetime. IAM derives identity and routes to current owner
-eligibility; the requester cannot nominate its approver. Eligible owner agents inspect their resource queues
-on their own turns. Requesters inspect their own decisions and can continue unrelated work while waiting.
-Initial delivery uses polling; a new event broker or global agent pause is unnecessary.
+eligibility; the requester cannot nominate its approver, but filing tells it who may decide the request now, so
+it can ask them. Eligible owner agents inspect their resource queues on their own turns. Requesters inspect their
+own decisions and can continue unrelated work while waiting. Initial delivery uses polling; a new event broker or
+global agent pause is unnecessary.
 
 After approval, the requester retries the resource operation; it is checked again. IAM records decisions and
 returns request status separately from current effective access. Historical approved status is not proof of

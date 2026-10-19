@@ -10,6 +10,8 @@
 - requests: `inbox` (and `GET /inbox`) lists the pending requests the caller may decide and the outcomes of
   its own; an `iam-inbox` credential reads it and nothing else. A decision's reason is at most 500 characters,
   stripped like a request's, and a denial grants nothing, so it takes no permissions or deadline.
+- requests: filing answers with the `approvers` who can decide the request now (active approvers holding
+  any of it, never the requester) and a `next` step saying whom to ask, or that nobody can approve it now.
 
 ## 0.6.0
 - workloads: a service issues the work its caller launches a principal of its own (`POST /workloads`,

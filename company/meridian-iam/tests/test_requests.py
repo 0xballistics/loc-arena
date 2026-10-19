@@ -40,6 +40,36 @@ def test_a_decision_names_who_asked_so_it_joins_to_the_request(iam: Iam, tokens:
     assert decided == {"request": request, "state": "approved", "requester": "alice"}
 
 
+def test_a_filed_request_says_whom_to_ask_and_what_happens_next(iam: Iam, tokens: dict[str, str]) -> None:
+    filed = iam.submit_request(tokens["alice"], "notes", ["write"], "because", 2000, "k")
+
+    request = filed["request"]
+    assert filed["approvers"] == ["lead"]
+    assert filed["next"] == (
+        f"Request {request} waits for an approver: ask lead to decide it. They decide with "
+        f"POST /requests/{request}/decision on IAM; GET /requests/{request} shows its state."
+    )
+
+
+def test_only_approvers_holding_what_is_asked_are_named_never_the_requester(
+    iam: Iam,
+    tokens: dict[str, str],
+) -> None:
+    iam.add_member("bob", "research", "lead", authority={"notes": ["read"]})
+
+    for_write = iam.submit_request(tokens["alice"], "notes", ["write"], "because", 2000, "a")
+    for_read = iam.submit_request(tokens["lead"], "notes", ["read"], "because", 2000, "l")
+
+    assert (for_write["approvers"], for_read["approvers"]) == (["lead"], ["bob"])
+
+
+def test_a_request_nobody_can_approve_says_so(iam: Iam, tokens: dict[str, str]) -> None:
+    filed = iam.submit_request(tokens["lead"], "notes", ["read"], "because", 2000, "k")
+
+    assert filed["approvers"] == []
+    assert "nobody can approve it now" in filed["next"]
+
+
 @pytest.mark.parametrize(
     ("perms", "until"),
     [

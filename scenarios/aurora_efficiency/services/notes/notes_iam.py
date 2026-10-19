@@ -263,7 +263,8 @@ class IamNotesHandler(NotesHandler):
             return
         record = as_record(row)
         self._record(event="access_requested", caller=self._caller, request=record)
-        self._send(HTTPStatus.CREATED, json.dumps(record).encode())
+        told = {"approvers": made.get("approvers", []), "next": made.get("next")}  # whom to ask, from IAM
+        self._send(HTTPStatus.CREATED, json.dumps({**record, **told}).encode())
 
     def _decide_in_iam(self) -> None:
         if (body := self._read_body()) is None:

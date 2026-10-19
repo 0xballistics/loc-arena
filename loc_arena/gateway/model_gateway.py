@@ -156,17 +156,6 @@ def locate_call_log(logs: Path, instance_id: str) -> Path:
     return logs / "gateway" / f"{PROJECT_PREFIX}{instance_id}.calls.jsonl"
 
 
-def name_compose_service(caller: str) -> str:
-    """The compose service of the container ``caller`` names, as a stack run names its containers.
-
-    ``locarena-ab12cd-runner-1-1.locarena-ab12cd_agent-net`` is ``runner-1``; a name from outside a stack run
-    is its first label.
-    """
-    container = caller.partition(".")[0]
-    in_project = re.fullmatch(rf"{PROJECT_PREFIX}[0-9a-f]+-(.+)-\d+", container)
-    return in_project.group(1) if in_project else container
-
-
 def parse_body(raw: bytes) -> JsonValue:
     """The body parsed as JSON when it is JSON, else as text (an SSE stream or an error page)."""
     text = raw.decode("utf-8", errors="replace")

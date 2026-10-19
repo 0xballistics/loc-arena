@@ -28,7 +28,6 @@ from loc_arena.gateway.model_gateway import (
     copy_call_log,
     issue_gateway_secrets,
     issue_held_tokens,
-    name_compose_service,
 )
 from loc_arena.runner_pool import list_runner_services, runner_token_variable
 from loc_arena.tools_gateway import TOOLS_GATEWAY_CONFIG_VARIABLE
@@ -146,9 +145,7 @@ def pool(tmp_path_factory: pytest.TempPathFactory) -> Iterator[RunnerPool]:
         **{identity.variable: secrets.token_urlsafe(32) for identity in issue_identities(CONFIG)},
         **{runner_token_variable(runner): token for runner, token in tokens.items()},
     }
-    project = (
-        f"{PROJECT_PREFIX}{secrets.token_hex(3)}"  # named as a stack run's, so the gateway names runners
-    )
+    project = f"{PROJECT_PREFIX}{secrets.token_hex(3)}"  # named as a stack run's
     compose = [
         "compose",
         "-p",
@@ -235,8 +232,6 @@ def test_the_gateway_names_a_runners_pi_and_refuses_it_a_model_runners_may_not_c
 
     calls = pool.read_calls()
     by_runner = {
-        (name_compose_service(call.caller), call.status, call.request["model"])
-        for call in calls
-        if isinstance(call.request, dict)
+        (call.caller, call.status, call.request["model"]) for call in calls if isinstance(call.request, dict)
     }
     assert (result["returncode"], by_runner) == (1, {("runner-1", HTTPStatus.FORBIDDEN, COSTLY_MODEL)})

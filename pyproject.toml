@@ -43,6 +43,7 @@ dev = [
 # run the company repos' tests and the benchmark. Nothing of the harness.
 sandbox = [
   "fastapi>=0.115",
+  "mcp>=2.3.0",
   "pydantic>=2.13.5",
   "pydantic-settings>=2.15.0",
   "pytest>=9.1.1",

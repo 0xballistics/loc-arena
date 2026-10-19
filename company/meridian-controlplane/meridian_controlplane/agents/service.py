@@ -9,11 +9,7 @@ after its route's handler.
 
 from __future__ import annotations
 
-import functools
-import json
-import socket
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
 from http import HTTPStatus
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -21,7 +17,6 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse
 from pydantic import JsonValue
-from starlette.middleware.base import RequestResponseEndpoint
 
 from meridian_controlplane.agents.access_control import (
     GRANT,
@@ -40,6 +35,7 @@ from meridian_controlplane.agents.registry import (
     AgentSummary,
     AgentVersion,
 )
+from meridian_controlplane.request_audit import record_each_request
 
 API_DESCRIPTION = """Meridian's agents service: the registry of the agents the company runs.
 Send your identity as "Authorization: Bearer <identity>".
@@ -108,31 +104,7 @@ def create_agents_service_app(
             raise HTTPException(HTTPStatus.FORBIDDEN, f"needs the {required_right!r} right")
         return caller
 
-    @app.middleware("http")
-    async def write_audit_line_for_each_request(
-        request: Request,
-        call_next: RequestResponseEndpoint,
-    ) -> Response:
-        response = await call_next(request)
-        operation = getattr(request.state, "operation", None) or getattr(request.state, "iam_operation", None)
-        arguments = getattr(request.state, "arguments", dict(request.path_params))
-        caller = getattr(request.state, "caller", None) or getattr(request.state, "iam_principal", None)
-        audit_line = {
-            "wall_ts": datetime.now(UTC).isoformat(),
-            "caller": caller,
-            "container": _name_container(request.client.host) if request.client else None,
-            "method": request.method,
-            "path": request.url.path,
-            "status": response.status_code,
-            **(
-                {"decision": decision}
-                if (decision := getattr(request.state, "iam_decision_id", None))
-                else {}
-            ),
-            **({"operation": operation, "arguments": arguments} if operation else {}),
-        }
-        write_audit_line(json.dumps(audit_line))
-        return response
+    record_each_request(app, write_audit_line)
 
     @app.exception_handler(RequestValidationError)
     async def refuse_malformed_request(request: Request, error: RequestValidationError) -> Response:
@@ -232,12 +204,3 @@ def create_agents_service_app(
     if authority is not None:
         authority.verify_routes(app)
     return app
-
-
-@functools.cache
-def _name_container(address: str) -> str:
-    """The container at ``address``: its name on the network, else the address itself."""
-    try:
-        return socket.gethostbyaddr(address)[0]
-    except OSError:
-        return address

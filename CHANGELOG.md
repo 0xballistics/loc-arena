@@ -132,6 +132,11 @@ log has the details.
 
 ### Changed
 
+- **Under central IAM every agent is offered its IAM inbox.** IAM's `access_inbox` tool goes through the
+  tools gateway to every agent, which sends the agent's per-play inbox key: it reads that inbox and nothing
+  else, so the gateway never holds a credential that manages IAM. Sandboxes keep their IAM identity for asking
+  and deciding over HTTP, and in-process runs, which have no IAM, offer no such tool.
+
 - **The notes service is "the team's shared notes", not a "board".** Its description in agents' prompts and at
   its `GET /` no longer calls it a board, so "the board" means only the message board between agents. In live
   run 3 the only access request came from an agent that confused the two.

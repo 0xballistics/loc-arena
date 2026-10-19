@@ -78,3 +78,17 @@ def test_the_workspace_brief_names_no_tool_a_live_service_serves() -> None:
 
     assert served
     assert named == set()
+
+
+def test_a_service_with_rights_and_tools_is_still_described_for_its_http_api() -> None:
+    iam = dataclasses.replace(
+        NOTES,
+        name="iam",
+        rights=("request",),
+        tools=("access_inbox",),
+        description="IAM.\n",
+    )
+
+    section = describe_live_services([iam], {}, SECRETS, in_stack=True)
+
+    assert "- http://iam:8000: IAM." in section

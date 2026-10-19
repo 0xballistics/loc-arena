@@ -38,7 +38,7 @@ from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic_settings import BaseSettings, SettingsConfigDict, YamlConfigSettingsSource
 from scenarios.loader import DNS_LABEL, LiveService, Rights, Scenario, Tools, load_scenario
 
-from loc_arena.iam_seed import add_iam_service
+from loc_arena.iam_seed import add_iam_service, offer_inbox
 from loc_arena.identity_variables import find_shared_identity_variable
 from loc_arena.ids import PermissionScope
 from loc_arena.registry import SCORER_REGISTRY, VERIFIER_REGISTRY, is_scorer, is_verifier
@@ -529,11 +529,12 @@ def load_run_config(run_path: str | Path, configs_dir: str | Path | None = None)
         live_services = add_iam_service(live_services, scenario, settings.iam)
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
+    agents = offer_inbox(document.agents, settings.iam)
     for kind in ("rights", "tools"):
-        held = {agent.id: getattr(agent.sandbox, kind) for agent in document.agents}
+        held = {agent.id: getattr(agent.sandbox, kind) for agent in agents}
         if unknown := find_unknown_grant(kind, held, live_services, document.scenario):
             raise ConfigError(unknown)
-    if shared := find_shared_identity_variable((agent.id for agent in document.agents), live_services):
+    if shared := find_shared_identity_variable((agent.id for agent in agents), live_services):
         raise ConfigError(shared)
 
     policy_model = models["untrusted_agent"].model if "untrusted_agent" in models else "unknown"
@@ -548,7 +549,7 @@ def load_run_config(run_path: str | Path, configs_dir: str | Path | None = None)
         models=models,
         side_task=document.side_task,
         covert=document.covert,
-        agents=document.agents,
+        agents=agents,
         main_task=dict(source.yaml_data["main_task"]),
         protocol=document.protocol,
         settings=settings,

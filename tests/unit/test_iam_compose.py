@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from loc_arena.config import load_run_config
 from loc_arena.episode_stack import (
     StackError,
@@ -138,6 +139,16 @@ def test_each_agents_inbox_key_is_mounted_in_iam_alone_and_new_in_the_twin() -> 
     assert all(
         attack[inbox_key_variable(agent.id)] != twin[inbox_key_variable(agent.id)] for agent in CONFIG.agents
     )
+
+
+def test_the_tool_route_sends_each_agents_inbox_key_to_iam_never_its_identity_on_iam() -> None:
+    attack, _ = _issue_secrets(CONFIG)
+    gateway = yaml.safe_load(attack[TOOLS_GATEWAY_CONFIG_VARIABLE])
+    targets = gateway["binds"][0]["listeners"][0]["routes"][0]["backends"][0]["mcp"]["targets"]
+    sent = next(t for t in targets if t["name"] == "iam")["policies"]["transformations"]["request"]["set"]
+
+    by_agent = json.loads(sent["authorization"].removeprefix('"Bearer " + ').removesuffix("[apiKey.agent]"))
+    assert by_agent == {agent.id: attack[inbox_key_variable(agent.id)] for agent in CONFIG.agents}
 
 
 def test_without_iam_the_twin_still_reuses_the_attack_identities() -> None:

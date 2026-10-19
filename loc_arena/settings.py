@@ -56,7 +56,7 @@ class InferenceSettings(SettingsGroup):
 
 
 class GatewaySettings(SettingsGroup):
-    """The gateway container (``gateway:``): its one upstream, what it forwards, where it records calls."""
+    """The model gateway (``gateway:``): its one upstream, what it forwards, and the record of every call."""
 
     upstream: HttpUrl = Field(
         default=HttpUrl("https://openrouter.ai"),
@@ -81,7 +81,28 @@ class GatewaySettings(SettingsGroup):
     timeout_seconds: PositiveFloat = Field(default=120.0, description="Upstream timeout of one request.")
     call_log: Path = Field(
         default=Path("/sealed/calls.jsonl"),
-        description="The sealed call log, in a volume only the gateway mounts.",
+        description="The sealed record: the Collector appends each call's record there, as OTLP JSON, in a "
+        "volume only the Collector mounts. A stack run copies it out as GatewayCall lines.",
+    )
+    body_limit_bytes: PositiveInt = Field(
+        default=32 * 1024 * 1024,
+        description="The largest request or reply body the gateway buffers and records whole; a longer one "
+        "is recorded cut to this length.",
+    )
+    record_message_limit_mib: PositiveInt = Field(
+        default=256,
+        description="The largest OTLP message the Collector accepts, in MiB: above the gateway's body limit, "
+        "or a record carrying a long reply would be dropped.",
+    )
+    drain_timeout_seconds: PositiveFloat = Field(
+        default=30.0,
+        description="Seconds a stack run waits for the Collector to hold every record the gateway logged, "
+        "before the gateway stops; if it does not, the run fails and its compose project is kept.",
+    )
+    stop_grace_seconds: PositiveInt = Field(
+        default=30,
+        description="Seconds the gateway is given to stop before it is killed: it exports its last records "
+        "while it stops.",
     )
     secrets_dir: Path = Field(
         default=Path("/run/secrets"),
@@ -89,7 +110,9 @@ class GatewaySettings(SettingsGroup):
         "openrouter_api_key), each sandbox's own token (sandbox_token), in the episode every agent's "
         "sandbox token (sandbox_token_<agent id with - as _>), in a sandbox its agent's identity on each "
         "live service with rights (identity_<service>), in a live service with rights or tools every agent's "
-        "(identity_<agent id>), and in the tools gateway its generated config (agentgateway_config).",
+        "(identity_<agent id>), in the tools gateway its generated config (agentgateway_config), in the "
+        "model gateway its (model_gateway_config), in the Collector its (collector_config), and in the "
+        "episode its own key to the model gateway (gateway_token).",
     )
 
     @field_validator("upstream")
@@ -106,7 +129,7 @@ class StackSettings(SettingsGroup):
 
     image: str = Field(
         default="loc-arena:latest",
-        description="The image of the gateway and the episode: the Dockerfile's `engine` target.",
+        description="The image of the episode: the Dockerfile's `engine` target.",
     )
     sandbox_image: str = Field(
         default="loc-arena-sandbox:latest",
@@ -141,9 +164,14 @@ class StackSettings(SettingsGroup):
     episode_pids_limit: PositiveInt = Field(default=4096, description="Processes the episode may run.")
     tools_gateway_image: str = Field(
         default="ghcr.io/agentgateway/agentgateway:v1.6.0",
-        description="The image of the tools gateway, agentgateway, pinned to a release: it puts every live "
-        "service with tools on one MCP route, offers each agent its tools and passes its identity on. Its "
-        "limits are a live service's.",
+        description="The image of agentgateway, pinned to a release. It runs the tools gateway, which puts "
+        "every live service with tools on one MCP route, offers each agent its tools and passes its identity "
+        "on, with a live service's limits; and the model gateway, which holds the provider key.",
+    )
+    collector_image: str = Field(
+        default="otel/opentelemetry-collector-contrib:0.162.0",
+        description="The image of the OpenTelemetry Collector, pinned to a release: it receives the model "
+        "gateway's records over OTLP and appends them to the sealed record.",
     )
     tools_gateway_port: int = Field(
         default=3000,

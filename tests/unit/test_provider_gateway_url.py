@@ -1,4 +1,4 @@
-"""A provider pointed at the gateway (``LOC_ARENA_GATEWAY_URL``) sends its calls there and holds no real key.
+"""A provider pointed at the gateway (``LOC_ARENA_GATEWAY_URL``) sends its calls there with its token alone.
 
 ``httpx2.post`` is stubbed: it is the paid provider boundary.
 """
@@ -58,6 +58,20 @@ def test_a_provider_behind_the_gateway_withholds_a_real_key_it_was_given(
     core.OpenRouterProvider(api_key="sk-real", timeout=TIMEOUT_SECONDS).generate("m", MESSAGES, 0.0, 8, None)
 
     assert "sk-real" not in posted[0].headers["authorization"]
+
+
+def test_a_provider_behind_the_gateway_sends_the_token_its_file_holds(
+    monkeypatch: pytest.MonkeyPatch,
+    posted: list[httpx2.Request],
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "gateway_token").write_text("the-episodes-token\n")
+    monkeypatch.setenv(core.GATEWAY_URL_VARIABLE, GATEWAY)
+    monkeypatch.setenv(core.GATEWAY_TOKEN_FILE_VARIABLE, str(tmp_path / "gateway_token"))
+
+    core.OpenRouterProvider(timeout=TIMEOUT_SECONDS).generate("m", MESSAGES, 0.0, 8, None)
+
+    assert posted[0].headers["authorization"] == "Bearer the-episodes-token"
 
 
 def test_a_provider_given_a_gateway_url_posts_there_despite_a_key_in_the_environment(

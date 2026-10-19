@@ -18,7 +18,7 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 
 from loc_arena.gateway.core import ProviderResult
-from loc_arena.gateway.proxy import GatewayCall, locate_call_log
+from loc_arena.gateway.model_gateway import GatewayCall, locate_call_log
 from loc_arena.logging_.events import fingerprint, read_events
 
 

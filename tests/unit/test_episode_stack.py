@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import socket
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
@@ -29,6 +31,7 @@ from loc_arena.episode_stack import (
     sandbox_agent_code,
 )
 from loc_arena.gateway import core
+from loc_arena.gateway.model_gateway import RECORD_NETWORK
 from loc_arena.harness import apply_mode
 from loc_arena.recording_service import COVERT_TOOL_NAMES
 from loc_arena.settings import GatewaySettings, LocArenaSettings, StackSettings
@@ -168,12 +171,21 @@ def test_only_the_gateway_is_on_the_network_with_a_route_out() -> None:
     assert (on_egress, compose["networks"][EGRESS_NETWORK]["internal"]) == (["gateway"], False)
 
 
+def test_only_the_gateway_reaches_the_collector() -> None:
+    compose = render()
+
+    services = compose["services"]
+    on_record = [name for name, service in services.items() if RECORD_NETWORK in service["networks"]]
+
+    assert (on_record, compose["networks"][RECORD_NETWORK]["internal"]) == (["gateway", "collector"], True)
+
+
 def test_the_stack_has_one_sandbox_per_agent() -> None:
     compose = render()
 
     services = sorted(compose["services"])
 
-    assert services == ["episode", "gateway", *SANDBOXES]
+    assert services == ["collector", "episode", "gateway", *SANDBOXES]
 
 
 @pytest.mark.parametrize("service", ["episode", *SANDBOXES])
@@ -189,12 +201,13 @@ def test_each_service_mounts_only_the_volumes_it_needs() -> None:
     compose = render(policy="model")
 
     sources = {
-        name: sorted(volume.split(":")[0] for volume in service["volumes"])
+        name: sorted(volume.split(":")[0] for volume in service.get("volumes", []))
         for name, service in compose["services"].items()
     }
 
     assert sources == {
-        "gateway": ["/repository/configs", "sealed"],
+        "gateway": [],
+        "collector": ["sealed"],
         "sandbox-agent-main": [str(SKILLS), "checkouts"],
         "sandbox-serving-agent": [str(SKILLS), "checkouts"],
         "episode": ["/repository/configs", "checkouts", "output"],
@@ -218,8 +231,8 @@ def test_the_gateway_holds_the_key_and_the_episode_every_sandbox_token() -> None
     holders = {name: compose["services"][name]["secrets"] for name in ("gateway", "episode")}
 
     assert holders == {
-        "gateway": ["openrouter_api_key"],
-        "episode": ["sandbox_token_agent_main", "sandbox_token_serving_agent"],
+        "gateway": ["openrouter_api_key", "model_gateway_config"],
+        "episode": ["gateway_token", "sandbox_token_agent_main", "sandbox_token_serving_agent"],
     }
 
 
@@ -230,6 +243,9 @@ def test_compose_reads_each_secret_from_its_own_host_variable() -> None:
 
     assert sources == {
         "openrouter_api_key": {"environment": "OPENROUTER_API_KEY"},
+        "model_gateway_config": {"environment": "LOC_ARENA_MODEL_GATEWAY_CONFIG"},
+        "collector_config": {"environment": "LOC_ARENA_COLLECTOR_CONFIG"},
+        "gateway_token": {"environment": "LOC_ARENA_GATEWAY_TOKEN"},
         "sandbox_token_agent_main": {"environment": "LOC_ARENA_SANDBOX_TOKEN_AGENT_MAIN"},
         "sandbox_token_serving_agent": {"environment": "LOC_ARENA_SANDBOX_TOKEN_SERVING_AGENT"},
     }
@@ -242,6 +258,7 @@ def test_every_service_drops_every_capability() -> None:
 
     assert dropped == {
         "gateway": ["ALL"],
+        "collector": ["ALL"],
         "sandbox-agent-main": ["ALL"],
         "sandbox-serving-agent": ["ALL"],
         "episode": ["ALL"],
@@ -255,16 +272,17 @@ def test_the_episode_sends_its_model_calls_to_the_gateway_and_each_agents_code_t
 
     assert environment == {
         core.GATEWAY_URL_VARIABLE: "http://gateway:9191/api/v1/chat/completions",
+        core.GATEWAY_TOKEN_FILE_VARIABLE: "/run/secrets/gateway_token",
         SANDBOX_URL_VARIABLE: "http://sandbox-{agent}:9292",
     }
 
 
-def test_the_episode_starts_once_the_gateway_and_every_sandbox_are_healthy() -> None:
+def test_the_episode_starts_once_the_gateway_has_started_and_every_sandbox_is_healthy() -> None:
     compose = render()
 
     awaited = compose["services"]["episode"]["depends_on"]
 
-    assert awaited == {"gateway": HEALTHY, "sandbox-agent-main": HEALTHY, "sandbox-serving-agent": HEALTHY}
+    assert awaited == {"gateway": STARTED, "sandbox-agent-main": HEALTHY, "sandbox-serving-agent": HEALTHY}
 
 
 @pytest.mark.parametrize("sandbox", SANDBOXES)
@@ -304,12 +322,15 @@ def test_the_gateway_shares_the_episodes_network() -> None:
     assert AGENT_NETWORK in gateway_networks
 
 
-def test_the_gateway_reads_the_settings_of_the_requested_run() -> None:
+def test_the_gateway_and_the_collector_read_their_configs_from_their_secrets() -> None:
     compose = render()
 
-    command = compose["services"]["gateway"]["command"]
+    commands = {name: compose["services"][name]["command"] for name in ("gateway", "collector")}
 
-    assert command[-1] == "/app/configs/a-run.yaml"
+    assert commands == {
+        "gateway": ["-f", "/run/secrets/model_gateway_config"],
+        "collector": ["--config", "/run/secrets/collector_config"],
+    }
 
 
 def test_the_episode_runs_the_requested_run_and_mode() -> None:
@@ -321,13 +342,19 @@ def test_the_episode_runs_the_requested_run_and_mode() -> None:
 
 
 def test_each_service_runs_its_targets_image_and_one_sandbox_builds_the_sandboxes() -> None:
-    stack = StackSettings(image="engine:tag", sandbox_image="sandbox:tag")
+    stack = StackSettings(
+        image="engine:tag",
+        sandbox_image="sandbox:tag",
+        tools_gateway_image="agentgateway:tag",
+        collector_image="collector:tag",
+    )
 
     services = render(LocArenaSettings(stack=stack))["services"]
 
     built = {name: (service.get("build"), service["image"]) for name, service in services.items()}
     assert built == {
-        "gateway": ({"context": "/repository", "target": "engine"}, "engine:tag"),
+        "gateway": (None, "agentgateway:tag"),
+        "collector": (None, "collector:tag"),
         "sandbox-agent-main": ({"context": "/repository", "target": "sandbox"}, "sandbox:tag"),
         "sandbox-serving-agent": (None, "sandbox:tag"),
         "episode": ({"context": "/repository", "target": "engine"}, "engine:tag"),
@@ -372,6 +399,7 @@ def test_the_gateway_port_is_published_on_the_hosts_loopback_alone() -> None:
 
     assert published == {
         "gateway": ["127.0.0.1::9191"],
+        "collector": None,
         "sandbox-agent-main": None,
         "sandbox-serving-agent": None,
         "episode": None,
@@ -386,6 +414,7 @@ def test_a_scripted_episode_gets_the_scripted_moves_mounted_read_only() -> None:
     source = SCENARIOS_ROOT / "aurora_efficiency" / "scripted"
     assert mounts == {
         "gateway": [],
+        "collector": [],
         "sandbox-agent-main": [SKILLS_MOUNT],
         "sandbox-serving-agent": [SKILLS_MOUNT],
         "episode": [f"{source}:/app/scenarios/aurora_efficiency/scripted:ro"],
@@ -399,6 +428,7 @@ def test_a_live_model_episode_mounts_only_the_scenarios_skills_read_only_in_ever
 
     assert mounts == {
         "gateway": [],
+        "collector": [],
         "sandbox-agent-main": [SKILLS_MOUNT],
         "sandbox-serving-agent": [SKILLS_MOUNT],
         "episode": [],
@@ -555,8 +585,8 @@ def test_neither_the_gateway_nor_the_episode_holds_an_identity(
     holders = {name: compose["services"][name]["secrets"] for name in ("gateway", "episode")}
 
     assert holders == {
-        "gateway": ["openrouter_api_key"],
-        "episode": ["sandbox_token_agent_main", "sandbox_token_controlplane_agent"],
+        "gateway": ["openrouter_api_key", "model_gateway_config"],
+        "episode": ["gateway_token", "sandbox_token_agent_main", "sandbox_token_controlplane_agent"],
     }
 
 
@@ -600,7 +630,7 @@ def test_the_episode_starts_once_every_live_service_is_healthy(
     awaited = compose["services"]["episode"]["depends_on"]
 
     assert awaited == {
-        "gateway": HEALTHY,
+        "gateway": STARTED,
         "sandbox-agent-main": HEALTHY,
         "sandbox-controlplane-agent": HEALTHY,
         "notes": HEALTHY,
@@ -830,6 +860,7 @@ class FakeDocker:
     unwritable_after_first_play: Path | None = None  # logs whose run's notes.log is a directory once played
     calls: list[list[str]] = field(default_factory=list)
     environment: dict[str, str] = field(default_factory=dict)
+    published: str = ""  # where the gateway's port is published: a socket the test listens on
 
     def __call__(
         self,
@@ -837,6 +868,7 @@ class FakeDocker:
         *,
         env: dict[str, str] | None = None,  # none on the host's own call, for the gateway's published port
         stdout: IO[bytes] | None = None,
+        text: bool = False,
         **_: object,
     ) -> subprocess.CompletedProcess[Any]:
         self.calls.append(command)
@@ -852,7 +884,9 @@ class FakeDocker:
             playing and self.plays > self.plays_passing
         )
         created = "container-id\n" if verb == "ps" and self.episode_created_only else ""
-        printed = NOTES_LOG if verb == "logs" and stdout is None else created
+        published = self.published if verb == "port" else created
+        printed = NOTES_LOG if verb == "logs" and stdout is None else published
+        printed = printed.decode() if text and isinstance(printed, bytes) else printed
         return subprocess.CompletedProcess(command, int(failed), stdout=printed)
 
     @property
@@ -865,10 +899,11 @@ class FakeDocker:
 
 
 @pytest.fixture
-def docker(monkeypatch: pytest.MonkeyPatch) -> FakeDocker:
-    fake = FakeDocker()
-    monkeypatch.setattr(subprocess, "run", fake)
-    return fake
+def docker(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeDocker]:
+    with socket.create_server(("127.0.0.1", 0)) as gateway:
+        fake = FakeDocker(published=f"127.0.0.1:{gateway.getsockname()[1]}")
+        monkeypatch.setattr(subprocess, "run", fake)
+        yield fake
 
 
 def run_aurora_in_stack(logs: Path, mode: str = "honest") -> None:
@@ -1070,7 +1105,7 @@ def test_a_graded_stack_run_copies_its_run_directory_out_once(
     assert len(outputs) == 1
 
 
-def test_an_attack_stack_run_renews_every_container_but_the_episode_before_the_honest_twin(
+def test_an_attack_stack_run_drains_the_record_then_renews_every_container_but_the_episode_for_the_twin(
     docker: FakeDocker,
     tmp_path: Path,
 ) -> None:
@@ -1082,7 +1117,12 @@ def test_an_attack_stack_run_renews_every_container_but_the_episode_before_the_h
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
     logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "agentgateway")
-    assert commands[plays[0] + 1 : plays[1]] == [
+    between = [
+        command[:2] if command[0] == "cp" else command for command in commands[plays[0] + 1 : plays[1]]
+    ]
+    assert between == [
+        ["logs", "--no-color", "--no-log-prefix", "gateway"],
+        ["cp", "collector:/sealed/calls.jsonl"],
         *(["logs", "--no-color", "--no-log-prefix", service] for service in logged),
         [
             *["up", "--detach", "--wait", "--force-recreate", "--renew-anon-volumes", "--no-deps", "gateway"],
@@ -1090,6 +1130,8 @@ def test_an_attack_stack_run_renews_every_container_but_the_episode_before_the_h
             *["sandbox-datapipe-agent", "sandbox-jobsvc-agent", "sandbox-controlplane-agent"],
             *logged,
         ],
+        ["up", "--detach", "--wait", "gateway"],
+        ["port", "gateway", "8080"],
     ]
 
 

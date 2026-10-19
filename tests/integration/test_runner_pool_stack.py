@@ -20,7 +20,7 @@ import yaml
 from loc_arena.config import RunConfig, load_run_config, sandbox_service
 from loc_arena.episode_stack import REPOSITORY, issue_identities, render_compose, token_variable
 from loc_arena.gateway.core import API_KEY_VARIABLE
-from loc_arena.gateway.proxy import PROJECT_PREFIX, GatewayCall, name_compose_service
+from loc_arena.gateway.model_gateway import PROJECT_PREFIX, GatewayCall, name_compose_service
 from loc_arena.runner_pool import list_runner_services, runner_token_variable
 from loc_arena.tools_gateway import TOOLS_GATEWAY_CONFIG_VARIABLE
 

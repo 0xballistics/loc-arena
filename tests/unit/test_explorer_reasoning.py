@@ -4,7 +4,7 @@ from pathlib import Path
 
 from loc_arena.explorer.reasoning import read_reasoning
 from loc_arena.gateway.core import GenerateRequest, output_fingerprint
-from loc_arena.gateway.proxy import GatewayCall
+from loc_arena.gateway.model_gateway import GatewayCall
 from loc_arena.logging_.events import AppendOnlyLog, Event
 
 

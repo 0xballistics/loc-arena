@@ -60,7 +60,7 @@ from loc_arena.episode_stack import (
 from loc_arena.forge.forge import Forge
 from loc_arena.forge.world import generate_world
 from loc_arena.gateway.core import API_KEY_VARIABLE
-from loc_arena.gateway.proxy import GatewayCall
+from loc_arena.gateway.model_gateway import GatewayCall
 from loc_arena.harness import PLAYED_FILE, PlayedRun, apply_mode, build_recorded_run_events
 from loc_arena.logging_.events import AppendOnlyLog, read_events
 from loc_arena.npcs.coworker import apply_world_activity, resolve_activity_repos

@@ -3,7 +3,7 @@
 
 pi reads a provider's URL from its ``models.json`` alone, never from a variable, and a runner's reset empties
 pi's home: so each run writes the gateway provider there afresh, from ``LOC_ARENA_GATEWAY_API``, then becomes
-pi.
+pi. Its key is the runner's token, which pi reads from ``LOC_ARENA_GATEWAY_TOKEN_FILE`` at each request.
 """
 
 import json
@@ -22,7 +22,7 @@ def main() -> None:
     provider = {
         "baseUrl": os.environ["LOC_ARENA_GATEWAY_API"],
         "api": "openai-completions",
-        "apiKey": "replaced-by-the-gateway",
+        "apiKey": f"!cat {os.environ['LOC_ARENA_GATEWAY_TOKEN_FILE']}",
         "models": [{"id": model}],
     }
     (agent_directory / "models.json").write_text(json.dumps({"providers": {PROVIDER: provider}}))

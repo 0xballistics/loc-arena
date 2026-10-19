@@ -42,10 +42,10 @@ from loc_arena.logging_.agent_trace import AgentTrace
 from loc_arena.logging_.events import AppendOnlyLog, Event, fingerprint
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-# The environment variable naming the gateway, when set: the provider sends its calls there, keyless.
+# The environment variable naming the gateway, when set: the provider calls there, with its own token.
 GATEWAY_URL_VARIABLE = "LOC_ARENA_GATEWAY_URL"
-# The key a caller of the gateway proxy sends; the proxy replaces it with the real one.
-_GATEWAY_PLACEHOLDER_KEY = "held-by-the-gateway"
+# The environment variable naming the file of this process's token to the gateway, which swaps it for the key.
+GATEWAY_TOKEN_FILE_VARIABLE = "LOC_ARENA_GATEWAY_TOKEN_FILE"
 
 
 def environment_without_key() -> dict[str, str]:
@@ -54,7 +54,7 @@ def environment_without_key() -> dict[str, str]:
 
 
 def is_live_provider_configured() -> bool:
-    """Whether a live model call can be made: a gateway proxy to send it to, or a key in this process."""
+    """Whether a live model call can be made: a gateway to send it to, or a key in this process."""
     return bool(os.environ.get(GATEWAY_URL_VARIABLE) or os.environ.get(API_KEY_VARIABLE))
 
 
@@ -249,10 +249,10 @@ class Provider(Protocol):
 
 
 class OpenRouterProvider:
-    """The real egress: calls OpenRouter, through the gateway proxy when ``LOC_ARENA_GATEWAY_URL`` names one.
+    """The real egress: calls OpenRouter, through the gateway when ``LOC_ARENA_GATEWAY_URL`` names one.
 
-    Behind the proxy this process holds no key; the proxy adds it. Without a proxy the provider calls
-    OpenRouter directly with ``OPENROUTER_API_KEY`` (never logged).
+    Behind the gateway this process holds no key, only its own token, which the gateway replaces with the key.
+    Without a gateway the provider calls OpenRouter directly with ``OPENROUTER_API_KEY`` (never logged).
     """
 
     def __init__(
@@ -261,9 +261,13 @@ class OpenRouterProvider:
         *,
         timeout: float,
         gateway_url: str | None = None,
+        gateway_token: str | None = None,
         model_providers: Mapping[str, ProviderPreferences] | None = None,
     ) -> None:
         """Send to ``gateway_url``, else to the gateway the environment names, else to OpenRouter keyed.
+
+        Through a gateway the provider sends ``gateway_token``, else the token in the file
+        ``LOC_ARENA_GATEWAY_TOKEN_FILE`` names; with neither, the gateway refuses its calls.
 
         ``timeout`` bounds one request; callers pass ``gateway.timeout_seconds``, so a reply the gateway still
         waits for is never abandoned, paid for, and sent again. ``model_providers`` names the OpenRouter
@@ -271,8 +275,10 @@ class OpenRouterProvider:
         """
         self._model_providers = dict(model_providers or {})
         gateway_url = gateway_url or os.environ.get(GATEWAY_URL_VARIABLE)
-        if gateway_url:  # the gateway adds the key: a real one would only travel the connection to it
-            self._url, self._key = gateway_url, _GATEWAY_PLACEHOLDER_KEY
+        if gateway_url:  # the gateway swaps this caller's token for the key
+            token_file = os.environ.get(GATEWAY_TOKEN_FILE_VARIABLE)
+            token = gateway_token or (Path(token_file).read_text().strip() if token_file else "")
+            self._url, self._key = gateway_url, token
         else:
             key = api_key if api_key is not None else os.environ.get(API_KEY_VARIABLE)
             if not key:

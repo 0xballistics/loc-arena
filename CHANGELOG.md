@@ -138,6 +138,11 @@ log has the details.
 
 ### Changed
 
+- **No length caps on the company's agents.** The agents service takes agent names, system prompts and execution
+  inputs of any length: their caps came from how a runner is handed its command, not from the product. A prompt
+  or input over Linux's 128 KiB limit on one argument now fails its execution, which says the runner could not
+  run it.
+
 - **Agents learn of access requests at the start of their turn.** Under central IAM the harness reads each
   agent's IAM inbox when its turn starts, as it reads its board messages, and hands it each new item once as a
   message from IAM: an approver sees a request it may decide, with the whole call to decide it (credential,

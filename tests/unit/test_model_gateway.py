@@ -7,6 +7,7 @@ completion from ``agent-main``, and a call with no token.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import json
 import subprocess
@@ -15,12 +16,16 @@ from typing import Any
 
 import pytest
 import yaml
+from loc_arena.compose_document import ComposeDocument
+from loc_arena.config import load_run_config
+from loc_arena.episode_stack import AGENT_NETWORK, EGRESS_NETWORK, REPOSITORY, render_compose
 from loc_arena.explorer.reasoning import read_reasoning
 from loc_arena.gateway.core import GenerateRequest, output_fingerprint
 from loc_arena.gateway.model_gateway import (
     EPISODE_TOKEN_VARIABLE,
     HOST_TOKEN_VARIABLE,
     MODEL_GATEWAY_CONFIG_VARIABLE,
+    RECORD_NETWORK,
     OtlpAttribute,
     OtlpLogRecord,
     OtlpValue,
@@ -34,6 +39,16 @@ from loc_arena.settings import GatewaySettings, LocArenaSettings
 
 RECORD = (Path(__file__).parent / "data" / "collector_record.jsonl").read_text(encoding="utf-8")
 HELD = {EPISODE_TOKEN_VARIABLE: "episode-token", HOST_TOKEN_VARIABLE: "host-token"}
+STACK_CONFIG = dataclasses.replace(
+    load_run_config("configs/aurora-efficiency.deterministic.yaml"),
+    live_services=(),
+)
+
+
+def render(settings: LocArenaSettings | None = None) -> ComposeDocument:
+    """The compose file of a stack run with no live service."""
+    config = dataclasses.replace(STACK_CONFIG, settings=settings or LocArenaSettings())
+    return render_compose(config, REPOSITORY, "a-run", [])
 
 
 def admitted(environment: dict[str, str]) -> set[tuple[str, str, str]]:
@@ -151,3 +166,51 @@ def test_the_explorer_shows_the_reasoning_of_a_call_copied_from_the_collector(tm
     reasoning = read_reasoning(bundle)
 
     assert reasoning == {1: "the agent's"}
+
+
+def test_only_the_gateway_is_on_the_network_with_a_route_out() -> None:
+    compose = render()
+
+    on_egress = [
+        name for name, service in compose["services"].items() if EGRESS_NETWORK in service["networks"]
+    ]
+
+    assert (on_egress, compose["networks"][EGRESS_NETWORK]["internal"]) == (["gateway"], False)
+
+
+def test_only_the_gateway_reaches_the_collector() -> None:
+    compose = render()
+
+    on_record = [
+        name for name, service in compose["services"].items() if RECORD_NETWORK in service["networks"]
+    ]
+
+    assert (on_record, compose["networks"][RECORD_NETWORK]["internal"]) == (["gateway", "collector"], True)
+
+
+def test_the_gateway_shares_the_episodes_network() -> None:
+    compose = render()
+
+    gateway_networks = compose["services"]["gateway"]["networks"]
+
+    assert AGENT_NETWORK in gateway_networks
+
+
+def test_the_gateway_and_the_collector_read_their_configs_from_their_secrets() -> None:
+    compose = render()
+
+    commands = {name: compose["services"][name]["command"] for name in ("gateway", "collector")}
+
+    assert commands == {
+        "gateway": ["-f", "/run/secrets/model_gateway_config"],
+        "collector": ["--config", "/run/secrets/collector_config"],
+    }
+
+
+def test_the_gateway_port_is_published_on_the_hosts_loopback_alone() -> None:
+    settings = LocArenaSettings(gateway=GatewaySettings(port=9191))
+
+    services = render(settings)["services"]
+
+    published = {name: service["ports"] for name, service in services.items() if service.get("ports")}
+    assert published == {"gateway": ["127.0.0.1::9191"]}

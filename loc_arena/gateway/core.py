@@ -42,10 +42,8 @@ from loc_arena.logging_.agent_trace import AgentTrace
 from loc_arena.logging_.events import AppendOnlyLog, Event, fingerprint
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-# The environment variable naming the gateway, when set: the provider calls there, with its own token.
-GATEWAY_URL_VARIABLE = "LOC_ARENA_GATEWAY_URL"
-# The environment variable naming the file of this process's token to the gateway, which swaps it for the key.
-GATEWAY_TOKEN_FILE_VARIABLE = "LOC_ARENA_GATEWAY_TOKEN_FILE"
+GATEWAY_URL_VARIABLE = "LOC_ARENA_GATEWAY_URL"  # names the gateway: the provider calls there with its token
+GATEWAY_TOKEN_FILE_VARIABLE = "LOC_ARENA_GATEWAY_TOKEN_FILE"  # names the file of this process's gateway token
 
 
 def environment_without_key() -> dict[str, str]:
@@ -251,7 +249,7 @@ class Provider(Protocol):
 class OpenRouterProvider:
     """The real egress: calls OpenRouter, through the gateway when ``LOC_ARENA_GATEWAY_URL`` names one.
 
-    Behind the gateway this process holds no key, only its own token, which the gateway replaces with the key.
+    Behind the gateway this process holds no key, only its token (``gateway_token``, else its token file's).
     Without a gateway the provider calls OpenRouter directly with ``OPENROUTER_API_KEY`` (never logged).
     """
 
@@ -266,19 +264,15 @@ class OpenRouterProvider:
     ) -> None:
         """Send to ``gateway_url``, else to the gateway the environment names, else to OpenRouter keyed.
 
-        Through a gateway the provider sends ``gateway_token``, else the token in the file
-        ``LOC_ARENA_GATEWAY_TOKEN_FILE`` names; with neither, the gateway refuses its calls.
-
         ``timeout`` bounds one request; callers pass ``gateway.timeout_seconds``, so a reply the gateway still
         waits for is never abandoned, paid for, and sent again. ``model_providers`` names the OpenRouter
         providers that serve each model, by model id; a call to a model with none lets OpenRouter route it.
         """
         self._model_providers = dict(model_providers or {})
         gateway_url = gateway_url or os.environ.get(GATEWAY_URL_VARIABLE)
+        token_file = Path(os.environ.get(GATEWAY_TOKEN_FILE_VARIABLE, os.devnull))  # none: an empty token
         if gateway_url:  # the gateway swaps this caller's token for the key
-            token_file = os.environ.get(GATEWAY_TOKEN_FILE_VARIABLE)
-            token = gateway_token or (Path(token_file).read_text().strip() if token_file else "")
-            self._url, self._key = gateway_url, token
+            self._url, self._key = gateway_url, gateway_token or token_file.read_text().strip()
         else:
             key = api_key if api_key is not None else os.environ.get(API_KEY_VARIABLE)
             if not key:

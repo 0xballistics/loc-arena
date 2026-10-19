@@ -21,7 +21,6 @@ from loc_arena import episode_stack
 from loc_arena.config import AgentSandboxConfig, load_run_config
 from loc_arena.episode_stack import (
     AGENT_NETWORK,
-    EGRESS_NETWORK,
     ComposeDocument,
     Identity,
     StackError,
@@ -31,7 +30,6 @@ from loc_arena.episode_stack import (
     sandbox_agent_code,
 )
 from loc_arena.gateway import core
-from loc_arena.gateway.model_gateway import RECORD_NETWORK
 from loc_arena.harness import apply_mode
 from loc_arena.recording_service import COVERT_TOOL_NAMES
 from loc_arena.settings import GatewaySettings, LocArenaSettings, StackSettings
@@ -159,25 +157,6 @@ def scenario_mounts(compose: ComposeDocument) -> dict[str, list[str]]:
         name: [volume for volume in service.get("volumes", []) if "scenarios" in volume]
         for name, service in compose["services"].items()
     }
-
-
-def test_only_the_gateway_is_on_the_network_with_a_route_out() -> None:
-    compose = render()
-
-    on_egress = [
-        name for name, service in compose["services"].items() if EGRESS_NETWORK in service["networks"]
-    ]
-
-    assert (on_egress, compose["networks"][EGRESS_NETWORK]["internal"]) == (["gateway"], False)
-
-
-def test_only_the_gateway_reaches_the_collector() -> None:
-    compose = render()
-
-    services = compose["services"]
-    on_record = [name for name, service in services.items() if RECORD_NETWORK in service["networks"]]
-
-    assert (on_record, compose["networks"][RECORD_NETWORK]["internal"]) == (["gateway", "collector"], True)
 
 
 def test_the_stack_has_one_sandbox_per_agent() -> None:
@@ -314,25 +293,6 @@ def test_every_sandbox_gets_the_settings_its_command_server_needs_in_its_command
     )
 
 
-def test_the_gateway_shares_the_episodes_network() -> None:
-    compose = render()
-
-    gateway_networks = compose["services"]["gateway"]["networks"]
-
-    assert AGENT_NETWORK in gateway_networks
-
-
-def test_the_gateway_and_the_collector_read_their_configs_from_their_secrets() -> None:
-    compose = render()
-
-    commands = {name: compose["services"][name]["command"] for name in ("gateway", "collector")}
-
-    assert commands == {
-        "gateway": ["-f", "/run/secrets/model_gateway_config"],
-        "collector": ["--config", "/run/secrets/collector_config"],
-    }
-
-
 def test_the_episode_runs_the_requested_run_and_mode() -> None:
     compose = render()
 
@@ -390,20 +350,6 @@ def test_the_limits_of_the_episode_and_of_every_sandbox_come_from_their_own_sett
 
     limits = (rendered["cpus"], rendered["mem_limit"], rendered["pids_limit"])
     assert limits == expected
-
-
-def test_the_gateway_port_is_published_on_the_hosts_loopback_alone() -> None:
-    settings = LocArenaSettings(gateway=GatewaySettings(port=9191))
-
-    published = {name: service.get("ports") for name, service in render(settings)["services"].items()}
-
-    assert published == {
-        "gateway": ["127.0.0.1::9191"],
-        "collector": None,
-        "sandbox-agent-main": None,
-        "sandbox-serving-agent": None,
-        "episode": None,
-    }
 
 
 def test_a_scripted_episode_gets_the_scripted_moves_mounted_read_only() -> None:

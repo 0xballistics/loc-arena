@@ -5,6 +5,8 @@
 - service: a malformed request's 400 names each bad field and its problem (`body.reason: missing`) but never
   what it held, not even an unexpected key's name; the stdlib client keeps the full list on the error.
 - requests: a decision's answer names the requester, so its audit line joins to the request it decides.
+- audit: a refused mutation's line says what it tried, each field cut to 500 characters; a caller that never
+  authenticated adds nothing of its own.
 
 ## 0.6.0
 - workloads: a service issues the work its caller launches a principal of its own (`POST /workloads`,

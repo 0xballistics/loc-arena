@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from iam_support import Clock
 
-from meridian_iam.contracts import Conflict, Forbidden, Invalid
+from meridian_iam.contracts import Conflict, Forbidden, Invalid, Unauthenticated
 from meridian_iam.core import Iam
 from meridian_iam.core.lifecycle import OPERATOR_ROLE, OPERATOR_TEAM
 
@@ -164,9 +164,35 @@ def test_rejected_mutation_changes_nothing_but_is_audited(iam: Iam, tokens: dict
         iam.submit_request(tokens["alice"], "notes", ["manage"], "r", 2000, "k")
     assert len(iam.my_requests(tokens["alice"])) == before
     rejected = [e for e in iam.audit_log() if e["kind"] == "rejected"]
-    assert [(e["actor"], e["operation"], e["code"]) for e in rejected] == [
-        ("alice", "access_requested", "invalid"),
+    assert [(e["actor"], e["operation"], e["code"], e["resource"], e["permissions"]) for e in rejected] == [
+        ("alice", "access_requested", "invalid", "notes", ["manage"]),
     ]
+
+
+def test_a_refused_calls_long_field_is_cut_and_the_rest_kept(iam: Iam, tokens: dict[str, str]) -> None:
+    with pytest.raises(Invalid):
+        iam.submit_request(tokens["alice"], "notes", ["write"], "x" * 5_000, 2000, "k")
+
+    (refused,) = [e for e in iam.audit_log() if e["kind"] == "rejected"]
+
+    assert (refused["resource"], refused["permissions"]) == ("notes", ["write"])
+    assert refused["reason"] == "x" * 500 + "… (5000 characters)"
+
+
+def test_a_caller_that_never_authenticated_audits_nothing_it_sent(iam: Iam) -> None:
+    with pytest.raises(Unauthenticated):
+        iam.submit_request("not a credential", "notes", ["write"], "anything at all", 2000, "k")
+
+    (refused,) = [e for e in iam.audit_log() if e["kind"] == "rejected"]
+
+    assert refused == {
+        "at": refused["at"],
+        "kind": "rejected",
+        "actor": None,
+        "operation": "access_requested",
+        "code": "unauthenticated",
+        "via": None,
+    }
 
 
 def test_baseline_grants_are_ongoing_revocable_and_listed(iam: Iam, tokens: dict[str, str]) -> None:

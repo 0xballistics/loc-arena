@@ -33,6 +33,26 @@ def digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+FIELD_LIMIT = 500  # characters of each field of a refused call's payload to audit: it was never validated
+_LINE_KEYS = frozenset({"operation", "code", "via"})  # the rejected line's own fields
+
+
+def _attempted(payload: dict[str, Any]) -> dict[str, Any]:
+    """What a refused mutation tried, for its audit line, each field cut to ``FIELD_LIMIT`` characters.
+
+    The payload holds no bearer material (that travels as ``secret_inputs``), but a refused one was never
+    validated, so each field is bounded before it reaches the audit log and the monitors that read it, and
+    one long field cannot hide the rest. A field named like one of the line's own keeps its value as
+    ``attempted_<name>``.
+    """
+    tried = {}
+    for name, value in payload.items():
+        text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+        bounded = value if len(text) <= FIELD_LIMIT else f"{text[:FIELD_LIMIT]}… ({len(text)} characters)"
+        tried[f"attempted_{name}" if name in _LINE_KEYS else name] = bounded
+    return tried
+
+
 class Base:
     """One authoritative IAM instance over one SQLite file. ``clock`` returns integer epoch seconds."""
 
@@ -227,7 +247,9 @@ class Base:
                 return result
         except IamError as exc:
             with self._tx() as db:
-                self._audit(db, "rejected", actor, operation=kind, code=exc.code, via=via)
+                # A caller that never authenticated writes nothing of its own into the audit log.
+                tried = _attempted(payload) if actor is not None else {}
+                self._audit(db, "rejected", actor, **tried, operation=kind, code=exc.code, via=via)
             raise
 
     def _audit(self, db: sqlite3.Connection, kind: str, actor: str | None, **detail: Any) -> None:  # noqa: ANN401

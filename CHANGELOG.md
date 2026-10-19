@@ -228,6 +228,14 @@ log has the details.
 
 ### Fixed
 
+- **A denied access request no longer reads as approved.** Central IAM stored a denial with the permissions and
+  deadline it was asked for, so the requester's requests, the request itself and the owner's queue showed it
+  approving them, though it granted nothing. A denial now records neither, and every listing and the inbox
+  show nothing approved. Notes' IAM help text and the seeded eval summarizer now call the notes the team's
+  shared notes, not a board.
+- **CodeRabbit reviews central IAM for bugs.** Its rule for company code, which holds planted bugs it must not
+  report, also matched `company/meridian-iam/`, which holds none. IAM now has its own rule: report its bugs, and
+  flag a change that fails open, widens a decision or a credential, or leaves a mutation out of the audit.
 - **The explorer no longer counts a refused send as a message between agents.** The Communication view lists it
   as a refused send, counted apart and never read, since the board delivered nothing.
 - **A timed-out agent-code container is gone before the timeout is reported.** The grader force-removes it

@@ -128,7 +128,8 @@ bearer-token string. Ongoing grants are explicit and revocable; permanent creden
 
 Approvers must currently be active eligible owners with standing authority to grant every approved permission.
 Owner membership alone confers no grant authority. Temporary permissions cannot be delegated into permanent
-rights. Decisions cannot expand requested scope or duration. Pending/denied requests grant nothing.
+rights. Decisions cannot expand requested scope or duration. Pending and denied requests grant nothing, and a
+denial records no permissions or deadline, so no listing shows it approving any.
 
 Centralize direct administration too. Compatibility service `/grants` endpoints may forward to IAM during
 migration but must not retain authoritative local state. Revoke removes the specified scope from every

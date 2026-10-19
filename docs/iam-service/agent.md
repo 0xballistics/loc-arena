@@ -33,6 +33,8 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
   `launch` and an `allow_delegation` for the issuing service. Never widen a delegation for convenience: a
   compromised issuer can mint everything listed for any caller who holds it.
 - **Fail closed.** An unavailable or inconsistent IAM is a 503 that runs nothing, never a missing grant.
+- **A denial records nothing granted.** `decide` stores no permissions or deadline for a denial, and every
+  listing reads an empty decision as nothing approved; that holds only while an approval is never empty.
 
 ## Building a service on IAM
 

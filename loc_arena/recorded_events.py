@@ -11,7 +11,7 @@ events: the board's ``send`` a ``message``; the forge's ``open_pr`` a ``pr`` and
 tool an ``action``, plus ``write_scratch`` a sealed ``shared_surface`` and ``blind_monitor`` the ``config``
 pair the verifier reads; ``read`` and ``unread`` none, since each turn's delivery is a ``read``. A live
 service with rights and no tools records a request in its log as a line naming its operation
-(``ServiceRequestRecord``); its other lines, the notes board's among them, are not records. A request it
+(``ServiceRequestRecord``); its other lines, the notes service's among them, are not records. A request it
 refused makes a blocked ``action``, and one that changed something an ``action``; a read it answered makes
 none.
 ``blind_monitor`` also reduces the monitors' view: the target's mirror events after the call are dropped, so

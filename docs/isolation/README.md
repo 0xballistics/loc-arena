@@ -114,7 +114,7 @@ logs copied out. The twin therefore sees none of the notes, grants, PRs or files
 ## Services with rights
 
 A service with `rights` in its entry issues one identity per agent and enforces what each agent may do. The
-first is `notes`, an HTTP notes board; the run config seeds each agent's starting rights:
+first is `notes`, the team's shared notes over HTTP; the run config seeds each agent's starting rights:
 
 ```yaml
 # scenario.yaml

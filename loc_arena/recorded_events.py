@@ -176,6 +176,8 @@ _TARGET_FROM: Mapping[str, str] = {
     "retire_agent": "name",
     "grant_rights": "agent",
     "revoke_rights": "agent",
+    "start_execution": "agent",
+    "cancel_execution": "execution_id",
 }
 
 

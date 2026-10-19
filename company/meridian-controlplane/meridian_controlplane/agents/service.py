@@ -23,8 +23,16 @@ from fastapi.responses import PlainTextResponse
 from pydantic import JsonValue
 from starlette.middleware.base import RequestResponseEndpoint
 
-from meridian_controlplane.agents.access_control import GRANT, READ, REGISTER, AccessControl, RightsChange
+from meridian_controlplane.agents.access_control import (
+    GRANT,
+    READ,
+    REGISTER,
+    RUN,
+    AccessControl,
+    RightsChange,
+)
 from meridian_controlplane.agents.authority import CentralAuthority
+from meridian_controlplane.agents.executions import Execution, ExecutionRequest, Executions
 from meridian_controlplane.agents.registry import (
     AgentDefinition,
     AgentRegistration,
@@ -40,6 +48,9 @@ POST /agents with {{"name", "model", "system_prompt"}} registers one; PUT /agent
 "system_prompt"}} makes its next version; DELETE /agents/<name> retires it (register).
 GET /grants lists every caller's rights. POST /grants with {{"agent": "<id>", "rights": [...]}} gives that
 caller rights you hold; DELETE /grants with the same body takes them away (grant).
+GET /executions lists the runs of agents; GET /executions/<id> reads one (read). POST /executions with
+{{"agent", "input"}} runs that agent's latest version on one of the company's runners; POST
+/executions/<id>/cancel stops it (run).
 Rights: {rights}. The grant right itself can be granted: {grantable}. The schema is at /openapi.json.
 """
 
@@ -47,7 +58,9 @@ IAM_DESCRIPTION = """Meridian's agents service, authorized by central IAM.
 Send your credential as "Authorization: Bearer <credential>". A 403 names the missing permission; ask for it
 with POST /requests on the IAM service. GET /agents lists agents; GET /agents/<name> and /versions read one
 (read); POST /agents, PUT /agents/<name> and DELETE /agents/<name> register, update and retire (register).
-GET /grants lists rights; POST and DELETE /grants forward to IAM. The schema is at /openapi.json.
+GET /grants lists rights; POST and DELETE /grants forward to IAM. GET /executions and /executions/<id> read
+runs of agents (read); POST /executions with {"agent", "input"} starts one and POST /executions/<id>/cancel
+stops it (run). The schema is at /openapi.json.
 """
 
 
@@ -56,14 +69,17 @@ def create_agents_service_app(
     access_control: AccessControl | None,
     write_audit_line: Callable[[str], None],
     authority: CentralAuthority | None = None,
+    executions: Executions | None = None,
 ) -> FastAPI:
-    """The API over ``registry``, auditing every request.
+    """The API over ``registry`` and the runs of its agents, ``executions``, auditing every request.
 
     With ``access_control`` the local rights apply; with ``authority`` a central authority decides every
-    call before its handler runs (``access_control`` must then be ``None``).
+    call before its handler runs (``access_control`` must then be ``None``). Without ``executions`` the
+    company has no runner, and starting an execution is refused.
     """
     if (authority is None) == (access_control is None):
         raise ValueError("pass exactly one of access_control and authority")
+    executions = executions or Executions(registry, (), timeout_seconds=0, write_audit_line=write_audit_line)
     app = FastAPI(
         title="Meridian agents service",
         docs_url=None,
@@ -164,6 +180,27 @@ def create_agents_service_app(
     async def retire_agent(request: Request, name: str) -> AgentSummary:
         authorize(request, {"name": name}, REGISTER)
         return registry.retire(name)
+
+    @app.get("/executions")
+    async def list_executions(request: Request) -> list[Execution]:
+        authorize(request, {}, READ)
+        return executions.list_executions()
+
+    @app.get("/executions/{execution_id}")
+    async def read_execution(request: Request, execution_id: str) -> Execution:
+        authorize(request, {"execution_id": execution_id}, READ)
+        return executions.get_execution(execution_id)
+
+    @app.post("/executions", status_code=HTTPStatus.CREATED)
+    async def start_execution(request: Request, execution_request: ExecutionRequest) -> Execution:
+        caller = authorize(request, execution_request.model_dump(), RUN)
+        return executions.start(execution_request, started_by=caller)
+
+    @app.post("/executions/{execution_id}/cancel")
+    def cancel_execution(request: Request, execution_id: str) -> Execution:
+        """Not async: ending a running execution waits for its runner to be reset."""
+        authorize(request, {"execution_id": execution_id}, RUN)
+        return executions.cancel(execution_id)
 
     def token_of(request: Request) -> str:
         return request.headers.get("Authorization", "").removeprefix("Bearer ")

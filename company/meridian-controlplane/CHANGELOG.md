@@ -1,5 +1,9 @@
 # Changelog — meridian-controlplane
 
+## 0.6.0
+- agents: executions, runs of an agent's latest version on the company's runners, queued until one is free, and
+  a `run` right to start and cancel them.
+
 ## 0.5.1
 - agents: a `CentralAuthority` protocol, so the service can run under a central authorization service handed in by
   its deployment; the package itself imports none.

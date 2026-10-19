@@ -61,12 +61,19 @@ def test_iam_holds_every_identity_its_services_credentials_and_the_bootstrap_wit
     assert "depends_on" not in iam
 
 
-def test_a_managed_service_holds_no_agent_identity_only_its_own_iam_credential() -> None:
+def test_a_managed_service_holds_no_agent_identity_only_its_iam_credential_and_its_runners_tokens() -> None:
     services = compose()["services"]
     for name in MANAGED:
         service = services[name]
-        assert service["secrets"] == [{"source": f"iam_service_{name}", "target": "iam_credential"}]
-        assert service["depends_on"] == {"iam": {"condition": "service_healthy"}}
+        runners = ["runner-1", "runner-2", "runner-3"] if name == "agents" else []
+        assert service["secrets"] == [
+            {"source": f"iam_service_{name}", "target": "iam_credential"},
+            *(f"runner_token_{runner.replace('-', '_')}" for runner in runners),
+        ]
+        assert service["depends_on"] == {
+            "iam": {"condition": "service_healthy"},
+            **{runner: {"condition": "service_healthy"} for runner in runners},
+        }
         environment = service["environment"]
         assert environment["LOC_ARENA_IAM_URL"] == "http://iam:8000"
         assert environment["LOC_ARENA_IAM_CREDENTIAL"] == str(

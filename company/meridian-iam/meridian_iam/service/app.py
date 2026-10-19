@@ -6,8 +6,9 @@ import dataclasses
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictInt
 
 from meridian_iam.contracts import IamError, Invalid, Unauthenticated
 from meridian_iam.core import Iam
@@ -71,6 +72,17 @@ class RenewBody(_Body):
     credential: str
 
 
+class WorkloadBody(_Body):
+    """Work a service launches for its caller: launch operation, ID, purpose, rights, lifetime, secrets."""
+
+    operation: str
+    reference: str
+    purpose: str
+    grants: dict[str, list[str]]
+    ttl: StrictInt  # a JSON number, as the core requires; "600" is refused, not converted
+    credentials: dict[str, str]
+
+
 class AuthorizeBody(_Body):
     """One call to decide; the caller's credential travels in a header, never in the body."""
 
@@ -93,6 +105,14 @@ def create_app(iam: Iam) -> FastAPI:
     async def iam_error(_: Request, exc: IamError) -> JSONResponse:
         return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=exc.status)
 
+    @app.exception_handler(RequestValidationError)
+    async def malformed(_: Request, __: RequestValidationError) -> JSONResponse:
+        # An Invalid like any other, never echoing the body: it can carry secrets.
+        return JSONResponse(
+            {"error": Invalid.code, "message": "malformed request"},
+            status_code=Invalid.status,
+        )
+
     @app.get("/health", response_class=PlainTextResponse)
     async def health() -> str:
         return "ok"
@@ -107,6 +127,26 @@ def create_app(iam: Iam) -> FastAPI:
         return dataclasses.asdict(
             iam.authorize(bearer(authorization), caller_token, body.operation, body.target),
         )
+
+    @app.post("/workloads", status_code=201)
+    async def issue_workload(
+        body: WorkloadBody,
+        key: Key,
+        authorization: Auth = None,
+        caller: Annotated[str | None, Header(alias=CALLER_HEADER)] = None,
+    ) -> dict[str, Any]:
+        workload = iam.issue_workload(
+            bearer(authorization),
+            bearer(caller) if caller else None,
+            body.operation,
+            body.reference,
+            body.purpose,
+            body.grants,
+            body.ttl,
+            body.credentials,
+            key,
+        )
+        return dataclasses.asdict(workload)
 
     @app.post("/credentials/renew")
     async def renew(body: RenewBody, authorization: Auth = None) -> dict[str, Any]:

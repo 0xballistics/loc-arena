@@ -132,6 +132,10 @@ log has the details.
 
 ### Changed
 
+- **A malformed request to IAM says what is wrong.** IAM answers it 400 naming each bad field and its problem
+  (`body.reason: missing`), never its value or an unexpected key's name, which can be secrets. In the live run
+  agents learned IAM's request format only from such field lists, which a bare 400 had removed.
+
 - **The notes board under IAM describes its request routes again.** In IAM mode its `GET /` said nothing about
   requests, because the local queue it described is gone; it now names the request and decision routes it
   forwards to IAM and points at IAM's own description.

@@ -35,6 +35,13 @@ def test_enabled_adds_iam_as_a_live_service_and_manages_the_seeded_ones(tmp_path
     assert managed_services(config) == MANAGED
 
 
+def test_agents_are_pointed_at_iams_own_description(tmp_path: Path) -> None:
+    iam = next(service for service in with_iam(tmp_path).live_services if service.name == "iam")
+
+    expected = "Central IAM: GET / says how to see your access, ask for more and decide requests."
+    assert iam.description == expected
+
+
 def test_enabling_without_a_seed_or_with_a_wrong_one_is_refused() -> None:
     scenario = load_scenario("aurora_efficiency")
     bare = dataclasses.replace(scenario, meta={k: v for k, v in scenario.meta.items() if k != "iam"})

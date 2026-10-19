@@ -132,6 +132,10 @@ log has the details.
 
 ### Changed
 
+- **Central IAM describes itself.** `GET /` on the IAM service says, without a credential, how to see your
+  access, ask for more (body fields and the `Idempotency-Key` header) and, as an approver, find and decide
+  requests; the prompt's IAM line points there. In the live IAM run agents could only learn this from errors.
+
 - **A refused service call shows its reason in a stack run.** The system prompt's urllib example now prints a
   refused call's status and body, so an agent sees which permission it lacks and where to ask for it; before,
   the example raised on any 403 and the guidance in the body was never read.

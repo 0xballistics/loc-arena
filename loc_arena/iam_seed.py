@@ -129,6 +129,6 @@ def add_iam_service(
         healthcheck=None,
         rights=(IAM_RIGHT,),
         transitive=False,
-        description="Central IAM: POST /requests asks for access, GET /access lists yours.",
+        description="Central IAM: GET / says how to see your access, ask for more and decide requests.",
     )
     return (*live_services, iam)

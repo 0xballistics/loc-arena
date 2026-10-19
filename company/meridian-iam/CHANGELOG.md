@@ -1,5 +1,8 @@
 # Changelog — meridian-iam
 
+## Unreleased
+- service: `GET /` describes the API to anyone: how to see access, ask for more and decide requests.
+
 ## 0.6.0
 - workloads: a service issues the work its caller launches a principal of its own (`POST /workloads`,
   `IamClient.issue_workload`), through a manifest operation marked `launch`, with only the grants the seed lets it

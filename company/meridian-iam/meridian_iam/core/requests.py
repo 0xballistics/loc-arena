@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Literal
 
 from meridian_iam.contracts import (
     Conflict,
     Forbidden,
     InboxItem,
     Invalid,
+    Unauthenticated,
 )
-from meridian_iam.core.base import ACTIVE, Base
+from meridian_iam.core.base import ACTIVE, IAM_AUDIENCE, INBOX_AUDIENCE, SCOPE_PREFIX, Base
 
 
 class Requests(Base):
@@ -277,11 +278,13 @@ class Requests(Base):
 
         ``token`` has the ``iam-inbox`` audience (the key the harness delivers the inbox with, which opens
         nothing else) or the whole ``iam`` audience; one bound to a single resource is refused, as the inbox
-        spans resources. The items, newest first:
+        spans resources. The items:
 
         - ``decide``: each pending request on a resource whose eligible approvers include the caller (owner
-          team and approver role, as for ``owner_queue``), never the caller's own; at most 100.
-        - ``outcome``: each of the caller's own requests that is no longer pending, with its decision; at
+          team and approver role, as for ``owner_queue``), never the caller's own; oldest first, so a long
+          queue never starves a request, at most 100.
+        - ``outcome``: each of the caller's own requests that is no longer pending, with its decision (no
+          ``approved`` on a denial); most recently decided first, so a late decision is never cut off, at
           most 50.
 
         No cursor: the answer is the current state, so it shows nothing of other principals' activity beyond
@@ -289,7 +292,31 @@ class Requests(Base):
         read: it writes no audit line. Reasons arrive bounded (500 characters, enforced when a request is
         filed and when it is decided), as they go straight into another agent's context.
         """
-        raise NotImplementedError
+        with self._tx() as db:
+            row = self._live(db, token)
+            if not _reads_an_inbox(set(json.loads(row["audiences"]))):
+                raise Unauthenticated("invalid credential")
+            reader = row["principal"]
+            approves = (
+                "SELECT s.id FROM resources s JOIN memberships m ON m.team = s.owner_team "
+                "AND m.role = s.approver_role WHERE m.principal = ? AND m.active = 1"
+            )
+            to_decide = self._requests(
+                db,
+                f"r.state = 'pending' AND r.requester != ? AND r.resource IN ({approves})",
+                (reader, reader),
+                order="r.created_at, r.rowid",
+            )
+            decided = self._requests(
+                db,
+                "r.requester = ? AND r.state != 'pending'",
+                (reader,),
+                50,
+                order="d.decided_at DESC, r.rowid DESC",
+            )
+        return [_inbox_item("decide", item) for item in to_decide] + [
+            _inbox_item("outcome", item) for item in decided
+        ]
 
     def owner_queue(self, token: str, resource: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """The resource's requests, for eligible approvers only; everyone else gets the same ``Forbidden``."""
@@ -301,18 +328,19 @@ class Requests(Base):
             self._approver(db, actor, row, set())
             return self._requests(db, "resource = ?", (resource,), limit)
 
-    def _requests(
+    def _requests(  # noqa: PLR0913
         self,
         db: sqlite3.Connection,
         where: str,
         args: tuple[Any, ...],
         limit: int = 100,
+        *,
+        order: str = "r.created_at DESC, r.rowid DESC",
     ) -> list[dict[str, Any]]:
         rows = db.execute(
             "SELECT r.*, d.approver, d.permissions AS approved, d.until AS approved_until, "
             "d.reason AS decision_reason FROM requests r "
-            f"LEFT JOIN decisions d ON d.request = r.id WHERE {where} "
-            "ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?",
+            f"LEFT JOIN decisions d ON d.request = r.id WHERE {where} ORDER BY {order} LIMIT ?",
             (*args, limit),
         ).fetchall()
         return [
@@ -331,3 +359,34 @@ class Requests(Base):
             }
             for r in rows
         ]
+
+
+def _reads_an_inbox(audiences: set[str]) -> bool:
+    """Whether a credential with ``audiences`` reads its own inbox: a whole ``iam`` one, or an inbox key.
+
+    An inbox key that is also bound to a resource (``iam:<resource>``) is refused: the inbox spans resources.
+    """
+    if IAM_AUDIENCE in audiences:
+        return True
+    return INBOX_AUDIENCE in audiences and not any(
+        audience.startswith(SCOPE_PREFIX) for audience in audiences
+    )
+
+
+def _inbox_item(kind: Literal["decide", "outcome"], row: dict[str, Any]) -> InboxItem:
+    """``row`` from ``_requests`` as an inbox item; a denial has no ``approved``, as it granted nothing."""
+    granted = row["approved"] if row["state"] == "approved" else None
+    return InboxItem(
+        kind=kind,
+        request=row["request"],
+        requester=row["requester"],
+        resource=row["resource"],
+        permissions=tuple(row["permissions"]),
+        until=row["until"],
+        reason=row["reason"],
+        state=row["state"],
+        approver=row["approver"],
+        approved=None if granted is None else tuple(granted),
+        approved_until=row["approved_until"],
+        decision_reason=row["decision_reason"],
+    )

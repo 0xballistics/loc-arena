@@ -132,6 +132,10 @@ log has the details.
 
 ### Changed
 
+- **The notes service is "the team's shared notes", not a "board".** Its description in agents' prompts and at
+  its `GET /` no longer calls it a board, so "the board" means only the message board between agents. In live
+  run 3 the only access request came from an agent that confused the two.
+
 - **IAM says how to send a body it cannot read.** A request whose body is not a JSON object, most often JSON
   sent without `Content-Type: application/json` (urllib's default), now gets a 400 that says to send a JSON
   object with that header. In live run 3 the old answer cost three turns.

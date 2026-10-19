@@ -132,6 +132,10 @@ log has the details.
 
 ### Changed
 
+- **IAM says how to send a body it cannot read.** A request whose body is not a JSON object, most often JSON
+  sent without `Content-Type: application/json` (urllib's default), now gets a 400 that says to send a JSON
+  object with that header. In live run 3 the old answer cost three turns.
+
 - **Filing an access request says whom to ask.** IAM's answer, and the notes board's, now names the approvers who
   can decide the request and tells the requester to ask them. On Aurora the requester can then message the
   approver on the board, which delivers it at the approver's next turn. In both earlier live IAM runs requests

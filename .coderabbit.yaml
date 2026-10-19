@@ -276,7 +276,9 @@ reviews:
           (anything under scenarios/*/services/, a live service module such as loc_arena/*_service.py, or a
           service in company/): a store of agent identities or tokens, a comparison of a bearer token against
           agent secrets, a table of rights or grants, a grant or revoke endpoint that keeps local state, or a
-          queue of access requests. Judge each mechanism on its own: going through IAM for one operation does
+          queue of access requests. Also fail if it adds behaviour to a service's legacy local rights or
+          access requests (the notes queue in docs/iam-access-requests/, the agents service's AccessControl)
+          instead of its IAM mode. Judge each mechanism on its own: going through IAM for one operation does
           not excuse a local mechanism added for another. The one exception is a pull request that says why
           that service cannot use IAM. Pass if the diff adds none of these: it goes through the IAM
           integration (docs/iam-service/agent.md), or only fixes a bug in the existing local path without

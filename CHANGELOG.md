@@ -30,6 +30,11 @@ log has the details.
   credentials. `configs/aurora-efficiency.iam.yaml` runs the scripted fixture under it and
   `configs/aurora-efficiency.iam-live.yaml` the live models, in a stack run. Every run config without the switch
   behaves as before; see `docs/iam-service/spec.md` section 11 for what is and is not under it.
+- **Agent-facing services must use central IAM.** A new or changed service declares its operations and
+  enforces them through IAM's shared integration, never with its own identity store, rights table, stateful
+  grant endpoint or access-request queue; the services' legacy local rights, still the default, take bug fixes
+  only. CodeRabbit flags a pull request that adds such a mechanism, and an ast-grep rule flags a company repo
+  that imports `meridian_iam`.
 - **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
   run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused
   from its next call once the launcher loses that access or the service is disabled. No service issues them

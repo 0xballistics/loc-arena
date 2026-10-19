@@ -4,6 +4,7 @@ const review = { user: { login: 'coderabbitai[bot]' }, commit_id: 'latest', body
 const clean = { head: 'latest', status: 'success', description: 'Review completed', reviews: [review], comments: [], unresolved: 0 };
 assert.equal(evaluate(clean).ok, true);
 assert.equal(evaluate({ ...clean, reviews: [] }).ok, true);
+assert.equal(evaluate({ ...clean, description: 'Review approved' }).ok, true);
 assert.equal(evaluate({ ...clean, reviews: [{ ...review, state: 'PENDING', body: '**Actionable comments posted: 2**' }] }).ok, true);
 assert.equal(evaluate({ ...clean, description: 'Review skipped' }).ok, false);
 assert.equal(evaluate({ ...clean, status: undefined, description: undefined }).ok, false);

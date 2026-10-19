@@ -3,8 +3,11 @@ const bot = login => login === 'coderabbitai[bot]' || login === 'coderabbitai';
 
 // CodeRabbit posts a review only when it has something to say, so a clean review of the head is its commit status
 // alone: statuses belong to one commit, and "Review completed" (not "Review skipped") means it reviewed this one.
+// Approving the pull request replaces that description with "Review approved", which also means it did.
+const REVIEWED = new Set(['Review completed', 'Review approved']);
+
 function evaluate({ head, status, description, reviews, comments, unresolved }) {
-  if (status !== 'success' || description !== 'Review completed') {
+  if (status !== 'success' || !REVIEWED.has(description)) {
     return { ok: false, reason: 'CodeRabbit has not completed a review of the latest commit.' };
   }
   const current = reviews.filter(r => bot(r.user.login) && r.commit_id === head && r.state !== 'PENDING');

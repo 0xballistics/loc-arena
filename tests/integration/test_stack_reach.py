@@ -27,6 +27,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import hashlib
+import io
 import json
 import os
 import secrets
@@ -34,6 +35,7 @@ import shlex
 import signal
 import socket
 import subprocess
+import tarfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -203,7 +205,6 @@ import concurrent.futures
 import dataclasses
 import ipaddress
 import json
-import functools
 import os
 import subprocess
 import sys
@@ -1028,17 +1029,14 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
             service: json.loads(run_in(service, "python", "-c", list_files))
             for service in (NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name)
         }
-        mounts_of_gateway = run_docker(
-            "inspect",
-            "--format",
-            "{{json .Mounts}}",
-            containers[GATEWAY_SERVICE],
+        # Its image has no shell: its secrets directory is listed from a tar stream of it.
+        secrets_tar = subprocess.run(
+            ["docker", "cp", f"{containers[GATEWAY_SERVICE]}:{gateway.secrets_dir}", "-"],
+            capture_output=True,
         ).stdout
-        service_secrets[GATEWAY_SERVICE] = sorted(
-            Path(mount["Destination"]).name
-            for mount in json.loads(mounts_of_gateway)
-            if Path(mount["Destination"]).parent == gateway.secrets_dir
-        )
+        with tarfile.open(fileobj=io.BytesIO(secrets_tar)) as listed_secrets:
+            names = [Path(member.name) for member in listed_secrets.getmembers() if member.isfile()]
+        service_secrets[GATEWAY_SERVICE] = sorted(name.name for name in names)
 
         def read_log(service: str) -> list[str]:
             logged = run_docker(*compose, "logs", "--no-log-prefix", service, env=environment)
@@ -1240,6 +1238,7 @@ def test_the_episode_container_holds_every_sandbox_token_and_no_other_secret(sta
     held = stack_run.episode_secrets
 
     assert held == [
+        "gateway_token",
         "sandbox_token_agent_main",
         "sandbox_token_controlplane_agent",
         "sandbox_token_datapipe_agent",
@@ -1331,6 +1330,7 @@ def test_no_container_of_the_project_mounts_the_docker_socket(stack_run: StackRu
         service: []
         for service in [
             GATEWAY_SERVICE,
+            "collector",
             EPISODE_SERVICE,
             TOOLS_GATEWAY_SERVICE,
             *(live.name for live in CONFIG.live_services),

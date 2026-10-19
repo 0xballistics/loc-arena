@@ -307,6 +307,13 @@ class Requests(Base):
             requests = self._requests(db, "requester = ?", (row["principal"],))
         return [r for r in requests if bound is None or r["resource"] in bound]
 
+    def inbox_reader(self, token: str) -> str:
+        """The principal whose inbox ``token`` may read: one with the ``iam-inbox`` or ``iam`` audience.
+
+        ``Unauthenticated`` for any other credential, including one bound to a single resource.
+        """
+        raise NotImplementedError
+
     def inbox(self, token: str) -> list[InboxItem]:
         """What the caller should know about access requests now: what it may decide, and its own outcomes.
 

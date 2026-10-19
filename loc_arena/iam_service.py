@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
+from starlette.applications import Starlette
 
 from loc_arena.config import load_run_config
 from loc_arena.iam_bootstrap import BOOTSTRAP_SECRET, IAM_AUDIENCE, SERVICE_CREDENTIAL_PREFIX
@@ -107,6 +108,15 @@ def _seed(
         if agent in agents and (service == iam_name or service in managed):
             audiences = [IAM_AUDIENCE] if service == iam_name else [service, f"{SCOPE_PREFIX}{service}"]
             iam.import_credential(agent, token, audiences, label=service)
+
+
+def serving_app(iam: Iam, service: str) -> Starlette:
+    """IAM's HTTP API with its ``access_inbox`` MCP server at ``/mcp``, for requests addressed to ``service``.
+
+    One app on one port and one event loop, so the tool and the HTTP handlers never touch the core at once. It
+    refuses to start unless the tools it serves are exactly the ``iam`` live service's ``tools``.
+    """
+    raise NotImplementedError
 
 
 def main(arguments: list[str]) -> None:

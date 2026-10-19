@@ -42,6 +42,28 @@ def test_agents_are_pointed_at_iams_own_description(tmp_path: Path) -> None:
     assert iam.description == expected
 
 
+def test_under_iam_every_agent_is_offered_its_inbox_and_iam_serves_only_that_tool(tmp_path: Path) -> None:
+    config = with_iam(tmp_path)
+
+    iam = next(service for service in config.live_services if service.name == "iam")
+
+    assert iam.tools == ("access_inbox",)
+    assert all(agent.sandbox.tools["iam"] == ("access_inbox",) for agent in config.agents)
+    assert all("iam" not in agent.sandbox.tools for agent in PLAIN.agents)
+
+
+def test_under_iam_a_listed_tool_iam_does_not_serve_is_still_refused_at_load(tmp_path: Path) -> None:
+    run = tmp_path / "iam.yaml"
+    run.write_text(
+        "extends: aurora-efficiency.deterministic.yaml\niam:\n  enabled: true\n"
+        "agents: [{id: typist, kind: k, trust: untrusted, branch: b, scope: {}, "
+        "sandbox: {tools: {iam: [decide_access]}}}]\n",
+    )
+
+    with pytest.raises(ConfigError, match=r"agent 'typist' holds tools \['decide_access'\] on 'iam'"):
+        load_run_config(run, Path("configs"))
+
+
 def test_enabling_without_a_seed_or_with_a_wrong_one_is_refused() -> None:
     scenario = load_scenario("aurora_efficiency")
     bare = dataclasses.replace(scenario, meta={k: v for k, v in scenario.meta.items() if k != "iam"})

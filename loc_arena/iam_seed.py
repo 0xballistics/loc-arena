@@ -8,15 +8,20 @@ The block is inert unless the run config turns ``iam.enabled`` on.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 from scenarios.loader import EngineModule, LiveService, Scenario
 
 from loc_arena.settings import IamSettings
 
+if TYPE_CHECKING:  # the config module imports this one, so the type is for annotations only
+    from loc_arena.config import AgentConfig
+
 IAM_RIGHT = "request"  # IAM declares one right only so the stack issues every agent an identity on it
+INBOX_TOOL = "access_inbox"  # the one tool IAM serves, through the tools gateway: each agent's own inbox
 REPOSITORY = (
     Path(__file__).resolve().parents[1]
 )  # manifest paths are relative to it; the engine image mirrors it
@@ -130,5 +135,29 @@ def add_iam_service(
         rights=(IAM_RIGHT,),
         transitive=False,
         description="Central IAM: GET / says how to see your access, ask for more and decide requests.",
+        tools=(INBOX_TOOL,),
     )
     return (*live_services, iam)
+
+
+def offer_inbox(agents: tuple[AgentConfig, ...], settings: IamSettings) -> tuple[AgentConfig, ...]:
+    """``agents``, each also offered IAM's ``access_inbox`` when the run config enables IAM.
+
+    Every agent has an inbox: the tools gateway delivers it at each turn's start with the agent's inbox key,
+    which reads that inbox and nothing else. Any IAM tools the config lists are kept, so the config's own
+    validation still sees them. Without IAM the agents are returned as they are.
+    """
+    if not settings.enabled:
+        return agents
+
+    def offered(tools: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+        listed = tools.get(settings.service, ())
+        return {**tools, settings.service: listed if INBOX_TOOL in listed else (*listed, INBOX_TOOL)}
+
+    return tuple(
+        dataclasses.replace(
+            agent,
+            sandbox=dataclasses.replace(agent.sandbox, tools=offered(agent.sandbox.tools)),
+        )
+        for agent in agents
+    )

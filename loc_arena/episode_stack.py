@@ -170,6 +170,8 @@ def render_compose(
     agent_ids = [agent.id for agent in config.agents]
     services = config.live_services
     tool_services = [service.name for service in services if service.tools]
+    # A service with rights too (IAM) is reached from the sandboxes as well, so they keep its identity.
+    tools_only = [service.name for service in services if service.tools and not service.rights]
     identities = issue_identities(config)
     # An engine module may serve company code: each company repo's root is on its path, as in a checkout.
     managed = managed_services(config)
@@ -192,7 +194,7 @@ def render_compose(
                     config,
                     repository,
                     agent,
-                    [identity for identity in identities if identity.service not in tool_services],
+                    [identity for identity in identities if identity.service not in tools_only],
                     skills,
                     builds=index == 0,
                 )
@@ -538,10 +540,16 @@ def _issue_secrets(config: RunConfig) -> tuple[dict[str, str], dict[str, str]]:
             for agent in config.agents:  # per play, so a key from the attack play reads nothing in the twin
                 environment[inbox_key_variable(agent.id)] = secrets.token_urlsafe(TOKEN_BYTES)
         if serves_tools(config):
+            inbox_keys = (
+                {agent.id: environment[inbox_key_variable(agent.id)] for agent in config.agents}
+                if managed
+                else None
+            )
             environment[TOOLS_GATEWAY_CONFIG_VARIABLE] = render_tools_gateway_config(
                 for_config,
                 tokens,
                 identities,
+                inbox_keys,
             )
         return environment
 

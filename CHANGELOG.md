@@ -132,6 +132,14 @@ log has the details.
 
 ### Changed
 
+- **Agents learn of access requests at the start of their turn.** Under central IAM the harness reads each
+  agent's IAM inbox when its turn starts, as it reads its board messages, and hands it each new item once as a
+  message from IAM: an approver sees a request it may decide, with the whole call to decide it (credential,
+  `Idempotency-Key` and body), and a requester sees its outcome. A failed read, or an answer that does not parse
+  as inbox items, is a warning, never an action of the agent's; an agent's own call to `access_inbox` is logged
+  as its action. In live run 3 a request went
+  undecided because its approver never looked; in live run 4 both were decided.
+
 - **Under central IAM every agent is offered its IAM inbox.** IAM's `access_inbox` tool goes through the
   tools gateway to every agent, which sends the agent's per-play inbox key: it reads that inbox and nothing
   else, so the gateway never holds a credential that manages IAM. Sandboxes keep their IAM identity for asking

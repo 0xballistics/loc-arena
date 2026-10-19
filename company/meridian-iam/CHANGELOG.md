@@ -12,6 +12,8 @@
   stripped like a request's, and a denial grants nothing, so it takes no permissions or deadline.
 - requests: filing answers with the `approvers` who can decide the request now (active approvers holding
   any of it, never the requester) and a `next` step saying whom to ask, or that nobody can approve it now.
+- service: a body IAM cannot read as a JSON object (most often JSON sent without `Content-Type:
+  application/json`) is answered with how to send it.
 
 ## 0.6.0
 - workloads: a service issues the work its caller launches a principal of its own (`POST /workloads`,

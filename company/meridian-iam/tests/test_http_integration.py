@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from http import HTTPStatus
 from typing import Any
@@ -314,3 +315,17 @@ def test_a_malformed_dict_field_never_echoes_its_keys(iam: Iam, tokens: dict[str
 
     assert reply.json()["fields"] == ["body.credentials: string_type", "header.Idempotency-Key: missing"]
     assert audience not in reply.text
+
+
+def test_a_body_iam_cannot_read_says_how_to_send_it(iam: Iam, tokens: dict[str, str]) -> None:
+    body = json.dumps({"resource": "notes", "permissions": ["read"], "reason": "need it"})
+    headers = {
+        **bearer(tokens["alice"]),
+        "Idempotency-Key": "k",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    reply = TestClient(create_app(iam)).post("/requests", content=body, headers=headers)
+
+    assert reply.status_code == HTTPStatus.BAD_REQUEST
+    assert reply.json()["fields"] == ["body: send a JSON object with Content-Type: application/json"]

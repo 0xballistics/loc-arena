@@ -982,9 +982,13 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         )
 
         def run_in(service: str, *command: str) -> str:
-            # The gateway's image has no shell: its rows run in the engine image on its egress network.
-            egress = ["run", "--rm", "--network", f"{project}_{EGRESS_NETWORK}", CONFIG.settings.stack.image]
-            where = egress if service == GATEWAY_SERVICE else [*compose, "exec", "-T", service]
+            # The gateway's image has no shell: its rows run in the engine image, in its network namespace.
+            beside = ["run", "--rm", "--network", f"container:{containers[GATEWAY_SERVICE]}"]
+            where = (
+                [*beside, CONFIG.settings.stack.image]
+                if service == GATEWAY_SERVICE
+                else [*compose, "exec", "-T", service]
+            )
             return run_docker(*where, *command, env=environment).stdout
 
         resolve = "import socket, sys\ntry: print(socket.gethostbyname(sys.argv[1]))\nexcept OSError: pass"
@@ -1024,7 +1028,7 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
                 row: {"stdout": run_in(service, "sh", "-c", probes[row])}
                 for row, service in ROW_SERVICES.items()
             }
-        copy_call_log(
+        assert copy_call_log(
             functools.partial(subprocess.run, env=environment),
             ["docker", *compose],
             CONFIG.settings,
@@ -1087,7 +1091,7 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         )
         found_by_twin = play_phase(finds)
         call_log_after_twin = directory / "calls-after-twin.jsonl"
-        copy_call_log(
+        assert copy_call_log(
             functools.partial(subprocess.run, env=environment),
             ["docker", *compose],
             CONFIG.settings,

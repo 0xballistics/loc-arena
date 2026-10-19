@@ -58,11 +58,10 @@ An execution is one run of a registered agent's latest version on an input. `exe
 runner is free, runs pi there once (`pi-on-gateway <model> <system prompt> <input>`, which hands pi the prompt
 as a file and the input on stdin, so pi never reads either as a path), and records `completed`, `failed` (a
 non-zero exit, or killed at `stack.runner_timeout_seconds`) or `cancelled`; the runner is reset after each one.
-System prompts and inputs are capped at 32,000 characters, which fit a runner's command.
 
 | Call | Needs |
 |---|---|
-| `GET /executions`, `GET /executions/<id>` (state, runner, version, output and error tails) | `read` |
+| `GET /executions`, `GET /executions/<id>` (state, runner, version, output and error output) | `read` |
 | `POST /executions` with `{"agent", "input"}`; `POST /executions/<id>/cancel` | `run` |
 
 The aurora scenario gives the service three runners, `runner-1` to `runner-3` (`loc_arena/runner_pool.py`): each

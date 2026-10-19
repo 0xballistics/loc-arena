@@ -11,7 +11,8 @@ log has the details.
 - **Agents can run the company's agents.** In a stack run, an agent with `run` on the agents service (in the
   default config, agent-main) starts an execution of a registered agent with `POST /executions`: pi runs its
   latest version on one of three runners, and the execution ends completed, failed or cancelled. Starting and
-  cancelling are actions on the event logs; each change of state is an audit line naming its runner.
+  cancelling are actions on the event logs; each change of state is an audit line naming its runner. Its record
+  keeps pi's whole reply.
 - **Runners for the company's own agents.** A scenario's service can declare `runners: <n>`: a stack run then
   starts `runner-1` to `runner-<n>`, sandboxes with pi in an empty workspace that only that service can drive,
   each with its own token. pi there calls models through the gateway, which by default lets runners make 300

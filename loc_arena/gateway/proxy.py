@@ -4,7 +4,8 @@ Anything that works against OpenRouter works against the gateway by changing its
 included. The gateway replaces the caller's ``Authorization`` header with the real key, forwards a request on
 an allowed path to the one upstream in ``settings.gateway``, and returns the reply unchanged. Each call
 appends one line to the sealed call log, which only the gateway's container mounts. The caller is named by
-the reverse DNS name of its address: on a compose network, the container name.
+the reverse DNS name of its address: on a compose network, the container name. A runner, where the company's
+own agents run, may call only ``settings.gateway.runner_models``, and only so many times a play.
 
 The gateway does not retry: a caller's own bounded retries (``OpenRouterProvider``) would multiply with them.
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import socket
 import time
 from collections.abc import AsyncIterator
@@ -29,6 +31,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from scenarios.loader import RUNNER_PREFIX
 
 from loc_arena.config import load_settings
 from loc_arena.settings import GatewaySettings
@@ -43,6 +46,7 @@ DROPPED_RESPONSE_HEADERS = frozenset(
 )
 # The caller's name when the server reports no peer address (an in-process test transport).
 UNKNOWN_CALLER = "unknown"
+PROJECT_PREFIX = "locarena-"  # each stack run's compose project is locarena-<instance id>
 # The gateway listens on every interface of its container; compose decides which networks reach it.
 ALL_INTERFACES = "0.0.0.0"
 
@@ -73,7 +77,7 @@ class GatewayCall(BaseModel):
 
 def locate_call_log(logs: Path, instance_id: str) -> Path:
     """Where a stack run copies its gateway's call log: in ``logs``, named after the run's compose project."""
-    return logs / "gateway" / f"locarena-{instance_id}.calls.jsonl"
+    return logs / "gateway" / f"{PROJECT_PREFIX}{instance_id}.calls.jsonl"
 
 
 def resolve_caller_name(address: str) -> str:
@@ -82,6 +86,17 @@ def resolve_caller_name(address: str) -> str:
         return socket.gethostbyaddr(address)[0]
     except OSError:
         return address
+
+
+def name_compose_service(caller: str) -> str:
+    """The compose service of the container ``caller`` names, as a stack run names its containers.
+
+    ``locarena-ab12cd-runner-1-1.locarena-ab12cd_agent-net`` is ``runner-1``; a name from outside a stack run
+    is its first label.
+    """
+    container = caller.partition(".")[0]
+    in_project = re.fullmatch(rf"{PROJECT_PREFIX}[0-9a-f]+-(.+)-\d+", container)
+    return in_project.group(1) if in_project else container
 
 
 def parse_body(raw: bytes) -> JsonValue:
@@ -106,7 +121,7 @@ def write_call(
     call = GatewayCall(
         started_at=started_at,
         seconds=round(time.time() - started_at, 3),
-        caller=resolve_caller_name(request.client.host) if request.client else UNKNOWN_CALLER,
+        caller=request.state.caller,
         method=request.method,
         path=request.url.path,
         request=parse_body(body),
@@ -129,10 +144,27 @@ def create_proxy_app(
         base_url=str(settings.upstream),
         timeout=settings.timeout_seconds,
     )
+    forwarded_runner_calls = 0
+
+    def refuse_beyond_runner_limits(caller: str, body: bytes) -> tuple[HTTPStatus, str] | None:
+        """Why a runner's call is refused, if it is; a call the limits admit counts against them."""
+        nonlocal forwarded_runner_calls
+        if not name_compose_service(caller).startswith(RUNNER_PREFIX):
+            return None
+        requested = parse_body(body)
+        if not isinstance(requested, dict) or requested.get("model") not in settings.runner_models:
+            return HTTPStatus.FORBIDDEN, f"runners may call only {', '.join(settings.runner_models)}"
+        if forwarded_runner_calls >= settings.runner_calls_per_play:
+            return (
+                HTTPStatus.TOO_MANY_REQUESTS,
+                f"the runners made this play's {forwarded_runner_calls} calls",
+            )
+        forwarded_runner_calls += 1
+        return None
 
     async def record(request: Request, body: bytes, status: int, reply: bytes, *, complete: bool) -> None:
         # Shielded: a caller that hangs up cancels its call, never the record of it. Off the event loop:
-        # naming the caller may block on DNS.
+        # writing may block.
         with anyio.CancelScope(shield=True):
             await run_in_threadpool(write_call, settings.call_log, request, body, status, reply, complete)
 
@@ -170,9 +202,15 @@ def create_proxy_app(
     @app.api_route("/{path:path}", methods=[method.value for method in HTTPMethod])
     async def forward(path: str, request: Request) -> Response:
         request.state.started_at = time.time()
+        # Off the event loop: naming the caller may block on DNS.
+        request.state.caller = await run_in_threadpool(
+            lambda: resolve_caller_name(request.client.host) if request.client else UNKNOWN_CALLER,
+        )
         body = await request.body()
         if path not in settings.allowed_paths:
             return await refuse(request, body, HTTPStatus.FORBIDDEN, f"the gateway does not forward /{path}")
+        if refusal := refuse_beyond_runner_limits(request.state.caller, body):
+            return await refuse(request, body, *refusal)
         headers = {
             name: value for name, value in request.headers.items() if name not in DROPPED_REQUEST_HEADERS
         }

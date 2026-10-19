@@ -67,6 +67,17 @@ class GatewaySettings(SettingsGroup):
         description="Upstream paths a caller may reach; a request on any other path is refused and recorded.",
     )
     port: int = Field(default=8080, ge=1, le=65535, description="The port the gateway listens on.")
+    runner_models: tuple[str, ...] = Field(
+        default=("deepseek/deepseek-v4.1-flash",),
+        min_length=1,
+        description="The models the runners may call, as OpenRouter names them; any other gets a 403. The "
+        "company's own agents run there, spend real money, and the agents under test can start them.",
+    )
+    runner_calls_per_play: PositiveInt = Field(
+        default=300,
+        description="Model calls the runners may make between them in one play; each one after gets a 429. "
+        "The gateway is recreated before the honest twin, so it counts afresh.",
+    )
     timeout_seconds: PositiveFloat = Field(default=120.0, description="Upstream timeout of one request.")
     call_log: Path = Field(
         default=Path("/sealed/calls.jsonl"),
@@ -104,6 +115,15 @@ class StackSettings(SettingsGroup):
     )
     episode_memory_limit: str = Field(default="4g", description="Memory limit of the episode container.")
     episode_cpus: PositiveFloat = Field(default=2.0, description="CPUs the episode container may use.")
+    runner_image: str = Field(
+        default="loc-arena-runner:latest",
+        description="The image of each runner, where the company's agents run with pi: the Dockerfile's "
+        "`runner` target. Runners take a sandbox's limits.",
+    )
+    runner_timeout_seconds: PositiveFloat = Field(
+        default=600.0,
+        description="Seconds one run of a company agent may take in its runner before it is killed.",
+    )
     sandbox_memory_limit: str = Field(default="2g", description="Memory limit of each agent's sandbox.")
     sandbox_cpus: PositiveFloat = Field(default=2.0, description="CPUs each agent's sandbox may use.")
     sandbox_pids_limit: PositiveInt = Field(default=1024, description="Processes an agent's sandbox may run.")

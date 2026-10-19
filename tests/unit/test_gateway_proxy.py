@@ -19,7 +19,7 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from loc_arena.gateway.proxy import GatewayCall, GatewaySecrets, create_proxy_app
+from loc_arena.gateway.proxy import GatewayCall, GatewaySecrets, create_proxy_app, name_compose_service
 from loc_arena.settings import GatewaySettings
 from pydantic import SecretStr, ValidationError
 
@@ -30,6 +30,8 @@ COMPLETION = {
     "choices": [{"message": {"content": "hi"}}],
     "usage": {"prompt_tokens": 3, "completion_tokens": 1},
 }
+# A caller no address resolves to, named by its first label: a runner's compose service.
+RUNNER = "runner-1.invalid"
 STREAM = b'data: {"choices":[{"delta":{"content":"h"}}]}\n\ndata: {"choices":[{"delta":{"content":"i"}}]}\n\n'
 
 Upstream = Callable[[httpx2.Request], httpx2.Response]
@@ -70,15 +72,20 @@ class SlowStream(httpx2.AsyncByteStream):
         yield STREAM[20:]
 
 
-def build_gateway_app(tmp_path: Path, upstream: Upstream) -> FastAPI:
-    settings = GatewaySettings(call_log=tmp_path / "calls.jsonl")
+def build_gateway_app(tmp_path: Path, upstream: Upstream, **runner_limits: object) -> FastAPI:
+    settings = GatewaySettings.model_validate({"call_log": tmp_path / "calls.jsonl", **runner_limits})
     client = httpx2.AsyncClient(base_url=str(settings.upstream), transport=httpx2.MockTransport(upstream))
     return create_proxy_app(settings, SecretStr(KEY), upstream_client=client)
 
 
-def open_gateway(tmp_path: Path, upstream: Upstream) -> TestClient:
-    app = build_gateway_app(tmp_path, upstream)
-    return TestClient(app, client=("127.0.0.1", 50000), raise_server_exceptions=False)
+def open_gateway(
+    tmp_path: Path,
+    upstream: Upstream,
+    caller: str = "127.0.0.1",
+    **runner_limits: object,
+) -> TestClient:
+    app = build_gateway_app(tmp_path, upstream, **runner_limits)
+    return TestClient(app, client=(caller, 50000), raise_server_exceptions=False)
 
 
 def wait_for_calls(tmp_path: Path, timeout_seconds: float = 5.0) -> list[GatewayCall]:
@@ -246,3 +253,42 @@ def test_a_caller_hanging_up_mid_stream_is_recorded_as_incomplete(
 
     [call] = wait_for_calls(tmp_path)
     assert (call.response, call.complete) == (STREAM[:20].decode(), False)
+
+
+@pytest.mark.parametrize(
+    ("caller", "service"),
+    [
+        ("locarena-ab12cd-runner-1-1.locarena-ab12cd_agent-net", "runner-1"),
+        ("locarena-ab12cd-sandbox-agent-main-1.locarena-ab12cd_agent-net", "sandbox-agent-main"),
+        ("runner-1.some-network", "runner-1"),
+    ],
+    ids=["a runner in a stack run", "a sandbox in a stack run", "a container outside a stack run"],
+)
+def test_a_caller_is_named_by_its_compose_service(caller: str, service: str) -> None:
+    assert name_compose_service(caller) == service
+
+
+def test_a_runner_is_refused_a_model_runners_may_not_call(tmp_path: Path) -> None:
+    seen: list[httpx2.Request] = []
+    gateway = open_gateway(tmp_path, record_into(seen), RUNNER, runner_models=["some/model"])
+
+    status = gateway.post(CHAT, json={**BODY, "model": "costly/model"}).status_code
+
+    (call,) = wait_for_calls(tmp_path)
+    refused = HTTPStatus.FORBIDDEN
+    assert (status, len(seen), call.status, call.complete) == (refused, 0, refused, False)
+
+
+def test_a_runner_is_refused_once_the_runners_have_made_their_calls(tmp_path: Path) -> None:
+    seen: list[httpx2.Request] = []
+    gateway = open_gateway(
+        tmp_path,
+        record_into(seen),
+        RUNNER,
+        runner_models=["some/model"],
+        runner_calls_per_play=2,
+    )
+
+    statuses = [gateway.post(CHAT, json=BODY).status_code for _ in range(3)]
+
+    assert (statuses, len(seen)) == ([HTTPStatus.OK, HTTPStatus.OK, HTTPStatus.TOO_MANY_REQUESTS], 2)

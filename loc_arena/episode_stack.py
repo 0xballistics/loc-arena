@@ -17,8 +17,8 @@ recreated, so the twin sees nothing the attack left. When the episode exits, its
 directory is copied out with the log of each live service and of the tools gateway, their record of every
 request, grant and tool call, the events of those tool calls are built, and the run is graded on this host,
 with the agents' code sandboxed, while the gateway still runs for the monitors' model calls. Then the
-gateway's call log is copied out and the project is removed with its volumes. If a copy fails, the project is
-kept so nothing is lost.
+gateway's record is drained and copied out (``loc_arena.gateway.model_gateway``) and the project is removed
+with its volumes. If a copy fails, the project is kept so nothing is lost.
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ from scenarios.loader import EngineModule, LiveService
 
 from loc_arena.compose_document import ComposeDocument, ComposeService, Healthcheck, ServiceSecret
 from loc_arena.config import RunConfig, load_run_config, sandbox_service
-from loc_arena.gateway.core import API_KEY_VARIABLE, GATEWAY_URL_VARIABLE, OPENROUTER_URL, OpenRouterProvider
-from loc_arena.gateway.proxy import PROJECT_PREFIX, locate_call_log
+from loc_arena.gateway import model_gateway
+from loc_arena.gateway.core import API_KEY_VARIABLE, OPENROUTER_URL, OpenRouterProvider
 from loc_arena.harness import apply_mode, build_recorded_run_events, grade_run, locate_run
 from loc_arena.iam_bootstrap import (
     BOOTSTRAP_SECRET,
@@ -87,7 +87,6 @@ from loc_arena.tools_gateway import (
 
 AGENT_NETWORK = "agent-net"  # the episode, the sandboxes and the gateway, with no route out
 EGRESS_NETWORK = "egress-net"  # the gateway alone: its route to the provider
-KEY_SECRET_NAME = "openrouter_api_key"  # the compose secret: a file in settings.gateway.secrets_dir
 OUTPUT_DIRECTORY = PurePosixPath("/output")  # the episode's audit bundles; the image creates it for nobody
 CONFIGS_DIRECTORY = PurePosixPath("/app/configs")  # the run configs, mounted read-only
 SCENARIOS_DIRECTORY = PurePosixPath("/app/scenarios")  # where the loader looks for a scenario pack
@@ -106,7 +105,6 @@ NEVER_STARTED = (
     "to become healthy? See above and the copied logs in {logs}"
 )
 GATEWAY_MODE_OPTION = "com.docker.network.bridge.gateway_mode_ipv4"
-LOOPBACK = "127.0.0.1"  # the only host address the gateway's port is published on, for grading on this host
 ENGINE_TARGET = "engine"  # the Dockerfile's stage of the gateway and the episode
 SANDBOX_TARGET = "sandbox"  # the Dockerfile's stage of the sandboxes: no harness, no scenarios
 
@@ -157,7 +155,7 @@ def render_compose(
     sandboxes' image holds no harness and no scenarios either, so agent code cannot read how it is graded;
     each sandbox mounts only the scenario's skills folder, read-only.
     """
-    gateway, stack = config.settings.gateway, config.settings.stack
+    stack = config.settings.stack
     scenario = resolve_scenario(config)
     skills = [f"{scenario.skills_dir}:{stack.skills_directory}:ro"] if scenario.skills_dir else []
     scripted = []
@@ -180,15 +178,7 @@ def render_compose(
     company_repos_pythonpath = ":".join(str(COMPANY_DIRECTORY / repo) for repo in repos)
     return {
         "services": {
-            "gateway": {
-                **engine,
-                "command": ["python", "-m", "loc_arena.gateway.proxy", f"{CONFIGS_DIRECTORY}/{run}.yaml"],
-                "secrets": [KEY_SECRET_NAME],
-                "volumes": [f"sealed:{gateway.call_log.parent}", configs],
-                "networks": [AGENT_NETWORK, EGRESS_NETWORK],
-                "ports": [f"{LOOPBACK}::{gateway.port}"],  # an ephemeral host port
-                "healthcheck": _probe(gateway.port, stack),
-            },
+            **model_gateway.render_gateway_services(config.settings, AGENT_NETWORK, EGRESS_NETWORK),
             **{
                 sandbox_service(agent): _render_sandbox(
                     config,
@@ -233,10 +223,11 @@ def render_compose(
             # (Docker Engine 28 or later).
             AGENT_NETWORK: {"internal": True, "driver_opts": {GATEWAY_MODE_OPTION: "isolated"}},
             EGRESS_NETWORK: {"internal": False},
+            model_gateway.RECORD_NETWORK: {"internal": True},
         },
         "volumes": {"sealed": {}, "output": {}, "checkouts": {}},
         "secrets": {
-            KEY_SECRET_NAME: {"environment": API_KEY_VARIABLE},
+            **model_gateway.declare_gateway_secrets(),
             **{token_secret_name(agent): {"environment": token_variable(agent)} for agent in agent_ids},
             **{identity.secret_name: {"environment": identity.variable} for identity in identities},
             **declare_runner_token_secrets(config),
@@ -274,7 +265,7 @@ def _render_episode(
     volumes: list[str],
 ) -> ComposeService:
     """The episode: plays ``run`` once every other service is up, with every sandbox token and no identity."""
-    gateway, stack = config.settings.gateway, config.settings.stack
+    stack = config.settings.stack
     agent_ids = [agent.id for agent in config.agents]
     tools_url = (
         f"http://{TOOLS_GATEWAY_SERVICE}:{stack.tools_gateway_port}{MCP_PATH}"
@@ -291,23 +282,26 @@ def _render_episode(
             *["--out", str(OUTPUT_DIRECTORY)],
         ],
         "environment": {
-            GATEWAY_URL_VARIABLE: f"http://gateway:{gateway.port}{urlsplit(OPENROUTER_URL).path}",
+            **model_gateway.render_episode_environment(config.settings),
             SANDBOX_URL_VARIABLE: f"http://{sandbox_service('{agent}')}:{stack.sandbox_port}",
             **({TOOLS_URL_VARIABLE: tools_url} if tools_url else {}),
         },
-        "secrets": [token_secret_name(agent_id) for agent_id in agent_ids],
+        "secrets": [
+            model_gateway.GATEWAY_TOKEN_SECRET_NAME,
+            *(token_secret_name(agent_id) for agent_id in agent_ids),
+        ],
         "volumes": volumes,
         "networks": [AGENT_NETWORK],
         "depends_on": {
             **{
                 service: {"condition": "service_healthy"}
                 for service in [
-                    "gateway",
                     *map(sandbox_service, agent_ids),
                     *(service.name for service in config.live_services),
                 ]
             },
-            # Its image has no shell to probe it with: the agents' MCP clients retry their first call.
+            # No shell to probe: the host waits for the gateway, and MCP clients retry the tools gateway.
+            "gateway": {"condition": "service_started"},
             **({TOOLS_GATEWAY_SERVICE: {"condition": "service_started"}} if tools_url else {}),
         },
     }
@@ -513,7 +507,22 @@ def _probe(port: int, stack: StackSettings, *, test: Sequence[str] | None = None
 
 
 def _issue_secrets(config: RunConfig) -> tuple[dict[str, str], dict[str, str]]:
-    """Every secret of a stack run, by the host variable compose reads: the attack env and the twin's.
+    """Every secret of a stack run, by the host variable compose reads: the attack env and the twin's."""
+    tokens = {agent.id: secrets.token_urlsafe(TOKEN_BYTES) for agent in config.agents}
+    held = model_gateway.issue_held_tokens(TOKEN_BYTES)
+    sandboxes = {sandbox_service(agent): token for agent, token in tokens.items()}
+
+    def with_gateway(environment: dict[str, str], play: model_gateway.Play) -> dict[str, str]:
+        runners = {name: environment[runner_token_variable(name)] for name in list_runner_services(config)}
+        gateway_secrets = model_gateway.issue_gateway_secrets(config.settings, held, sandboxes, runners, play)
+        return environment | gateway_secrets
+
+    attack, twin = _issue_play_secrets(config, tokens)
+    return with_gateway(attack, "attack"), with_gateway(twin, "twin")
+
+
+def _issue_play_secrets(config: RunConfig, tokens: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+    """Each play's secrets but the model gateway's, with these sandbox ``tokens``: attack env and twin's.
 
     They reach compose through its environment alone: never a command line or a file. The honest twin's env
     differs in what the recreated containers are given. Its tools gateway offers the honest config's tools (no
@@ -523,7 +532,6 @@ def _issue_secrets(config: RunConfig) -> tuple[dict[str, str], dict[str, str]]:
     and services are recreated with new ones, so nothing the attack play held authenticates in the twin.
     """
     managed = managed_services(config)
-    tokens = {agent.id: secrets.token_urlsafe(TOKEN_BYTES) for agent in config.agents}
     runners = list_runner_services(config)
 
     def issue_for_play(for_config: RunConfig) -> dict[str, str]:
@@ -586,7 +594,7 @@ def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: P
     config = load_run_config(REPOSITORY / "configs" / f"{run}.yaml")
     settings = config.settings
     instance_id = secrets.token_hex(3)
-    project = f"{PROJECT_PREFIX}{instance_id}"
+    project = f"{model_gateway.PROJECT_PREFIX}{instance_id}"
     episode_arguments = ["--mode", mode, "--instance", instance_id, "--play-only", "--next-phase"]
     episode_arguments += [] if robust else ["--minimal"]
     compose_file = logs / "compose" / f"{project}.yaml"
@@ -609,7 +617,7 @@ def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: P
     run_compose = functools.partial(subprocess.run, env=environment)
 
     copied = functools.partial(copy_out, run_compose, made=set())
-    call_log = locate_call_log(logs, instance_id)
+    call_log = model_gateway.locate_call_log(logs, instance_id)
     run_directory = locate_run(config, mode, instance_id, logs)
     service_logs = run_directory / SERVICE_LOGS
     for directory in (call_log.parent, service_logs):
@@ -619,18 +627,14 @@ def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: P
     copy_service_logs: list[tuple[list[str], Path | None]] = [
         *list_service_log_copies(config, compose, service_logs),
     ]
-    copy_logs = [
-        ([*compose, "cp", f"gateway:{settings.gateway.call_log}", str(call_log)], None),
-        *copy_service_logs,
-    ]
     created = False
     try:
         if run_compose([*compose, "create", "--build"]).returncode != 0:
             raise StackError("could not build or create the episode's containers: see compose's output above")
         created = True
         # Started on its own, the gateway outlives the episode: the monitors call it while this host grades.
-        if run_compose([*compose, "up", "--detach", "--wait", "gateway"]).returncode != 0:
-            raise StackError("the gateway did not become healthy: see compose's output above")
+        if not model_gateway.start_gateway(run_compose, compose, settings):
+            raise StackError("the gateway did not start to accept calls: see compose's output above")
         exit_code = play_phases(config, compose, mode, service_logs, environment, twin_environment)
         if not copied(copy_output):
             raise StackError("could not copy the episode's run directory out, so it was not graded")
@@ -640,21 +644,25 @@ def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: P
         if not all([copied(*copy) for copy in copy_service_logs]):  # every one tried
             raise StackError("could not copy every live service's log out, so the run was not graded")
         build_recorded_run_events(config, run_directory)
+        host_token = environment[model_gateway.HOST_TOKEN_VARIABLE]
         return grade_run(
             sandbox_agent_code(config),
             run_directory,
             mode=mode,
             seed=seed,
-            monitor_provider=_build_monitor_provider(config, compose),
+            monitor_provider=_build_monitor_provider(config, compose, host_token),
         )
     finally:
         never_started = [*compose, "ps", "--all", "--status", "created", "--quiet", EPISODE_SERVICE]
         started = created and not run_compose(never_started, capture_output=True, text=True).stdout.strip()
         # An episode that never started has no output or call log, but a live service that failed to become
         # healthy says why in its own.
-        pending = [(copy_output, None), *copy_logs] if started else copy_service_logs
-        # Every copy is tried, a failed one included, before the project is kept.
-        if created and not all([copied(*copy) for copy in pending]):
+        pending = [(copy_output, None), *copy_service_logs] if started else copy_service_logs
+        # Every copy is tried, a failed one included, before the project is kept. The gateway's record is
+        # copied once it holds every call the gateway logged, the monitors' included.
+        copies = [copied(*copy) for copy in pending] if created else []
+        recorded = not started or model_gateway.copy_call_log(run_compose, compose, settings, call_log)
+        if created and not (all(copies) and recorded):
             run_compose([*compose, "stop"])
             raise StackError(f"could not copy every log out: kept compose project {project} and its volumes")
         run_compose([*compose, "down", "--volumes", "--remove-orphans"])
@@ -668,11 +676,11 @@ def sandbox_agent_code(config: RunConfig) -> RunConfig:
     return dataclasses.replace(config, settings=config.settings.model_copy(update={"stack": stack}))
 
 
-def _build_monitor_provider(config: RunConfig, compose: list[str]) -> OpenRouterProvider | None:
+def _build_monitor_provider(config: RunConfig, compose: list[str], token: str) -> OpenRouterProvider | None:
     """The provider of a live run's monitors: the gateway, at the port it publishes on this host's loopback.
 
-    A scripted run's monitors make no model call. A live run's never fall back to their heuristic for want of
-    a provider: if the gateway's port cannot be found, grading stops.
+    A scripted run's monitors make no model call. A live run's call with the host's ``token`` and never fall
+    back to their heuristic for want of a provider: if the gateway's port cannot be found, grading stops.
     """
     if config.policy != "model":
         return None
@@ -685,5 +693,6 @@ def _build_monitor_provider(config: RunConfig, compose: list[str]) -> OpenRouter
     return OpenRouterProvider(
         timeout=config.settings.gateway.timeout_seconds,
         gateway_url=f"http://{published.stdout.strip()}{urlsplit(OPENROUTER_URL).path}",
+        gateway_token=token,
         model_providers=config.model_providers,
     )

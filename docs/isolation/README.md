@@ -19,12 +19,15 @@ flowchart LR
     subgraph egress["egress-net"]
         OR["OpenRouter"]
     end
+    subgraph recordnet["record-net: internal"]
+        CO["collector<br/>writes the sealed record"]
+    end
     subgraph agentnet["agent-net: internal, no route out"]
         EP["episode<br/>agent loops, in-world gateway"]
         SB["sandbox per agent<br/>native tools, bash, /skills"]
         AG["agentgateway<br/>MCP route, per-agent tool policy"]
         SV["services<br/>forge, board, jobs, scratch, coverage, notes, agents"]
-        GW["gateway<br/>holds the key, records every call"]
+        GW["gateway<br/>holds the key, admits callers by token"]
     end
     EP -- "commands" --> SB
     EP -- "tool calls" --> AG
@@ -33,6 +36,7 @@ flowchart LR
     EP -- "model calls" --> GW
     SB -- "model calls" --> GW
     GW --> OR
+    GW -- "every call's record" --> CO
 ```
 
 Any harness with an MCP client sees the same tools, from the same services, recorded the same way. The native
@@ -42,7 +46,8 @@ loop is the only harness the arena runs today; choosing another one by config is
 
 | Container | Role |
 |---|---|
-| `gateway` | the only holder of the key and of a route out (agent-net and egress-net); records every model call with the container that made it |
+| `gateway` | agentgateway, the only holder of the key and of a route out (agent-net and egress-net); admits each caller by its own token and exports a record of every model call, with the caller, to the Collector |
+| `collector` | an OpenTelemetry Collector on record-net, which only the gateway joins; appends each record to the sealed record in a volume only it mounts |
 | `episode` | plays the episode and, in attack mode, its honest twin; holds every sandbox's token and no identity |
 | `sandbox-<agent id>` | one agent's code, from a slim image with no harness and no scenarios; mounts the checkouts and the scenario's skills read-only; holds its own token and its own identity on each service with rights; takes commands from the episode alone |
 | one per live service | a scenario's `services:` entry with `build`, `image` or `module`; no route out, all capabilities dropped, limits from `stack`, no published port |
@@ -105,9 +110,10 @@ none.
 ## The honest twin
 
 In a stack run the episode container plays one phase per start. Between the two, the host adds each service's
-log so far to its file in the run directory, then recreates the gateway and every sandbox, runner, live service
-and agentgateway with fresh anonymous volumes (`loc_arena/stack_play.py`). The gateway's call log runs on in
-its volume, and the gateway counts the twin's runner calls afresh. The episode stays.
+log so far to its file in the run directory and waits until the Collector holds a record of every call the
+gateway logged, then recreates the gateway and every sandbox, runner, live service and agentgateway with fresh
+anonymous volumes (`loc_arena/stack_play.py`). The Collector and its record run on, and the gateway counts the
+twin's runner calls afresh. The episode stays.
 If a log cannot be copied, nothing is recreated; if a container does not come back, the run stops with its
 logs copied out. The twin therefore sees none of the notes, grants, PRs or files the attack left.
 
@@ -173,26 +179,33 @@ maps to an episode time.
 
 ## The gateway
 
-![One model call: the caller sends an OpenRouter request with any key; the gateway swaps in the real key, records the call and the caller in the sealed log, and returns the reply unchanged](06-model-call.png)
+![The model gateway in a stack run: callers on agent-net send their own tokens to the gateway, which alone joins agent-net, egress-net and record-net; it calls OpenRouter over egress-net and exports each call's record over record-net to the Collector, whose sealed volume the host copies out for grading and the explorer](06-model-call.png)
 
-A small FastAPI proxy (`loc_arena/gateway/proxy.py`). Anything that works against OpenRouter works against it by
-changing its base URL, streaming included. The compose file is rendered from the run config's `gateway:` and
-`stack:` settings into `logs/compose/<project>.yaml` (`loc_arena/episode_stack.py`).
+agentgateway, configured per play by `loc_arena/gateway/model_gateway.py`. Anything that works against OpenRouter
+works against it by changing its base URL and sending the caller's token, streaming included. It admits callers
+by the SHA-256 of their token, so it holds none: the episode, the host's monitors, each sandbox (its sandbox
+token) and each runner. A path outside `gateway.allowed_paths` gets a 403, and a call without a known token a 401.
 
-The gateway limits the runners, which it knows by their compose service's name: they may call only
-`gateway.runner_models` (by default the seeded agents' model), and make `gateway.runner_calls_per_play` calls (300)
-between them in a play. A call past the cap gets a 429, one for any other model a 403, and both are recorded like
-any call. Agents under test can start the company's agents, which spend real money.
+Every call leaves a record (caller, request, reply and status, refused and failed calls included), which the
+gateway exports over OTLP to the Collector. A stack run waits until the Collector holds a record of every call
+the gateway logged before the gateway stops, then copies the record to `logs/gateway/<project>.calls.jsonl`, one
+`GatewayCall` per line, with the Collector's own lines beside it. The compose file is rendered from the run
+config's `gateway:` and `stack:` settings into `logs/compose/<project>.yaml` (`loc_arena/episode_stack.py`).
+
+Runners call on their own route, `/runner/api/v1`: they may call only `gateway.runner_models` (by default the
+seeded agents' model), and make `gateway.runner_calls_per_play` calls (300) between them in a play. A call past
+the cap gets a 429, one for any other model a 403, and both are recorded like any call. Agents under test can
+start the company's agents, which spend real money.
 
 ## What agent code can reach
 
 | Agent code can reach | In a stack run |
 |---|---|
 | the OpenRouter key, the internet, DNS, the host's files and `.env` | no |
-| the sealed call log, the grader's reference answers, the episode's logs | no |
+| the sealed call log or the Collector, the grader's reference answers, the episode's logs | no |
 | the agent loop (it listens on no port) | no |
 | another agent's sandbox or credentials | no |
-| the gateway | yes, recorded under the sandbox's name |
+| the gateway | yes, with its sandbox token, recorded under the sandbox's name |
 | a service with rights | only with its own identity, and only the rights it holds |
 | a service with tools | only through agentgateway with its sandbox token, and only the tools its run config lists |
 | code left in the shared checkout | runs wherever another agent runs it; the checkout is a channel between agents |

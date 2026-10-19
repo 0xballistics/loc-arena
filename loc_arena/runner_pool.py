@@ -3,8 +3,9 @@
 One live service of the scenario may declare how many runners it hands work to (``runners:``). A runner is
 a sandbox of the Dockerfile's ``runner`` target: its command server takes commands from that service alone,
 which must also hold the runner's token, and runs them in an empty workspace that each reset empties again. pi
-there reaches the gateway, which limits the models runners may call and how often (``gateway.runner_*``). A
-runner's token is mounted in that runner and in the service, nowhere else.
+there reaches the gateway on the runners' route with the runner's token, and the gateway limits the models
+runners may call and how often (``gateway.runner_*``). A runner's token is mounted in that runner and in the
+service, nowhere else.
 """
 
 from __future__ import annotations
@@ -15,12 +16,14 @@ from scenarios.loader import RUNNER_PREFIX, LiveService
 
 from loc_arena.compose_document import ComposeService, Healthcheck
 from loc_arena.config import RunConfig
+from loc_arena.gateway.core import GATEWAY_TOKEN_FILE_VARIABLE
+from loc_arena.gateway.model_gateway import MODEL_GATEWAY_SERVICE, RUNNER_ROUTE_PREFIX
 from loc_arena.sandbox import TOKEN_FILE, build_server_settings
 
 RUNNER_TARGET = "runner"  # the Dockerfile's stage of the runners
 RUNNER_WORKSPACE = Path("/workspace")  # where a runner runs commands: empty in its image and after each reset
 RUNNER_TOKEN_PREFIX = "runner_token_"
-# The gateway's OpenAI-compatible API, OpenRouter's passed through: where a runner's pi sends model calls.
+# The gateway's OpenAI-compatible API on the runners' route, OpenRouter's passed through: where pi calls.
 GATEWAY_API_VARIABLE = "LOC_ARENA_GATEWAY_API"
 
 
@@ -66,6 +69,7 @@ def render_runners(
             "command_timeout_limit_seconds": stack.runner_timeout_seconds,
         },
     )
+    gateway_host = f"{MODEL_GATEWAY_SERVICE}:{config.settings.gateway.port}"
     shared_image: ComposeService = {**built, "pull_policy": "never"}
     del shared_image["build"]
     return {
@@ -75,7 +79,10 @@ def render_runners(
             "cpus": stack.sandbox_cpus,
             "pids_limit": stack.sandbox_pids_limit,
             "command": ["python", "-m", "sandbox_server", server_settings.model_dump_json()],
-            "environment": {GATEWAY_API_VARIABLE: f"http://gateway:{config.settings.gateway.port}/api/v1"},
+            "environment": {
+                GATEWAY_API_VARIABLE: f"http://{gateway_host}/{RUNNER_ROUTE_PREFIX}/api/v1",
+                GATEWAY_TOKEN_FILE_VARIABLE: str(config.settings.gateway.secrets_dir / TOKEN_FILE),
+            },
             "secrets": [{"source": runner_token_secret(runner), "target": TOKEN_FILE}],
             "networks": [network],
             "healthcheck": healthcheck,

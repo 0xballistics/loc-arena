@@ -106,8 +106,8 @@ services in memory and offered no shell, so its agents run no code.</p>
 <h2>The path for model calls</h2>
 
 <p>Every model call travels the same path. An agent holds no model key and never contacts a provider directly. It
-sends its request to the gateway, which holds the only provider key and is the only component with an outbound
-route. Each call is recorded, with the container that made it.</p>
+sends its request with its own token to the gateway, which holds the only provider key and is the only component
+with an outbound route. Each call is recorded, with the caller that made it.</p>
 
 <p>There is one path, so one component sees every call, and the record of model usage is complete. A rogue
 deployment is model calls that should not be happening, so a complete call record is what the checker verifies
@@ -223,8 +223,8 @@ records are placed in the turn of the agent that made the call. A reviewer repla
   <path d="M90 348 L118 348 L118 362 L93 362" stroke="#2f4bd6" stroke-width="1.6" fill="none" marker-end="url(#q1)"/>
   <text x="126" y="359" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">grade</text>
 </svg>
-<figcaption>One attack run in a stack. The twin's sandboxes, services and agentgateway start empty; the episode
-container and the gateway carry on.</figcaption>
+<figcaption>One attack run in a stack. The twin's sandboxes, services and both gateways start afresh; the episode
+container and the record of model calls carry on.</figcaption>
 </figure>
 
 <p>Every episode, attack or honest twin, follows the same steps. The covert objective and its tools are enabled in

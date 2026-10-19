@@ -14,7 +14,7 @@ from loc_arena.explorer.build import RUN_TEMPLATE, build_folder, build_run_page,
 from loc_arena.explorer.page import RunPage
 from loc_arena.explorer.settings import ExplorerSettings
 from loc_arena.gateway.core import ScriptedProvider
-from loc_arena.gateway.proxy import GatewayCall
+from loc_arena.gateway.model_gateway import GatewayCall
 from loc_arena.harness import run_episode
 from loc_arena.logging_.transcript_lanes import WORLD
 

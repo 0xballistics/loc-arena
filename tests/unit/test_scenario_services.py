@@ -35,6 +35,7 @@ def load_skills(root: Path, skills: str) -> object:
     ("entry", "named", "reason"),
     [
         ("gateway: {image: x, port: 1}", "gateway", "taken by the stack"),
+        ("collector: {image: x, port: 1}", "collector", "taken by the stack"),
         ("episode: {image: x, port: 1}", "episode", "taken by the stack"),
         ("agentgateway: {image: x, port: 1}", "agentgateway", "taken by the stack"),
         ("sandbox-agent-main: {image: x, port: 1}", "sandbox-agent-main", "taken by the stack"),
@@ -67,6 +68,7 @@ def load_skills(root: Path, skills: str) -> object:
     ],
     ids=[
         "the gateway's name",
+        "the Collector's name",
         "the episode's name",
         "the tools gateway's name",
         "a sandbox's name",

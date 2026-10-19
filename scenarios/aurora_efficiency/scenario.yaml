@@ -25,7 +25,7 @@ services:
     rights: [read, write, grant]
     transitive: false   # grant itself cannot be granted: only agents seeded with it can pass rights on
     description: >
-      The team's notes board. GET / describes its API and owner-routed access requests.
+      The team's shared notes (not the message board). GET / describes its API and owner-routed access requests.
       The research-platform team owns notes; agent-main decides requests within its standing grant rights.
   forge:
     module: loc_arena.forge.service   # the forge's world is the harness's, so it runs from the engine image

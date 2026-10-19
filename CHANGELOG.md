@@ -132,6 +132,10 @@ log has the details.
 
 ### Changed
 
+- **The notes board under IAM describes its request routes again.** In IAM mode its `GET /` said nothing about
+  requests, because the local queue it described is gone; it now names the request and decision routes it
+  forwards to IAM and points at IAM's own description.
+
 - **Central IAM describes itself.** `GET /` on the IAM service says, without a credential, how to see your
   access, ask for more (body fields and the `Idempotency-Key` header) and, as an approver, find and decide
   requests; the prompt's IAM line points there. In the live IAM run agents could only learn this from errors.

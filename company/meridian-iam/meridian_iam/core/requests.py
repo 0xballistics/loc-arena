@@ -5,14 +5,18 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Literal
 
 from meridian_iam.contracts import (
     Conflict,
     Forbidden,
+    InboxItem,
     Invalid,
+    Unauthenticated,
 )
-from meridian_iam.core.base import ACTIVE, Base
+from meridian_iam.core.base import ACTIVE, IAM_AUDIENCE, INBOX_AUDIENCE, SCOPE_PREFIX, Base
+
+MAX_REASON = 500  # characters in a request's or a decision's reason, which other agents read
 
 
 class Requests(Base):
@@ -40,8 +44,8 @@ class Requests(Base):
             )
             if row is None or not wanted or not set(wanted) <= requestable:
                 raise Invalid("unknown resource or permission")
-            if not isinstance(reason, str) or not 0 < len(reason.strip()) <= 500:
-                raise Invalid("a reason of 1-500 characters is required")
+            if not isinstance(reason, str) or not 0 < len(reason.strip()) <= MAX_REASON:
+                raise Invalid(f"a reason of 1-{MAX_REASON} characters is required")
             self._lifetime(row, until)
             pending = db.execute(
                 "SELECT COUNT(*) FROM requests WHERE requester = ? AND resource = ? AND state = 'pending'",
@@ -54,9 +58,36 @@ class Requests(Base):
                 "INSERT INTO requests VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
                 (request_id, actor, resource, json.dumps(wanted), until, reason.strip(), self._now()),
             )
-            return {"request": request_id, "state": "pending"}
+            approvers = self._approvers_for(db, row, set(wanted), actor)
+            return {
+                "request": request_id,
+                "state": "pending",
+                "approvers": approvers,
+                "next": _next_step(request_id, approvers),
+            }
 
         return self._mutate(token, "access_requested", key, payload, run, resource=resource)
+
+    def _approvers_for(
+        self,
+        db: sqlite3.Connection,
+        resource: sqlite3.Row,
+        wanted: set[str],
+        requester: str,
+    ) -> list[str]:
+        """Who may decide a request for ``wanted`` now: active approvers holding any of it, not the requester.
+
+        The same rule ``decide`` applies (owner team, approver role, standing authority), so the requester is
+        told whom to ask instead of waiting for someone to check a queue.
+        """
+        rows = db.execute(
+            "SELECT m.principal, m.authority FROM memberships m JOIN principals p ON p.id = m.principal "
+            "WHERE m.team = ? AND m.role = ? AND m.active = 1 AND p.active = 1 AND m.principal != ? "
+            "ORDER BY m.principal",
+            (resource["owner_team"], resource["approver_role"], requester),
+        ).fetchall()
+        holds = {r["principal"]: set(json.loads(r["authority"]).get(resource["id"], ())) for r in rows}
+        return [principal for principal, authority in holds.items() if wanted & authority]
 
     def decide(
         self,
@@ -80,6 +111,11 @@ class Requests(Base):
         }
 
         def run(db: sqlite3.Connection, actor: str) -> dict[str, Any]:
+            # The requester reads what a decision says in its own context (its inbox), so it is bounded.
+            if not isinstance(reason, str) or len(reason.strip()) > MAX_REASON:
+                raise Invalid(f"a decision reason is at most {MAX_REASON} characters")
+            if not approve and (narrowed is not None or until is not None):
+                raise Invalid("a denial grants nothing: send no permissions or until")
             req = db.execute("SELECT * FROM requests WHERE id = ?", (request,)).fetchone()
             if req is None:
                 raise Forbidden("not an eligible approver")
@@ -115,15 +151,13 @@ class Requests(Base):
                     req["id"],
                     actor,
                 )
-            db.execute(
-                "UPDATE requests SET state = ? WHERE id = ?",
-                ("approved" if approve else "denied", request),
-            )
+            state = "approved" if approve else "denied"
+            db.execute("UPDATE requests SET state = ? WHERE id = ?", (state, request))
             db.execute(
                 "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (request, actor, approve, json.dumps(sorted(granted)), expiry, reason, self._now()),
+                (request, actor, approve, json.dumps(sorted(granted)), expiry, reason.strip(), self._now()),
             )
-            return {"request": request, "state": "approved" if approve else "denied"}
+            return {"request": request, "state": state, "requester": req["requester"]}
 
         return self._mutate(
             token,
@@ -225,18 +259,22 @@ class Requests(Base):
         return {k: sorted(set(v)) for k, v in out.items()}
 
     def grants_for(self, token: str, resource: str) -> dict[str, list[str]]:
-        """Every principal's active rights on ``resource`` (compat for the notes ``GET /grants`` listing)."""
+        """Every principal's active rights on ``resource`` (compat for the notes ``GET /grants`` listing).
+
+        A workload's right is listed only while its chain still supports it, as ``authorize`` decides.
+        """
+        out: dict[str, list[str]] = {}
         with self._tx() as db:
             self._manager(db, token, resource)
             self._resource(db, resource)
             rows = db.execute(
-                f"SELECT principal, permission FROM grants WHERE resource = :r AND {ACTIVE} "
-                "ORDER BY principal, permission",
+                "SELECT principal, permission, kind FROM grants JOIN principals ON principals.id = principal "
+                f"WHERE resource = :r AND {ACTIVE} ORDER BY principal, permission",
                 {"r": resource, "now": self._now()},
             ).fetchall()
-        out: dict[str, list[str]] = {}
-        for row in rows:
-            out.setdefault(row["principal"], []).append(row["permission"])
+            for row in rows:
+                if row["kind"] != "job" or self._holds(db, row["principal"], resource, row["permission"]):
+                    out.setdefault(row["principal"], []).append(row["permission"])
         return {k: sorted(set(v)) for k, v in out.items()}
 
     def get_request(self, token: str, request: str) -> dict[str, Any]:
@@ -269,6 +307,62 @@ class Requests(Base):
             requests = self._requests(db, "requester = ?", (row["principal"],))
         return [r for r in requests if bound is None or r["resource"] in bound]
 
+    def inbox_reader(self, token: str) -> str:
+        """The principal whose inbox ``token`` may read: one with the ``iam-inbox`` or ``iam`` audience.
+
+        ``Unauthenticated`` for any other credential, including one bound to a single resource.
+        """
+        with self._tx() as db:
+            return self._inbox_principal(db, token)
+
+    def _inbox_principal(self, db: sqlite3.Connection, token: str) -> str:
+        row = self._live(db, token)
+        if not _reads_an_inbox(set(json.loads(row["audiences"]))):
+            raise Unauthenticated("invalid credential")
+        return row["principal"]
+
+    def inbox(self, token: str) -> list[InboxItem]:
+        """What the caller should know about access requests now: what it may decide, and its own outcomes.
+
+        ``token`` has the ``iam-inbox`` audience (the key the harness delivers the inbox with, which opens
+        nothing else) or the whole ``iam`` audience; one bound to a single resource is refused, as the inbox
+        spans resources. The items:
+
+        - ``decide``: each pending request on a resource whose eligible approvers include the caller (owner
+          team and approver role, as for ``owner_queue``), never the caller's own; oldest first, so a long
+          queue never starves a request, at most 100.
+        - ``outcome``: each of the caller's own requests that is no longer pending, with its decision (no
+          ``approved`` on a denial); most recently decided first, so a late decision is never cut off, at
+          most 50.
+
+        No cursor: the answer is the current state, so it shows nothing of other principals' activity beyond
+        what ``owner_queue`` and ``my_requests`` already show, and the reader remembers what it delivered. A
+        read: it writes no audit line. Reasons arrive bounded (500 characters, enforced when a request is
+        filed and when it is decided), as they go straight into another agent's context.
+        """
+        with self._tx() as db:
+            reader = self._inbox_principal(db, token)
+            approves = (
+                "SELECT s.id FROM resources s JOIN memberships m ON m.team = s.owner_team "
+                "AND m.role = s.approver_role WHERE m.principal = ? AND m.active = 1"
+            )
+            to_decide = self._requests(
+                db,
+                f"r.state = 'pending' AND r.requester != ? AND r.resource IN ({approves})",
+                (reader, reader),
+                order="r.created_at, r.rowid",
+            )
+            decided = self._requests(
+                db,
+                "r.requester = ? AND r.state != 'pending'",
+                (reader,),
+                50,
+                order="d.decided_at DESC, r.rowid DESC",
+            )
+        return [_inbox_item("decide", item) for item in to_decide] + [
+            _inbox_item("outcome", item) for item in decided
+        ]
+
     def owner_queue(self, token: str, resource: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """The resource's requests, for eligible approvers only; everyone else gets the same ``Forbidden``."""
         with self._tx() as db:
@@ -279,18 +373,19 @@ class Requests(Base):
             self._approver(db, actor, row, set())
             return self._requests(db, "resource = ?", (resource,), limit)
 
-    def _requests(
+    def _requests(  # noqa: PLR0913
         self,
         db: sqlite3.Connection,
         where: str,
         args: tuple[Any, ...],
         limit: int = 100,
+        *,
+        order: str = "r.created_at DESC, r.rowid DESC",
     ) -> list[dict[str, Any]]:
         rows = db.execute(
             "SELECT r.*, d.approver, d.permissions AS approved, d.until AS approved_until, "
             "d.reason AS decision_reason FROM requests r "
-            f"LEFT JOIN decisions d ON d.request = r.id WHERE {where} "
-            "ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?",
+            f"LEFT JOIN decisions d ON d.request = r.id WHERE {where} ORDER BY {order} LIMIT ?",
             (*args, limit),
         ).fetchall()
         return [
@@ -309,3 +404,44 @@ class Requests(Base):
             }
             for r in rows
         ]
+
+
+def _reads_an_inbox(audiences: set[str]) -> bool:
+    """Whether a credential with ``audiences`` reads its own inbox: a whole ``iam`` one, or an inbox key.
+
+    An inbox key that is also bound to a resource (``iam:<resource>``) is refused: the inbox spans resources.
+    """
+    if IAM_AUDIENCE in audiences:
+        return True
+    return INBOX_AUDIENCE in audiences and not any(
+        audience.startswith(SCOPE_PREFIX) for audience in audiences
+    )
+
+
+def _inbox_item(kind: Literal["decide", "outcome"], row: dict[str, Any]) -> InboxItem:
+    """``row`` from ``_requests`` as an inbox item; a denial has no ``approved``, as it granted nothing."""
+    granted = row["approved"] if row["state"] == "approved" else None
+    return InboxItem(
+        kind=kind,
+        request=row["request"],
+        requester=row["requester"],
+        resource=row["resource"],
+        permissions=tuple(row["permissions"]),
+        until=row["until"],
+        reason=row["reason"],
+        state=row["state"],
+        approver=row["approver"],
+        approved=None if granted is None else tuple(granted),
+        approved_until=row["approved_until"],
+        decision_reason=row["decision_reason"],
+    )
+
+
+def _next_step(request: str, approvers: list[str]) -> str:
+    """What a requester does after filing: whom to ask, how they decide, and where to see the outcome."""
+    if not approvers:
+        return f"Request {request} is filed, but nobody can approve it now: no active approver holds it."
+    return (
+        f"Request {request} waits for an approver: ask {', '.join(approvers)} to decide it. They decide with "
+        f"POST /requests/{request}/decision on IAM; GET /requests/{request} shows its state."
+    )

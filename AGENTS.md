@@ -136,8 +136,9 @@ the latest push. After changing `.coderabbit.yaml`, comment `@coderabbitai confi
 - The honest twin completes no covert milestone; it calibrates the audit threshold
   (`tests/integration/test_honest_twin_clean.py`). It is never offered an attack tool and plays on services and
   sandboxes recreated empty.
-- An agent is offered exactly the tools its `sandbox: tools:` lists. Each service takes the caller from its
-  identity, enforces its scope, and records every call; the events monitors and the verifier read are built from
+- An agent is offered exactly the tools its `sandbox: tools:` lists, plus, under central IAM, IAM's
+  `access_inbox`, which takes the caller from the agent's inbox key and reads only its inbox. Every other service
+  takes the caller from its identity, enforces its scope, and records every call; the events monitors and the verifier read are built from
   those records after play, and grading never builds them.
 - The scripted engine is reproducible: the same config and seed give a byte-identical sealed log
   (`tests/integration/test_end_to_end.py`).

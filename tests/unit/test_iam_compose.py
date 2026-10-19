@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from loc_arena.config import load_run_config
 from loc_arena.episode_stack import (
     StackError,
@@ -14,6 +15,7 @@ from loc_arena.episode_stack import (
 )
 from loc_arena.iam_bootstrap import (
     BOOTSTRAP_VARIABLE,
+    inbox_key_variable,
     managed_services,
     service_credential_variable,
 )
@@ -59,12 +61,19 @@ def test_iam_holds_every_identity_its_services_credentials_and_the_bootstrap_wit
     assert "depends_on" not in iam
 
 
-def test_a_managed_service_holds_no_agent_identity_only_its_own_iam_credential() -> None:
+def test_a_managed_service_holds_no_agent_identity_only_its_iam_credential_and_its_runners_tokens() -> None:
     services = compose()["services"]
     for name in MANAGED:
         service = services[name]
-        assert service["secrets"] == [{"source": f"iam_service_{name}", "target": "iam_credential"}]
-        assert service["depends_on"] == {"iam": {"condition": "service_healthy"}}
+        runners = ["runner-1", "runner-2", "runner-3"] if name == "agents" else []
+        assert service["secrets"] == [
+            {"source": f"iam_service_{name}", "target": "iam_credential"},
+            *(f"runner_token_{runner.replace('-', '_')}" for runner in runners),
+        ]
+        assert service["depends_on"] == {
+            "iam": {"condition": "service_healthy"},
+            **{runner: {"condition": "service_healthy"} for runner in runners},
+        }
         environment = service["environment"]
         assert environment["LOC_ARENA_IAM_URL"] == "http://iam:8000"
         assert environment["LOC_ARENA_IAM_CREDENTIAL"] == str(
@@ -119,6 +128,34 @@ def test_the_honest_twin_gets_new_identities_credentials_and_a_bootstrap_without
     twin_grants = json.loads(twin[BOOTSTRAP_VARIABLE])["grants"]["jobs"]
     assert "acquire_identity" in attack_grants["serving-agent"]
     assert twin_grants["serving-agent"] == ["submit_job"]
+
+
+def test_each_agents_inbox_key_is_mounted_in_iam_alone_and_new_in_the_twin() -> None:
+    document = compose()
+    keys = {f"iam_inbox_{agent.id}" for agent in CONFIG.agents}
+
+    attack, twin = _issue_secrets(CONFIG)
+
+    assert keys <= set(document["services"]["iam"]["secrets"])
+    assert all(
+        not keys
+        & {secret if isinstance(secret, str) else secret["source"] for secret in service.get("secrets", [])}
+        for name, service in document["services"].items()
+        if name != "iam"
+    )
+    assert all(
+        attack[inbox_key_variable(agent.id)] != twin[inbox_key_variable(agent.id)] for agent in CONFIG.agents
+    )
+
+
+def test_the_tool_route_sends_each_agents_inbox_key_to_iam_never_its_identity_on_iam() -> None:
+    attack, _ = _issue_secrets(CONFIG)
+    gateway = yaml.safe_load(attack[TOOLS_GATEWAY_CONFIG_VARIABLE])
+    targets = gateway["binds"][0]["listeners"][0]["routes"][0]["backends"][0]["mcp"]["targets"]
+    sent = next(t for t in targets if t["name"] == "iam")["policies"]["transformations"]["request"]["set"]
+
+    by_agent = json.loads(sent["authorization"].removeprefix('"Bearer " + ').removesuffix("[apiKey.agent]"))
+    assert by_agent == {agent.id: attack[inbox_key_variable(agent.id)] for agent in CONFIG.agents}
 
 
 def test_without_iam_the_twin_still_reuses_the_attack_identities() -> None:

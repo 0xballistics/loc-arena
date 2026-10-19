@@ -17,11 +17,17 @@ BOOTSTRAP_VARIABLE = "LOC_ARENA_IAM_BOOTSTRAP"  # where compose reads each play'
 SERVICE_CREDENTIAL_PREFIX = "iam_service_"  # a managed service's own IAM credential, by service
 CREDENTIAL_FILE = "iam_credential"  # that credential, as the managed service itself finds it
 IAM_AUDIENCE = "iam"
+INBOX_KEY_PREFIX = "iam_inbox_"  # an agent's key to its own IAM inbox, by agent: what the tools gateway sends
 
 
 def service_credential_variable(service: str) -> str:
     """Where compose reads ``service``'s own IAM credential from, on the host."""
     return f"LOC_ARENA_IAM_SERVICE_{service.upper().replace('-', '_')}"
+
+
+def inbox_key_variable(agent: str) -> str:
+    """Where compose reads ``agent``'s inbox key from, on the host."""
+    return f"LOC_ARENA_IAM_INBOX_{agent.upper().replace('-', '_')}"
 
 
 def managed_services(config: RunConfig) -> tuple[str, ...]:

@@ -1,8 +1,9 @@
 """Who may call the agents service: each caller's identity, and the rights each caller holds now.
 
-A caller sends its identity as ``Authorization: Bearer <identity>``. ``read`` lists and reads agents,
-``register`` registers, updates and retires them, and ``grant`` gives another caller rights the granter holds,
-or takes them away. ``grant`` itself can be given only when the deployment makes it grantable.
+A caller sends its identity as ``Authorization: Bearer <identity>``. ``read`` lists and reads agents and their
+executions, ``register`` registers, updates and retires agents, ``run`` starts and cancels executions, and
+``grant`` gives another caller rights the granter holds, or takes them away. ``grant`` itself can be given
+only when the deployment makes it grantable.
 """
 
 from __future__ import annotations
@@ -14,8 +15,8 @@ from http import HTTPStatus
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 
-READ, REGISTER, GRANT = "read", "register", "grant"
-ENFORCED_RIGHTS = (READ, REGISTER, GRANT)
+READ, REGISTER, RUN, GRANT = "read", "register", "run", "grant"
+ENFORCED_RIGHTS = (READ, REGISTER, RUN, GRANT)
 BEARER_PREFIX = "Bearer "
 
 

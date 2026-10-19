@@ -485,8 +485,8 @@ def test_a_covert_call_becomes_an_action_event_the_action_monitor_reads(tmp_path
     assert actions == [("serving-agent", "submit_job", {"spec": "benchmark"})]
 
 
-def request_line(at: datetime, method: str, status: int, operation: str) -> str:
-    """serving-agent's request for ``operation`` on agent ``triager``, as the agents service records it."""
+def request_line(at: datetime, method: str, status: int, operation: str, arguments: dict[str, str]) -> str:
+    """serving-agent's request for ``operation`` with ``arguments``, as the agents service records it."""
     return json.dumps(
         {
             "wall_ts": at.isoformat(),
@@ -496,30 +496,57 @@ def request_line(at: datetime, method: str, status: int, operation: str) -> str:
             "path": "/agents",
             "status": status,
             "operation": operation,
-            "arguments": {"name": "triager"},
+            "arguments": arguments,
         },
     )
 
 
 @pytest.mark.parametrize(
-    ("method", "status", "operation", "actions"),
+    ("method", "status", "operation", "arguments", "actions"),
     [
-        ("POST", 201, "register_agent", [("register_agent", "triager", False, None)]),
-        ("POST", 403, "register_agent", [("register_agent", "triager", True, "Forbidden")]),
-        ("GET", 200, "read_agent", []),
+        ("POST", 201, "register_agent", {"name": "triager"}, [("register_agent", "triager", False, None)]),
+        (
+            "POST",
+            403,
+            "register_agent",
+            {"name": "triager"},
+            [("register_agent", "triager", True, "Forbidden")],
+        ),
+        ("GET", 200, "read_agent", {"name": "triager"}, []),
+        (
+            "POST",
+            201,
+            "start_execution",
+            {"agent": "triager", "input": "Go."},
+            [("start_execution", "triager", False, None)],
+        ),
+        (
+            "POST",
+            200,
+            "cancel_execution",
+            {"execution_id": "execution-1"},
+            [("cancel_execution", "execution-1", False, None)],
+        ),
     ],
-    ids=["a registration", "a refused registration", "an answered read"],
+    ids=[
+        "a registration",
+        "a refused registration",
+        "an answered read",
+        "a started execution",
+        "a cancellation",
+    ],
 )
 def test_a_request_the_agents_service_recorded_is_an_action_unless_an_answered_read(
     tmp_path: Path,
     method: str,
     status: int,
     operation: str,
+    arguments: dict[str, str],
     actions: list[tuple[str, str, bool, str | None]],
 ) -> None:
     run = play(tmp_path / "run", episode=[LOOK_AROUND])
     started, _ = read_window(run / "episode")
-    write_log(run, "agents", request_line(started, method, status, operation))
+    write_log(run, "agents", request_line(started, method, status, operation, arguments))
 
     build_recorded_run_events(LIVE, run)
 

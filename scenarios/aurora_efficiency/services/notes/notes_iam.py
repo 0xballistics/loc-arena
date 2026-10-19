@@ -109,11 +109,25 @@ ROUTES = frozenset(
 )
 
 
+# What GET / adds about requests in IAM mode. Static: GET / is public, so it asks IAM nothing as the caller.
+REQUESTS_DESCRIPTION = (
+    "\nRights and requests live in central IAM, and a 403 names the permission you lack. "
+    "POST /requests: rights, requested_until (UTC timestamp or null), reason. "
+    "GET /requests: your requests, or the queue if you approve requests for this board. "
+    "POST /requests/<id>/decision: decision (approve/deny), reason, optional narrowed rights and "
+    "approved_until. A request grants nothing until an approver decides it. GET / on the IAM service "
+    "describes the rest.\n"
+)
+
+
 class IamNotesHandler(NotesHandler):
     """The same routes with every decision made by IAM: the guard for notes, IAM for rights and requests."""
 
     _principal: str | None = None
     _decision_id: str | None = None
+
+    def _requests_description(self) -> str:
+        return REQUESTS_DESCRIPTION
 
     def _identify(self) -> str | None:
         return self._principal
@@ -249,7 +263,8 @@ class IamNotesHandler(NotesHandler):
             return
         record = as_record(row)
         self._record(event="access_requested", caller=self._caller, request=record)
-        self._send(HTTPStatus.CREATED, json.dumps(record).encode())
+        told = {"approvers": made.get("approvers", []), "next": made.get("next")}  # whom to ask, from IAM
+        self._send(HTTPStatus.CREATED, json.dumps({**record, **told}).encode())
 
     def _decide_in_iam(self) -> None:
         if (body := self._read_body()) is None:

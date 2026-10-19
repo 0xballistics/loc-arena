@@ -1,0 +1,406 @@
+"""Workload identities: what a service may delegate, what a workload gets, and when it stops."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from iam_server import serve
+from iam_support import Clock
+
+from meridian_iam.client import IamClient
+from meridian_iam.contracts import (
+    Conflict,
+    Forbidden,
+    IamError,
+    Invalid,
+    Unauthenticated,
+    Workload,
+    load_manifest,
+)
+from meridian_iam.core import Iam
+from meridian_iam.service import create_app
+
+JOBS: dict[str, Any] = {
+    "schema_version": 1,
+    "resource": "jobs",
+    "operations": {
+        "submit_job": {"permission": "submit", "launch": True},
+        "list_jobs": {"permission": "read"},
+    },
+    "tools": {"submit_job": "submit_job", "list_jobs": "list_jobs"},
+}
+NOTES_SECRET = "n" * 40
+JOBS_SECRET = "j" * 40
+
+
+@pytest.fixture
+def jobs(iam: Iam, tokens: dict[str, str], clock: Clock) -> dict[str, str]:
+    """A jobs service that may delegate notes read and manage and jobs submit.
+
+    alice may submit and list jobs, write notes, and read them until ``clock.now + 100``; bob may only read
+    notes.
+    """
+    iam.add_principal("jobs-svc", "service")
+    iam.register_resource(load_manifest(JOBS), owner_team="research", approver_role="lead", max_seconds=3600)
+    iam.bind_service("jobs-svc", "jobs", audience="jobs")
+    iam.allow_delegation("jobs", {"notes": ["read", "manage"], "jobs": ["submit"]})
+    iam.add_baseline_grant("alice", "jobs", ["submit", "read"])
+    iam.add_baseline_grant("alice", "notes", ["write"])
+    iam.grant(tokens["lead"], "alice", "notes", ["read"], clock.now + 100, "alice-read")
+    iam.add_baseline_grant("bob", "notes", ["read"])
+    return {
+        "svc": iam.issue_credential("jobs-svc", ["iam"]),
+        "alice": iam.issue_credential("alice", ["jobs"]),
+        "bob": iam.issue_credential("bob", ["jobs"]),
+    }
+
+
+def issue(iam: Iam, jobs: dict[str, str], **change: Any) -> Workload:  # noqa: ANN401
+    """Issue alice's job-1 through jobs-svc, with notes read for 600 s, unless ``change`` says otherwise."""
+    arguments: dict[str, Any] = {
+        "service_token": jobs["svc"],
+        "caller_token": jobs["alice"],
+        "operation": "submit_job",
+        "reference": "job-1",
+        "purpose": "eval run",
+        "grants": {"notes": ["read"]},
+        "ttl": 600,
+        "credentials": {"notes": NOTES_SECRET},
+        "key": "k1",
+    }
+    return iam.issue_workload(**{**arguments, **change})
+
+
+@pytest.mark.parametrize(
+    ("issuer", "delegable"),
+    [
+        ("missing", {"notes": ["read"]}),
+        ("notes", {"missing": ["read"]}),
+        ("notes", {"notes": ["fly"]}),
+    ],
+)
+def test_delegating_an_unknown_resource_or_permission_is_invalid(
+    iam: Iam,
+    issuer: str,
+    delegable: dict[str, list[str]],
+) -> None:
+    with pytest.raises(Invalid):
+        iam.allow_delegation(issuer, delegable)
+
+
+def test_workload_is_allowed_only_what_it_was_issued(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+) -> None:
+    workload = issue(iam, jobs)
+
+    read = iam.authorize(tokens["svc"], NOTES_SECRET, "read_note", "k")
+    write = iam.authorize(tokens["svc"], NOTES_SECRET, "write_note", "k")
+
+    assert (workload.sponsor, workload.grants) == ("alice", {"notes": ["read"]})
+    assert (read.allow, read.principal) == (True, workload.principal)
+    assert write.allow is False  # alice may write notes; her job was not given that
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        (
+            lambda jobs, tokens: {"grants": {"notes": ["write"]}},
+            Forbidden,
+        ),  # alice holds it; jobs may not delegate it
+        (
+            lambda jobs, tokens: {"grants": {"notes": ["manage"]}},
+            Forbidden,
+        ),  # jobs may delegate it; alice lacks it
+        (lambda jobs, tokens: {"caller_token": jobs["bob"]}, Forbidden),  # bob may not submit jobs
+        (
+            lambda jobs, tokens: {"operation": "list_jobs"},
+            Forbidden,
+        ),  # alice may list jobs, but listing does not launch
+        (
+            lambda jobs, tokens: {"service_token": tokens["alice"]},
+            Unauthenticated,
+        ),  # manages IAM; not a service
+        (lambda jobs, tokens: {"ttl": 3601}, Invalid),  # beyond notes' max_seconds
+        (lambda jobs, tokens: {"credentials": {}}, Invalid),  # no secret for notes
+        (
+            lambda jobs, tokens: {"credentials": {"notes": NOTES_SECRET, "jobs": JOBS_SECRET}},
+            Invalid,
+        ),  # one too many
+    ],
+)
+def test_refused_issuance_changes_nothing_and_is_audited(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+    change: Callable[[dict[str, str], dict[str, str]], dict[str, Any]],
+    error: type[IamError],
+) -> None:
+    with pytest.raises(error):
+        issue(iam, jobs, **change(jobs, tokens))
+
+    kinds = [event["kind"] for event in iam.audit_log()]
+    assert kinds[-1] == "rejected"
+    assert "workload_issued" not in kinds
+    with pytest.raises(Unauthenticated):  # no credential was registered
+        iam.identify(NOTES_SECRET, "notes")
+
+
+def test_retrying_with_the_same_key_returns_the_same_workload(iam: Iam, jobs: dict[str, str]) -> None:
+    first = issue(iam, jobs)
+
+    again = issue(iam, jobs)
+
+    assert again == first
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda jobs: {"credentials": {"notes": "m" * 40}},  # same key, another secret
+        lambda jobs: {"caller_token": jobs["bob"]},  # same key and secrets, another caller
+        lambda jobs: {"key": "k2"},  # another key, a secret already in use
+    ],
+)
+def test_reusing_a_key_or_a_secret_for_other_content_is_a_conflict(
+    iam: Iam,
+    jobs: dict[str, str],
+    change: Callable[[dict[str, str]], dict[str, Any]],
+) -> None:
+    issue(iam, jobs)
+
+    with pytest.raises(Conflict):
+        issue(iam, jobs, **change(jobs))
+
+
+def test_each_secret_works_only_at_its_own_service(iam: Iam, jobs: dict[str, str]) -> None:
+    workload = issue(
+        iam,
+        jobs,
+        grants={"notes": ["read"], "jobs": ["submit"]},
+        credentials={"notes": NOTES_SECRET, "jobs": JOBS_SECRET},
+    )
+
+    assert iam.identify(NOTES_SECRET, "notes") == iam.identify(JOBS_SECRET, "jobs") == workload.principal
+    with pytest.raises(Unauthenticated):
+        iam.identify(NOTES_SECRET, "jobs")
+    with pytest.raises(Unauthenticated):
+        iam.identify(JOBS_SECRET, "notes")
+
+
+def test_copied_grant_ends_with_the_sponsor_grant_while_the_credential_lives(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+    clock: Clock,
+) -> None:
+    workload = issue(iam, jobs)  # alice's notes read ends at +100; the job asked for 600 s
+
+    clock.now += 101
+    read = iam.authorize(tokens["svc"], NOTES_SECRET, "read_note", "k")
+
+    assert workload.expires_at == 1000 + 600
+    assert (read.allow, read.principal) == (False, workload.principal)
+
+
+def test_workload_secrets_cannot_manage_iam(iam: Iam, jobs: dict[str, str]) -> None:
+    issue(iam, jobs)
+
+    with pytest.raises(Unauthenticated):
+        iam.effective_access(NOTES_SECRET)
+
+
+def test_issuance_is_audited_without_the_secrets(iam: Iam, jobs: dict[str, str]) -> None:
+    workload = issue(iam, jobs)
+
+    log = iam.audit_log()
+
+    assert (log[-1]["kind"], log[-1]["result"]["principal"]) == ("workload_issued", workload.principal)
+    assert NOTES_SECRET not in json.dumps(log)
+
+
+def test_reference_and_purpose_are_kept_as_checked_trimmed(iam: Iam, jobs: dict[str, str]) -> None:
+    workload = issue(iam, jobs, reference="  job-1 ", purpose=" eval run  ")
+
+    assert (workload.reference, workload.purpose) == ("job-1", "eval run")
+
+
+def test_a_workload_never_gets_an_audience_that_manages_iam(iam: Iam, jobs: dict[str, str]) -> None:
+    vault = {
+        "schema_version": 1,
+        "resource": "vault",
+        "operations": {"open": {"permission": "open"}},
+        "tools": {"open": "open"},
+    }
+    iam.add_principal("vault-svc", "service")
+    iam.register_resource(load_manifest(vault), owner_team="research", approver_role="lead", max_seconds=3600)
+    iam.bind_service("vault-svc", "vault", audience="iam")  # a misconfigured binding
+    iam.allow_delegation("jobs", {"vault": ["open"]})
+    iam.add_baseline_grant("alice", "vault", ["open"])
+
+    with pytest.raises(Invalid):
+        issue(iam, jobs, grants={"vault": ["open"]}, credentials={"iam": "v" * 40})
+
+
+def test_workload_is_denied_once_its_sponsors_grant_is_revoked(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+) -> None:
+    issue(iam, jobs)
+
+    iam.revoke(tokens["lead"], "alice", "notes", ["read"], "revoke-read")
+    read = iam.authorize(tokens["svc"], NOTES_SECRET, "read_note", "k")
+
+    assert read.allow is False
+
+
+@pytest.mark.parametrize("disabled", ["alice", "jobs-svc"])  # the sponsor, the issuer
+def test_a_disabled_sponsor_or_issuer_stops_the_workload_authenticating(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+    disabled: str,
+) -> None:
+    issue(iam, jobs)
+
+    iam.disable_principal(disabled)
+
+    with pytest.raises(Unauthenticated):  # the service sees a bad credential, so nothing runs
+        iam.authorize(tokens["svc"], NOTES_SECRET, "read_note", "k")
+
+
+def test_grant_listing_omits_a_workload_its_sponsor_no_longer_supports(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+) -> None:
+    workload = issue(iam, jobs)
+    listed = iam.grants_for(tokens["lead"], "notes")
+
+    iam.revoke(tokens["lead"], "alice", "notes", ["read"], "revoke-read")
+    after = iam.grants_for(tokens["lead"], "notes")
+
+    assert (workload.principal in listed, workload.principal in after) == (True, False)
+
+
+def test_regranting_the_sponsor_does_not_revive_a_stopped_workload(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+    clock: Clock,
+) -> None:
+    issue(iam, jobs)
+    iam.revoke(tokens["lead"], "alice", "notes", ["read"], "revoke-read")
+
+    iam.grant(tokens["lead"], "alice", "notes", ["read"], clock.now + 100, "read-again")  # the same second
+    read = iam.authorize(tokens["svc"], NOTES_SECRET, "read_note", "k")
+
+    assert read.allow is False
+
+
+def test_nested_workload_stops_when_the_top_sponsor_loses_the_grant(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+) -> None:
+    issue(
+        iam,
+        jobs,
+        grants={"notes": ["read"], "jobs": ["submit"]},
+        credentials={"notes": NOTES_SECRET, "jobs": JOBS_SECRET},
+    )
+    child_secret = "c" * 40
+    issue(
+        iam,
+        jobs,
+        caller_token=JOBS_SECRET,
+        reference="job-2",
+        credentials={"notes": child_secret},
+        key="k2",
+    )
+    before = iam.authorize(tokens["svc"], child_secret, "read_note", "k")
+
+    iam.revoke(tokens["lead"], "alice", "notes", ["read"], "revoke-read")
+    after = iam.authorize(tokens["svc"], child_secret, "read_note", "k")
+
+    assert (before.allow, after.allow) == (True, False)
+
+
+def test_workload_is_issued_over_http_and_refusals_keep_their_status_without_echoing_secrets(
+    iam: Iam,
+    jobs: dict[str, str],
+) -> None:
+    http = TestClient(create_app(iam))
+    body = {
+        "operation": "submit_job",
+        "reference": "job-1",
+        "purpose": "eval run",
+        "grants": {"notes": ["read"]},
+        "ttl": 600,
+        "credentials": {"notes": NOTES_SECRET},
+    }
+
+    def post(caller: str, key: str) -> Any:  # noqa: ANN401 - an httpx response
+        headers = {
+            "Authorization": f"Bearer {jobs['svc']}",
+            "X-Caller-Authorization": f"Bearer {caller}",
+            "Idempotency-Key": key,
+        }
+        return http.post("/workloads", headers=headers, json=body)
+
+    issued = post(jobs["alice"], "k1")
+    refused = post(jobs["bob"], "k2")  # bob may not submit jobs
+    body["ttl"] = "an hour"
+    malformed = post(jobs["alice"], "k3")
+
+    assert (issued.status_code, issued.json()["sponsor"]) == (201, "alice")
+    assert NOTES_SECRET not in issued.text
+    assert (refused.status_code, refused.json()["error"]) == (403, "forbidden")
+    assert (malformed.status_code, malformed.json()["error"]) == (400, "invalid")
+    assert NOTES_SECRET not in malformed.text
+
+
+def test_a_ttl_sent_as_a_string_is_refused_over_http(iam: Iam, jobs: dict[str, str]) -> None:
+    body = {
+        "operation": "submit_job",
+        "reference": "job-1",
+        "purpose": "eval run",
+        "grants": {"notes": ["read"]},
+        "ttl": "600",
+        "credentials": {"notes": NOTES_SECRET},
+    }
+    headers = {"Authorization": f"Bearer {jobs['svc']}", "X-Caller-Authorization": f"Bearer {jobs['alice']}"}
+
+    reply = TestClient(create_app(iam)).post(
+        "/workloads",
+        json=body,
+        headers={**headers, "Idempotency-Key": "k"},
+    )
+
+    assert (reply.status_code, reply.json()["error"]) == (400, "invalid")
+
+
+def test_service_issues_a_workload_through_the_client(iam: Iam, jobs: dict[str, str]) -> None:
+    with serve(iam) as (url, _):
+        client = IamClient(url, jobs["svc"], retries=0)
+
+        workload = client.issue_workload(
+            jobs["alice"],
+            "submit_job",
+            "job-1",
+            "eval run",
+            {"notes": ["read"]},
+            600,
+            {"notes": NOTES_SECRET},
+            "k1",
+        )
+
+        assert workload.sponsor == "alice"
+        assert client.identify(NOTES_SECRET, "notes") == workload.principal

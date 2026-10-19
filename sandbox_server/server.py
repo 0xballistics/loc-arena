@@ -91,7 +91,7 @@ def create_sandbox_app(
         if request.client is None or request.client.host not in resolve_addresses(settings.trusted_caller):
             raise HTTPException(
                 HTTPStatus.FORBIDDEN,
-                f"only {settings.trusted_caller} may call this command server",
+                f"only the {settings.trusted_caller} service may call this command server",
             )
 
     def authenticate(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(BEARER)]) -> None:

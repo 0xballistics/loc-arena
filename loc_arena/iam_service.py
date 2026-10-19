@@ -12,22 +12,31 @@ from __future__ import annotations
 import json
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
 import uvicorn
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from loc_arena.config import load_run_config
-from loc_arena.iam_bootstrap import BOOTSTRAP_SECRET, IAM_AUDIENCE, SERVICE_CREDENTIAL_PREFIX
+from loc_arena.iam_bootstrap import (
+    BOOTSTRAP_SECRET,
+    IAM_AUDIENCE,
+    INBOX_KEY_PREFIX,
+    SERVICE_CREDENTIAL_PREFIX,
+)
 from loc_arena.iam_seed import REPOSITORY
 from loc_arena.mcp_service import ALL_ADDRESSES
 from loc_arena.sandbox import IDENTITY_PREFIX
 from meridian_iam.contracts import load_manifest
 from meridian_iam.core import Iam
-from meridian_iam.core.base import SCOPE_PREFIX
+from meridian_iam.core.base import INBOX_AUDIENCE, SCOPE_PREFIX
 from meridian_iam.core.lifecycle import OPERATOR_ROLE, OPERATOR_TEAM
 from meridian_iam.service import create_app
+from meridian_iam.service.mcp import INBOX_TOOL, inbox_server
 
 
 def read_credentials(secrets_directory: Path) -> tuple[dict[tuple[str, str], str], dict[str, str]]:
@@ -49,16 +58,33 @@ def read_credentials(secrets_directory: Path) -> tuple[dict[tuple[str, str], str
     return identities, services
 
 
-def seed_iam(
+def read_inbox_keys(secrets_directory: Path) -> dict[str, str]:
+    """Each agent's key to its own IAM inbox mounted there, by agent id."""
+    return {
+        path.name.removeprefix(INBOX_KEY_PREFIX): path.read_text().strip()
+        for path in sorted(secrets_directory.glob(f"{INBOX_KEY_PREFIX}*"))
+    }
+
+
+def seed_iam(  # noqa: PLR0913
     iam: Iam,
     document: Mapping[str, Any],
     identities: Mapping[tuple[str, str], str],
     service_credentials: Mapping[str, str],
     iam_name: str,
+    inbox_keys: Mapping[str, str] | None = None,
 ) -> None:
-    """Seed an empty store in one transaction: it is complete, or it is empty and nothing was seeded."""
+    """Seed an empty store in one transaction: it is complete, or it is empty and nothing was seeded.
+
+    ``inbox_keys`` are imported with the ``iam-inbox`` audience alone: each reads its agent's inbox and
+    nothing else, so the tools gateway that sends them can never manage IAM for the agent.
+    """
     with iam.seeding():
         _seed(iam, document, identities, service_credentials, iam_name)
+        agents = set(document["agents"])
+        for agent, key in (inbox_keys or {}).items():
+            if agent in agents:
+                iam.import_credential(agent, key, [INBOX_AUDIENCE], label="inbox")
 
 
 def _seed(
@@ -109,6 +135,23 @@ def _seed(
             iam.import_credential(agent, token, audiences, label=service)
 
 
+def serving_app(iam: Iam, service: str, offered: Collection[str]) -> Starlette:
+    """IAM's HTTP API with its ``access_inbox`` MCP server at ``/mcp``, for requests addressed to ``service``.
+
+    One app on one port and one event loop, so the tool and the HTTP handlers never touch the core at once.
+    ``offered`` is the ``iam`` live service's ``tools``: it refuses to start if they name any tool but the one
+    it serves, and serves the HTTP API alone, with no ``/mcp``, when they name none.
+    """
+    if unknown := set(offered) - {INBOX_TOOL}:
+        raise ValueError(f"the iam service offers tools it does not serve: {sorted(unknown)}")
+    if not offered:
+        return create_app(iam)
+    security = TransportSecuritySettings(allowed_hosts=[service, f"{service}:*"])
+    app = inbox_server(iam).streamable_http_app(transport_security=security)
+    app.router.routes.append(Mount("/", app=create_app(iam)))  # after /mcp, so the HTTP API serves the rest
+    return app
+
+
 def main(arguments: list[str]) -> None:
     """Serve the IAM entry ``arguments[1]`` of the run config at ``arguments[0]``."""
     config = load_run_config(arguments[0])
@@ -124,9 +167,10 @@ def main(arguments: list[str]) -> None:
     )
     if not iam.bootstrapped():
         identities, services = read_credentials(secrets_directory)
-        seed_iam(iam, document, identities, services, arguments[1])
+        seed_iam(iam, document, identities, services, arguments[1], read_inbox_keys(secrets_directory))
+    offered = next(service.tools for service in config.live_services if service.name == arguments[1])
     uvicorn.run(
-        create_app(iam),
+        serving_app(iam, arguments[1], offered),
         host=ALL_ADDRESSES,
         port=settings.port,
         log_level="warning",

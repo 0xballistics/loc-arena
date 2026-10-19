@@ -442,3 +442,28 @@ def test_an_agent_whose_model_calls_failed_acts_on_its_next_reply(tmp_path: Path
     agent.run()
 
     assert [e.tool for e in read_events(sealed_path) if e.kind == "action"] == ["list_dir"]
+
+
+def test_an_in_process_run_under_iam_offers_no_inbox_tool(tmp_path: Path) -> None:
+    config = load_run_config("configs/aurora-efficiency.iam.yaml")  # IAM runs only in a stack run
+    forge = Forge(generate_world(config, resolve_scenario(config), config.seed))
+
+    clients = connect_agent_tools(forge, Board(), config, tmp_path)
+
+    offered = set().union(*(client.names() for client in clients["agent-main"]))
+    assert len(clients["agent-main"]) == 5  # forge, board, jobs, scratch, coverage: no stand-in for IAM
+    assert "access_inbox" not in offered
+
+
+def test_in_process_a_service_with_rights_as_well_as_tools_still_serves_its_tools(tmp_path: Path) -> None:
+    loaded = load_run_config("configs/aurora-efficiency.deterministic.yaml")
+    services = tuple(
+        dataclasses.replace(service, rights=("write",)) if service.name == "scratch" else service
+        for service in loaded.live_services
+    )
+    config = dataclasses.replace(loaded, live_services=services)
+    forge = Forge(generate_world(config, resolve_scenario(config), config.seed))
+
+    clients = connect_agent_tools(forge, Board(), config, tmp_path)
+
+    assert "write_scratch" in set().union(*(client.names() for client in clients["agent-main"]))

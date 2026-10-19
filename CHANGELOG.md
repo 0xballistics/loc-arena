@@ -17,6 +17,10 @@ log has the details.
 
 ### Added
 
+- **Agents can run the company's agents.** In a stack run, an agent with `run` on the agents service (in the
+  default config, agent-main) starts an execution of a registered agent with `POST /executions`: pi runs its
+  latest version on one of three runners, and the execution ends completed, failed or cancelled. Starting and
+  cancelling are actions on the event logs; each change of state is an audit line naming its runner.
 - **Runners for the company's own agents.** A scenario's service can declare `runners: <n>`: a stack run then
   starts `runner-1` to `runner-<n>`, sandboxes with pi in an empty workspace that only that service can drive,
   each with its own token. pi there calls models through the gateway, which by default lets runners make 300
@@ -34,6 +38,10 @@ log has the details.
   grant expires or is revoked. IAM unavailable stops the call. The honest twin gets a fresh store and fresh
   credentials. Every run config without the switch behaves as before; see `docs/iam-service/spec.md` section 11
   for what is and is not under it.
+- **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
+  run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused
+  from its next call once the launcher loses that access or the service is disabled. No service issues them
+  yet; jobsvc and the agents runners are the first planned callers.
 - **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
   agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
   as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in
@@ -136,6 +144,57 @@ log has the details.
   progress, against `AGENTS.md` and the repository's own ast-grep rules. (#64)
 
 ### Changed
+
+- **Agents learn of access requests at the start of their turn.** Under central IAM the harness reads each
+  agent's IAM inbox when its turn starts, as it reads its board messages, and hands it each new item once as a
+  message from IAM: an approver sees a request it may decide, with the whole call to decide it (credential,
+  `Idempotency-Key` and body), and a requester sees its outcome. A failed read, or an answer that does not parse
+  as inbox items, is a warning, never an action of the agent's; an agent's own call to `access_inbox` is logged
+  as its action. In live run 3 a request went
+  undecided because its approver never looked; in live run 4 both were decided.
+
+- **Under central IAM every agent is offered its IAM inbox.** IAM's `access_inbox` tool goes through the
+  tools gateway to every agent, which sends the agent's per-play inbox key: it reads that inbox and nothing
+  else, so the gateway never holds a credential that manages IAM. Sandboxes keep their IAM identity for asking
+  and deciding over HTTP, and in-process runs, which have no IAM, offer no such tool.
+
+- **The notes service is "the team's shared notes", not a "board".** Its description in agents' prompts and at
+  its `GET /` no longer calls it a board, so "the board" means only the message board between agents. In live
+  run 3 the only access request came from an agent that confused the two.
+
+- **IAM says how to send a body it cannot read.** A request whose body is not a JSON object, most often JSON
+  sent without `Content-Type: application/json` (urllib's default), now gets a 400 that says to send a JSON
+  object with that header. In live run 3 the old answer cost three turns.
+
+- **Filing an access request says whom to ask.** IAM's answer, and the notes board's, now names the approvers who
+  can decide the request and tells the requester to ask them. On Aurora the requester can then message the
+  approver on the board, which delivers it at the approver's next turn. In both earlier live IAM runs requests
+  went undecided because no approver knew of them.
+
+- **A refused IAM change shows what was tried.** Its audit line, and so the blocked action monitors see, now
+  carries the request's fields (resource, permissions, reason), each cut to 500 characters because a refused
+  request was never validated, so one long field cannot hide the rest; a caller that never authenticated adds
+  nothing. Before, the line said only which kind of change failed and why.
+
+- **An access request's event keeps its request ID.** The event built from IAM's audit line now carries what IAM
+  answered, so a request can be joined to its decision; before, a new request's ID was dropped with the rest of
+  the answer.
+
+- **A malformed request to IAM says what is wrong.** IAM answers it 400 naming each bad field and its problem
+  (`body.reason: missing`), never its value or an unexpected key's name, which can be secrets. In the live run
+  agents learned IAM's request format only from such field lists, which a bare 400 had removed.
+
+- **The notes board under IAM describes its request routes again.** In IAM mode its `GET /` said nothing about
+  requests, because the local queue it described is gone; it now names the request and decision routes it
+  forwards to IAM and points at IAM's own description.
+
+- **Central IAM describes itself.** `GET /` on the IAM service says, without a credential, how to see your
+  access, ask for more (body fields and the `Idempotency-Key` header) and, as an approver, find and decide
+  requests; the prompt's IAM line points there. In the live IAM run agents could only learn this from errors.
+
+- **A refused service call shows its reason in a stack run.** The system prompt's urllib example now prints a
+  refused call's status and body, so an agent sees which permission it lacks and where to ask for it; before,
+  the example raised on any 403 and the guidance in the body was never read.
 
 - **A stack run keeps each live service's log in its own run directory.** The logs of the live services and of
   agentgateway are copied to `services/<name>.log` in the run directory before grading, where the events of their

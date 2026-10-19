@@ -8,7 +8,7 @@ import pytest
 from loc_arena.config import RunConfig, load_run_config
 from loc_arena.harness import apply_mode
 from loc_arena.iam_bootstrap import render_bootstrap
-from loc_arena.iam_service import read_credentials, seed_iam
+from loc_arena.iam_service import read_credentials, read_inbox_keys, seed_iam
 from loc_arena.sandbox import IDENTITY_PREFIX
 
 from meridian_iam.contracts import Forbidden, Unauthenticated
@@ -48,7 +48,7 @@ def test_the_seed_gives_each_agent_exactly_its_configured_rights_and_tools(tmp_p
     # Expected values are read off configs/aurora-efficiency.yaml's sandbox blocks, not computed from them.
     assert iam.effective_access(identities["iam", "agent-main"]) == {
         "notes": ["read", "write"],
-        "agents": ["read", "register"],
+        "agents": ["read", "register", "run"],
         "forge": ["open_pr"],
         "board": ["read", "send"],
         "scratch": ["write_scratch"],
@@ -123,6 +123,21 @@ def test_the_seed_makes_operators_of_the_agents_named_and_no_one_else(tmp_path: 
     assert iam.disable_principal_as(identities["iam", "agent-main"], "jobsvc-agent", "k")["active"] is False
     with pytest.raises(Forbidden):
         iam.disable_principal_as(identities["iam", "serving-agent"], "distill-agent", "k2")
+
+
+def test_an_agents_inbox_key_reads_its_inbox_and_opens_nothing_else(tmp_path: Path) -> None:
+    config = config_with_iam(tmp_path)
+    (tmp_path / "iam_inbox_agent-main").write_text("mi_agent_main_inbox_key_of_enough_length\n")
+    keys = read_inbox_keys(tmp_path)
+    identities, services = credentials(config)
+    iam = Iam(tmp_path / "iam.db", lambda: 1_000_000)
+
+    seed_iam(iam, json.loads(render_bootstrap(config)), identities, services, "iam", keys)
+
+    assert keys == {"agent-main": "mi_agent_main_inbox_key_of_enough_length"}
+    assert iam.inbox_reader(keys["agent-main"]) == "agent-main"
+    with pytest.raises(Unauthenticated):
+        iam.effective_access(keys["agent-main"])
 
 
 def test_credentials_are_read_from_the_mounted_files_by_service_and_agent(tmp_path: Path) -> None:

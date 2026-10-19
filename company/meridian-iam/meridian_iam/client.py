@@ -7,6 +7,7 @@ Token-bearing headers and transport exception text are never put in errors.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import secrets
 import urllib.error
@@ -21,6 +22,7 @@ from meridian_iam.contracts import (
     Invalid,
     Unauthenticated,
     Unavailable,
+    Workload,
 )
 
 _BY_CODE: dict[str, type[IamError]] = {
@@ -78,7 +80,12 @@ class IamClient:
     def _error(exc: urllib.error.HTTPError) -> IamError:
         try:
             payload = json.loads(exc.read())
-            return _BY_CODE[payload["error"]](str(payload.get("message", "")))
+            message, fields = str(payload.get("message", "")), payload.get("fields")
+            listed = isinstance(fields, list) and all(isinstance(field, str) for field in fields)
+            bad = tuple(fields) if listed and fields else ()
+            if bad:
+                message = f"{message}: {'; '.join(bad)}"  # where a malformed request went wrong; cut at 200
+            return _BY_CODE[payload["error"]](message, fields=bad)
         except (ValueError, KeyError, TypeError):
             return Unavailable("malformed IAM answer")
 
@@ -110,6 +117,58 @@ class IamClient:
         if not valid:
             raise Unavailable("malformed IAM decision")
         return Decision(**fields)
+
+    def issue_workload(  # noqa: PLR0913
+        self,
+        caller_token: str | None,
+        operation: str,
+        reference: str,
+        purpose: str,
+        grants: dict[str, list[str]],
+        ttl: int,
+        credentials: dict[str, str],
+        key: str,
+    ) -> Workload:
+        """Issue a workload identity as this client's service identity, for the caller launching the work.
+
+        A mutation, so never retried. ``credentials`` maps each audience to a secret this service generated
+        for the workload and keeps to hand over; a retry after a lost reply sends the same secrets under the
+        same ``key``. A malformed answer is ``Unavailable``.
+        """
+        headers = {"Idempotency-Key": key}
+        if caller_token:
+            headers["X-Caller-Authorization"] = f"Bearer {caller_token}"
+        body = {
+            "operation": operation,
+            "reference": reference,
+            "purpose": purpose,
+            "grants": grants,
+            "ttl": ttl,
+            "credentials": credentials,
+        }
+        raw = self._call("POST", "/workloads", headers=headers, body=body)
+        try:
+            workload = Workload(**{field.name: raw[field.name] for field in dataclasses.fields(Workload)})
+        except (KeyError, TypeError):
+            raise Unavailable("malformed IAM answer") from None
+        texts = (
+            workload.principal,
+            workload.resource,
+            workload.sponsor,
+            workload.reference,
+            workload.purpose,
+        )
+        if not (
+            all(isinstance(text, str) for text in texts)
+            and type(workload.expires_at) is int
+            and isinstance(workload.grants, dict)
+            and all(
+                isinstance(permissions, list) and all(isinstance(p, str) for p in permissions)
+                for permissions in workload.grants.values()
+            )
+        ):
+            raise Unavailable("malformed IAM answer")
+        return workload
 
     # Management calls forward the caller's own credential; the service identity is not used.
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from iam_support import Clock
 
-from meridian_iam.contracts import Conflict, Forbidden, Invalid
+from meridian_iam.contracts import Conflict, Forbidden, Invalid, Unauthenticated
 from meridian_iam.core import Iam
 from meridian_iam.core.lifecycle import OPERATOR_ROLE, OPERATOR_TEAM
 
@@ -30,6 +30,44 @@ def test_pending_and_denied_grant_nothing(iam: Iam, tokens: dict[str, str]) -> N
     iam.decide(tokens["lead"], pending, approve=False, key="d", reason="no")
     assert not allowed(iam, tokens, "alice")
     assert iam.my_requests(tokens["alice"])[0]["state"] == "denied"
+
+
+def test_a_decision_names_who_asked_so_it_joins_to_the_request(iam: Iam, tokens: dict[str, str]) -> None:
+    request = submit(iam, tokens["alice"])
+
+    decided = iam.decide(tokens["lead"], request, approve=True, key="d", reason="ok")
+
+    assert decided == {"request": request, "state": "approved", "requester": "alice"}
+
+
+def test_a_filed_request_says_whom_to_ask_and_what_happens_next(iam: Iam, tokens: dict[str, str]) -> None:
+    filed = iam.submit_request(tokens["alice"], "notes", ["write"], "because", 2000, "k")
+
+    request = filed["request"]
+    assert filed["approvers"] == ["lead"]
+    assert filed["next"] == (
+        f"Request {request} waits for an approver: ask lead to decide it. They decide with "
+        f"POST /requests/{request}/decision on IAM; GET /requests/{request} shows its state."
+    )
+
+
+def test_only_approvers_holding_what_is_asked_are_named_never_the_requester(
+    iam: Iam,
+    tokens: dict[str, str],
+) -> None:
+    iam.add_member("bob", "research", "lead", authority={"notes": ["read"]})
+
+    for_write = iam.submit_request(tokens["alice"], "notes", ["write"], "because", 2000, "a")
+    for_read = iam.submit_request(tokens["lead"], "notes", ["read"], "because", 2000, "l")
+
+    assert (for_write["approvers"], for_read["approvers"]) == (["lead"], ["bob"])
+
+
+def test_a_request_nobody_can_approve_says_so(iam: Iam, tokens: dict[str, str]) -> None:
+    filed = iam.submit_request(tokens["lead"], "notes", ["read"], "because", 2000, "k")
+
+    assert filed["approvers"] == []
+    assert "nobody can approve it now" in filed["next"]
 
 
 @pytest.mark.parametrize(
@@ -78,6 +116,37 @@ def test_only_eligible_owner_with_authority_decides(iam: Iam, tokens: dict[str, 
     with pytest.raises(Forbidden):
         iam.decide(tokens["lead"], req, approve=True, key="d3")
     assert not allowed(iam, tokens, "alice")
+
+
+def test_a_decision_reason_is_stripped_and_bounded_like_a_requests(iam: Iam, tokens: dict[str, str]) -> None:
+    request = submit(iam, tokens["alice"])
+    with pytest.raises(Invalid):
+        iam.decide(tokens["lead"], request, approve=False, key="long", reason="x" * 501)
+
+    iam.decide(tokens["lead"], request, approve=False, key="ok", reason=" " * 450 + "x" * 100)
+
+    assert iam.my_requests(tokens["alice"])[0]["decision_reason"] == "x" * 100
+
+
+@pytest.mark.parametrize(("permissions", "until"), [(["write"], None), (None, 1500)])
+def test_a_denial_grants_nothing_so_it_names_no_permission_or_deadline(
+    iam: Iam,
+    tokens: dict[str, str],
+    permissions: list[str] | None,
+    until: int | None,
+) -> None:
+    request = submit(iam, tokens["alice"])
+
+    with pytest.raises(Invalid):
+        iam.decide(
+            tokens["lead"],
+            request,
+            approve=False,
+            key="d",
+            reason="no",
+            permissions=permissions,
+            until=until,
+        )
 
 
 def test_no_self_approval_and_no_repeat_decision(iam: Iam, tokens: dict[str, str]) -> None:
@@ -156,9 +225,35 @@ def test_rejected_mutation_changes_nothing_but_is_audited(iam: Iam, tokens: dict
         iam.submit_request(tokens["alice"], "notes", ["manage"], "r", 2000, "k")
     assert len(iam.my_requests(tokens["alice"])) == before
     rejected = [e for e in iam.audit_log() if e["kind"] == "rejected"]
-    assert [(e["actor"], e["operation"], e["code"]) for e in rejected] == [
-        ("alice", "access_requested", "invalid"),
+    assert [(e["actor"], e["operation"], e["code"], e["resource"], e["permissions"]) for e in rejected] == [
+        ("alice", "access_requested", "invalid", "notes", ["manage"]),
     ]
+
+
+def test_a_refused_calls_long_field_is_cut_and_the_rest_kept(iam: Iam, tokens: dict[str, str]) -> None:
+    with pytest.raises(Invalid):
+        iam.submit_request(tokens["alice"], "notes", ["write"], "x" * 5_000, 2000, "k")
+
+    (refused,) = [e for e in iam.audit_log() if e["kind"] == "rejected"]
+
+    assert (refused["resource"], refused["permissions"]) == ("notes", ["write"])
+    assert refused["reason"] == "x" * 500 + "… (5000 characters)"
+
+
+def test_a_caller_that_never_authenticated_audits_nothing_it_sent(iam: Iam) -> None:
+    with pytest.raises(Unauthenticated):
+        iam.submit_request("not a credential", "notes", ["write"], "anything at all", 2000, "k")
+
+    (refused,) = [e for e in iam.audit_log() if e["kind"] == "rejected"]
+
+    assert refused == {
+        "at": refused["at"],
+        "kind": "rejected",
+        "actor": None,
+        "operation": "access_requested",
+        "code": "unauthenticated",
+        "via": None,
+    }
 
 
 def test_baseline_grants_are_ongoing_revocable_and_listed(iam: Iam, tokens: dict[str, str]) -> None:

@@ -176,6 +176,8 @@ _TARGET_FROM: Mapping[str, str] = {
     "retire_agent": "name",
     "grant_rights": "agent",
     "revoke_rights": "agent",
+    "start_execution": "agent",
+    "cancel_execution": "execution_id",
 }
 
 
@@ -319,10 +321,13 @@ def _iam_line_parser(recorded_by_service: frozenset[str]) -> RecordLineParser:
             "blocked": blocked,
             "reason": event.get("code") if blocked else None,
         }
+        # What IAM answered (a new request's ID, a decision's requester) joins this event to the others.
+        answer = event.get("result")
+        result = answer if isinstance(answer, dict) else None
         return _ParsedRecordLine(
             float(at),
             actor,
-            [RecordedEvent("action", actor, found, payload, tool=f"iam_{kind}")],
+            [RecordedEvent("action", actor, found, payload, tool=f"iam_{kind}", result=result)],
         )
 
     return parse

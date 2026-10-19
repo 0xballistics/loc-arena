@@ -74,6 +74,7 @@ from loc_arena.harness import PLAYED_FILE, PlayedRun, apply_mode, build_recorded
 from loc_arena.logging_.events import AppendOnlyLog, read_events
 from loc_arena.npcs.coworker import apply_world_activity, resolve_activity_repos
 from loc_arena.recorded_events import SERVICE_LOGS
+from loc_arena.runner_pool import list_runner_services, runner_token_secret, runner_token_variable
 from loc_arena.sandbox import IDENTITY_PREFIX, TOKEN_FILE
 from loc_arena.scaffold.bus import Recorder
 from loc_arena.stack_play import renew_services
@@ -130,6 +131,7 @@ AGENT_WITHOUT_TOOLS = AGENT_WITHOUT_RIGHTS  # whose tools the stack's config tak
 OWN_IMAGES = {
     "image": f"{CONFIG.settings.stack.image}-reach-{secrets.token_hex(3)}",
     "sandbox_image": f"{CONFIG.settings.stack.sandbox_image}-reach-{secrets.token_hex(3)}",
+    "runner_image": f"{CONFIG.settings.stack.runner_image}-reach-{secrets.token_hex(3)}",
 }
 STACK_CONFIG = dataclasses.replace(
     CONFIG,
@@ -944,6 +946,10 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         API_KEY_VARIABLE: placeholder,
         **{token_variable(agent): token for agent, token in tokens.items()},
         **{identity.variable: value for identity, value in issued.items()},
+        **{
+            runner_token_variable(name): secrets.token_urlsafe(32)
+            for name in list_runner_services(STACK_CONFIG)
+        },
         TOOLS_GATEWAY_CONFIG_VARIABLE: render_tools_gateway_config(STACK_CONFIG, tokens, issued),
         **issue_gateway_secrets(CONFIG.settings, held, sandboxes, {}, "attack"),
     }
@@ -1064,17 +1070,8 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         mounts = read_mounts(project)
 
         def play_phase(commands: dict[str, str]) -> dict[str, str]:
-            in_episode = [
-                *compose,
-                "run",
-                "--no-deps",
-                "--rm",
-                "--use-aliases",
-                "-T",
-                EPISODE_SERVICE,
-                "python",
-                "-c",
-            ]
+            run_episode = ["run", "--no-deps", "--rm", "--use-aliases", "-T", EPISODE_SERVICE, "python", "-c"]
+            in_episode = [*compose, *run_episode]
             played_phase = run_docker(*in_episode, IN_PHASE, input=json.dumps(commands), env=environment)
             return json.loads(played_phase.stdout.strip().splitlines()[-1])
 
@@ -1277,7 +1274,8 @@ def test_a_live_service_with_rights_or_tools_holds_exactly_one_identity_per_agen
 ) -> None:
     held = stack_run.service_secrets[service]
 
-    assert held == sorted(f"{IDENTITY_PREFIX}{agent.id}" for agent in CONFIG.agents)
+    tokens = map(runner_token_secret, list_runner_services(CONFIG)) if service == AGENTS_SERVICE.name else ()
+    assert held == sorted([*(f"{IDENTITY_PREFIX}{agent.id}" for agent in CONFIG.agents), *tokens])
 
 
 def test_an_agent_without_rights_reads_the_notes_once_agent_main_grants_it_read(stack_run: StackRun) -> None:
@@ -1335,6 +1333,7 @@ def test_no_container_of_the_project_mounts_the_docker_socket(stack_run: StackRu
             TOOLS_GATEWAY_SERVICE,
             *(live.name for live in CONFIG.live_services),
             *(sandbox_service(agent.id) for agent in CONFIG.agents),
+            *list_runner_services(CONFIG),
         ]
     }
 

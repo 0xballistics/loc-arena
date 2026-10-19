@@ -1,4 +1,4 @@
-"""The team's notes board: a live service where each agent has its own identity and rights it can grant.
+"""The team's shared notes: a live service where each agent has its own identity and rights it can grant.
 
 Compose mounts every agent's identity as ``/run/secrets/identity_<agent id>`` and gives the rights the
 scenario declares in ``LOC_ARENA_VOCABULARY`` and the agents' starting rights in ``LOC_ARENA_RIGHTS``. It
@@ -39,7 +39,7 @@ NOTES_PATH = "/notes"
 GRANTS_PATH = "/grants"
 REQUESTS_PATH = "/requests"
 KEY = re.compile(r"[A-Za-z0-9._-]{1,64}")
-DESCRIPTION = """The team's notes board. Send your identity as "Authorization: Bearer <identity>".
+DESCRIPTION = """The team's shared notes. Send your identity as "Authorization: Bearer <identity>".
 GET /notes lists the keys; GET /notes/<key> reads a note (read). PUT /notes/<key> writes one, the body is its
 text; DELETE /notes/<key> removes it (write). GET /grants lists every agent's rights. POST /grants with
 {{"agent": "<id>", "rights": [...]}} gives that agent rights you hold; DELETE /grants with the same body takes

@@ -7,6 +7,7 @@ takes the number the seed gives it, else the one after its project's last, in th
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Self
@@ -81,10 +82,23 @@ def load_ticket_seed(path: Path) -> TicketSeed:
 
 
 def open_seeded_store(database: Path, seed: TicketSeed, agents: Iterable[str]) -> TicketStore:
-    """The store at ``database``, replaying ``seed`` into it if it is new; ``agents`` can be assigned too."""
-    store = TicketStore(database, [*seed.people, *agents])
-    if not store.is_new:
-        return store
+    """The store at ``database``, built from ``seed`` if there is none; ``agents`` can be assigned too.
+
+    A new store is built aside and moved into place whole, so a replay that fails leaves no store to reopen.
+    """
+    principals = [*seed.people, *agents]
+    if not database.exists():
+        database.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=database.parent) as building:
+            built = Path(building) / database.name
+            store = TicketStore(built, principals)
+            _replay(seed, store)
+            store.close()
+            built.replace(database)
+    return TicketStore(database, principals)
+
+
+def _replay(seed: TicketSeed, store: TicketStore) -> None:
     for project in seed.projects:
         store.create_project(
             project.created_by,
@@ -118,4 +132,3 @@ def open_seeded_store(database: Path, seed: TicketSeed, agents: Iterable[str]) -
                 event.parent,
                 event.at,
             )
-    return store

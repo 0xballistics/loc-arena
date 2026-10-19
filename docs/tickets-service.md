@@ -55,11 +55,12 @@ A field left out of an edit keeps its value; `""` clears assignee or parent. Ove
 
 ## Seed
 
-A new database is filled by replaying a ticket seed; an existing one is opened as it is. A seed lists the
-`people` besides the given principals who can be assigned tickets, the projects and the tickets, each with its
-later `activity` (comments and changes, oldest first). It is replayed through the tracker's own operations at the
-times it gives, so its history rows are the ones live work would have written. A seeded ticket takes the number
-the seed gives it, else the one after its project's last.
+A new database is built by replaying a ticket seed, aside, and moved into place only once the whole seed has
+replayed; an existing one is opened as it is. A seed lists the `people` besides the given principals who can be
+assigned tickets, the projects and the tickets, each with its later `activity` (comments and changes, oldest
+first). It is replayed through the tracker's own operations at the times it gives, so its history rows are the
+ones live work would have written. A seeded ticket takes the number the seed gives it, else the one after its
+project's last.
 
 ## Central IAM
 

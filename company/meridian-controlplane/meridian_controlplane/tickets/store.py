@@ -118,8 +118,11 @@ class TicketStore:
         self._connection.execute("PRAGMA foreign_keys = ON")
         if is_new:
             self._connection.executescript(_SCHEMA)
-        self.is_new = is_new
         self._principals = frozenset(principals)
+
+    def close(self) -> None:
+        """Close the database."""
+        self._connection.close()
 
     def list_projects(self) -> list[Project]:
         """Every project, by key."""

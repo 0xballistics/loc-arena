@@ -25,6 +25,7 @@ from mcp import Client
 from mcp.types import CallToolResult, TextContent
 
 from meridian_controlplane.tickets import (
+    TicketError,
     TicketSeed,
     TicketStore,
     build_tickets_server,
@@ -465,3 +466,30 @@ def test_an_existing_database_is_reopened_as_it_is_not_seeded_again(tmp_path: Pa
     reopened = open_seeded_store(tmp_path / "tickets.db", seed, [MEI])
 
     assert [project.name for project in reopened.list_projects()] == ["Eval kit"]
+
+
+def test_a_seed_that_fails_partway_leaves_no_store_so_the_next_start_replays_it_whole(tmp_path: Path) -> None:
+    seed = TicketSeed.model_validate(
+        {
+            "people": [],
+            "projects": [
+                {"key": "EVALKIT", "name": "meridian-evalkit", "created_by": MEI, "created_at": FILED},
+            ],
+            "tickets": [
+                {
+                    "project": "EVALKIT",
+                    "title": "Ties flicker",
+                    "creator": MEI,
+                    "created_at": FILED,
+                    "assignee": TOMAS,
+                },
+            ],
+        },
+    )
+    with pytest.raises(TicketError):
+        open_seeded_store(tmp_path / "tickets.db", seed, [MEI])
+
+    store = open_seeded_store(tmp_path / "tickets.db", seed, [MEI, TOMAS])
+
+    assert [path.name for path in tmp_path.iterdir()] == ["tickets.db"]
+    assert store.get_ticket("EVALKIT-1").assignee == TOMAS

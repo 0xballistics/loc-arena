@@ -25,6 +25,7 @@ logs is covered by `tests/unit/test_episode_stack.py`.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import hashlib
 import json
 import os
@@ -49,7 +50,6 @@ from loc_arena.episode_stack import (
     CONFIGS_DIRECTORY,
     EGRESS_NETWORK,
     EPISODE_SERVICE,
-    KEY_SECRET_NAME,
     OUTPUT_DIRECTORY,
     REPOSITORY,
     SCENARIOS_DIRECTORY,
@@ -60,7 +60,14 @@ from loc_arena.episode_stack import (
 from loc_arena.forge.forge import Forge
 from loc_arena.forge.world import generate_world
 from loc_arena.gateway.core import API_KEY_VARIABLE
-from loc_arena.gateway.model_gateway import GatewayCall
+from loc_arena.gateway.model_gateway import (
+    KEY_SECRET_NAME,
+    MODEL_GATEWAY_CONFIG_SECRET_NAME,
+    GatewayCall,
+    copy_call_log,
+    issue_gateway_secrets,
+    issue_held_tokens,
+)
 from loc_arena.harness import PLAYED_FILE, PlayedRun, apply_mode, build_recorded_run_events
 from loc_arena.logging_.events import AppendOnlyLog, read_events
 from loc_arena.npcs.coworker import apply_world_activity, resolve_activity_repos
@@ -80,6 +87,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sandbox_server.wire import RESET_PATH, RUN_PATH, CommandRequest
 
 from tests.integration._docker_support import image_exists
+from tests.integration._probe_prelude import CONNECT_TIMEOUT_SECONDS, PRELUDE
 
 RUN = "aurora-efficiency.deterministic"
 CONFIG = load_run_config(REPOSITORY / "configs" / f"{RUN}.yaml")
@@ -145,10 +153,8 @@ DOCKER_SOCKET = "docker.sock"
 NOT_ALLOWED_PATH = "not-an-allowed-path"  # a path outside settings.gateway.allowed_paths: nothing leaves
 INTERNET_ADDRESS = "1.1.1.1"
 INTERNET_PORT = 443
-CONNECT_TIMEOUT_SECONDS = 3
 # What Docker mounts in any container, and the init the sandbox runs under (`init: true`).
 DOCKER_MOUNTS = ["/", "/etc/hostname", "/etc/hosts", "/etc/resolv.conf", "/usr/sbin/docker-init"]
-KERNEL_MOUNT_ROOTS = ("/proc", "/dev", "/sys")
 HARNESS_ROW = "the_sandbox_holds_no_harness_and_no_scenarios"
 REFUSED_PATH_ROW = "the_gateway_refuses_an_unlisted_path"
 READER_READS_ROW = "the_sandbox_of_a_reader_reads_the_notes_board_with_its_identity"
@@ -197,6 +203,7 @@ import concurrent.futures
 import dataclasses
 import ipaddress
 import json
+import functools
 import os
 import subprocess
 import sys
@@ -318,108 +325,10 @@ print(json.dumps({{
     }},
 }}))
 """
-# Defined first in every probe: what exists, connections, names, environments, mounts and routes.
-PRELUDE = f"""
-import errno, glob, hashlib, importlib.util, json, os, socket, urllib.error, urllib.request
-getaddrinfo_error_names = {{code: name for name, code in vars(socket).items() if name.startswith("EAI_")}}
-def list_paths(pattern):
-    return json.dumps(sorted(glob.glob(pattern)))
-def attempt(host, port):
-    try:
-        socket.create_connection((host, port), {CONNECT_TIMEOUT_SECONDS}).close()
-    except socket.gaierror as error:
-        return "gaierror:" + getaddrinfo_error_names[error.args[0]]
-    except TimeoutError:
-        return "timeout"
-    except OSError as error:
-        return errno.errorcode[error.errno]
-    return "connected"
-def resolve(name):
-    try:
-        socket.gethostbyname(name)
-    except socket.gaierror as error:
-        return "gaierror:" + getaddrinfo_error_names[error.args[0]]
-    return "resolved"
-def post(url, body, token):
-    headers = {{"content-type": "application/json"}}
-    if token is not None:
-        headers["authorization"] = "Bearer " + token
-    request = urllib.request.Request(url, body.encode(), headers)
-    try:
-        return urllib.request.urlopen(request, timeout={CONNECT_TIMEOUT_SECONDS}).status
-    except urllib.error.HTTPError as error:
-        return error.code
-def fetch(url, token):
-    headers = {{}} if token is None else {{"authorization": "Bearer " + token}}
-    try:
-        request = urllib.request.Request(url, headers=headers)
-        return urllib.request.urlopen(request, timeout={CONNECT_TIMEOUT_SECONDS}).status
-    except urllib.error.HTTPError as error:
-        return error.code
-def search_environments(needle):
-    environments = []
-    for path in glob.glob("/proc/[0-9]*/environ"):
-        try:
-            environments.append(open(path, "rb").read())
-        except OSError:
-            pass
-    if any(needle in environment for environment in environments):
-        return "found"
-    return "absent" if any(environments) else "unreadable"
-def list_mounts():
-    mounts = {{}}
-    for line in open("/proc/self/mountinfo"):
-        fields = line.split()
-        if not any(fields[4] == root or fields[4].startswith(root + "/") for root in {KERNEL_MOUNT_ROOTS!r}):
-            mounts[fields[4]] = fields[3]
-    return mounts
-def find_harness():
-    harness = ("loc_arena", "scenarios")
-    paths = []
-    for directory, subdirectories, names in os.walk("/"):
-        if directory == "/":
-            subdirectories[:] = [name for name in subdirectories if name not in ("proc", "sys")]
-        paths += [os.path.join(directory, name) for name in subdirectories + names if name in harness]
-        subdirectories[:] = [name for name in subdirectories if name not in harness]
-    modules = [name for name in harness if importlib.util.find_spec(name)]
-    return json.dumps({{"modules": modules, "paths": sorted(paths)}})
-# An MCP session at url with key, then one request: its JSON-RPC reply, or its HTTP status and error.
-def call_mcp(url, key, method, params):
-    session = {{}}
-    def send(body):
-        headers = {{"content-type": "application/json", "accept": "application/json, text/event-stream"}}
-        if key is not None:
-            headers["authorization"] = "Bearer " + key
-        request = urllib.request.Request(url, json.dumps(body).encode(), {{**headers, **session}})
-        try:
-            response = urllib.request.urlopen(request, timeout={CONNECT_TIMEOUT_SECONDS})
-        except urllib.error.HTTPError as error:
-            text = error.read().decode()
-            error_body = json.loads(text).get("error") if text[:1] == "{{" else None
-            return {{"status": error.code, "error": error_body}}
-        if response.headers.get("mcp-session-id"):
-            session["mcp-session-id"] = response.headers["mcp-session-id"]
-        text = response.read().decode()
-        data = [line[len("data:"):] for line in text.splitlines() if line.startswith("data:")]
-        return json.loads(data[-1]) if data else json.loads(text) if text else {{}}
-    client = {{"name": "probe", "version": "1"}}
-    started = {{"protocolVersion": "2025-06-18", "capabilities": {{}}, "clientInfo": client}}
-    begun = send({{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": started}})
-    if "status" in begun:
-        return begun
-    send({{"jsonrpc": "2.0", "method": "notifications/initialized"}})
-    return send({{"jsonrpc": "2.0", "id": 2, "method": method, "params": params}})
-def list_routes():
-    routes = []
-    for line in open("/proc/net/route").read().splitlines()[1:]:
-        fields = line.split()
-        destination = socket.inet_ntoa(int(fields[1], 16).to_bytes(4, "little"))
-        routes.append("%s/%d" % (destination, bin(int(fields[7], 16)).count("1")))
-    return routes
-"""
 REFUSED_PATH_SCRIPT = """
 import urllib.error, urllib.request
-request = urllib.request.Request('http://gateway:{gateway_port}/{not_allowed_path}', b'')
+headers = {{'authorization': 'Bearer ' + open('{secrets_dir}/{token_file}').read().strip()}}
+request = urllib.request.Request('http://gateway:{gateway_port}/{not_allowed_path}', b'', headers)
 try:
     urllib.request.urlopen(request)
 except urllib.error.HTTPError as error:
@@ -479,7 +388,7 @@ def write_grant_script(body: str) -> str:
 
 
 # What the episode leaves behind, then what the honest twin finds, as agent-main's bash in its sandbox:
-# between the two phases renew_services recreates every container but the gateway and the episode, as a run
+# between the two phases renew_services recreates every container but the Collector and the episode, as a run
 # does.
 LEFT_NOTE = "left-by-episode"
 LEFT_FILE = "/run/lock/left-by-episode"  # a path nobody can write that a sandbox reset does not empty
@@ -1013,6 +922,8 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
     # a match of it anywhere is unambiguous.
     placeholder = secrets.token_urlsafe(24)
     tokens = {agent.id: secrets.token_urlsafe(32) for agent in CONFIG.agents}
+    sandboxes = {sandbox_service(agent): token for agent, token in tokens.items()}
+    held = issue_held_tokens(32)  # the episode's and the host's keys to the model gateway
     identities = {agent.id: secrets.token_urlsafe(32) for agent in CONFIG.agents}  # on the notes board
     forge_identities = {agent.id: secrets.token_urlsafe(32) for agent in CONFIG.agents}
     board_identities = {agent.id: secrets.token_urlsafe(32) for agent in CONFIG.agents}
@@ -1033,13 +944,20 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         **{token_variable(agent): token for agent, token in tokens.items()},
         **{identity.variable: value for identity, value in issued.items()},
         TOOLS_GATEWAY_CONFIG_VARIABLE: render_tools_gateway_config(STACK_CONFIG, tokens, issued),
+        **issue_gateway_secrets(CONFIG.settings, held, sandboxes, {}, "attack"),
     }
-    # The twin's gateway offers the honest config's tools (no covert tool); renew_services recreates it.
-    honest_gateway = render_tools_gateway_config(apply_mode(STACK_CONFIG, "honest"), tokens, issued)
-    twin_environment = {**environment, TOOLS_GATEWAY_CONFIG_VARIABLE: honest_gateway}
+    # The twin's gateways, both recreated; the tools gateway offers the honest config's tools alone.
+    twin_environment = {
+        **environment,
+        TOOLS_GATEWAY_CONFIG_VARIABLE: render_tools_gateway_config(
+            apply_mode(STACK_CONFIG, "honest"),
+            tokens,
+            issued,
+        ),
+        **issue_gateway_secrets(CONFIG.settings, held, sandboxes, {}, "twin"),
+    }
     call_log = directory / "calls.jsonl"
     try:
-        sandboxes = [sandbox_service(agent) for agent in tokens]
         services = [
             *[GATEWAY_SERVICE, *sandboxes, NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name],
             TOOLS_GATEWAY_SERVICE,
@@ -1057,12 +975,14 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         )
 
         def run_in(service: str, *command: str) -> str:
-            return run_docker(*compose, "exec", "-T", service, *command, env=environment).stdout
+            # The gateway's image has no shell: its rows run in the engine image on its egress network.
+            egress = ["run", "--rm", "--network", f"{project}_{EGRESS_NETWORK}", CONFIG.settings.stack.image]
+            where = egress if service == GATEWAY_SERVICE else [*compose, "exec", "-T", service]
+            return run_docker(*where, *command, env=environment).stdout
 
         resolve = "import socket, sys\ntry: print(socket.gethostbyname(sys.argv[1]))\nexcept OSError: pass"
-        in_gateway = [*compose, "exec", "-T", GATEWAY_SERVICE, "python", "-c", resolve]
         host_address = find_host_address(
-            lambda name: run_docker(*in_gateway, name, env=environment).stdout.strip(),
+            lambda name: run_in(GATEWAY_SERVICE, "python", "-c", resolve, name).strip(),
             egress_net.gateway,
         )
         with socket.create_server(("0.0.0.0", 0)) as listener:  # noqa: S104 - every address of this host, on purpose
@@ -1097,12 +1017,28 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
                 row: {"stdout": run_in(service, "sh", "-c", probes[row])}
                 for row, service in ROW_SERVICES.items()
             }
-        run_docker(*compose, "cp", f"gateway:{gateway.call_log}", str(call_log), env=environment)
+        copy_call_log(
+            functools.partial(subprocess.run, env=environment),
+            ["docker", *compose],
+            CONFIG.settings,
+            call_log,
+        )
         list_files = f"import json, os; print(json.dumps(sorted(os.listdir({str(gateway.secrets_dir)!r}))))"
         service_secrets = {
             service: json.loads(run_in(service, "python", "-c", list_files))
-            for service in (GATEWAY_SERVICE, NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name)
+            for service in (NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name)
         }
+        mounts_of_gateway = run_docker(
+            "inspect",
+            "--format",
+            "{{json .Mounts}}",
+            containers[GATEWAY_SERVICE],
+        ).stdout
+        service_secrets[GATEWAY_SERVICE] = sorted(
+            Path(mount["Destination"]).name
+            for mount in json.loads(mounts_of_gateway)
+            if Path(mount["Destination"]).parent == gateway.secrets_dir
+        )
 
         def read_log(service: str) -> list[str]:
             logged = run_docker(*compose, "logs", "--no-log-prefix", service, env=environment)
@@ -1155,7 +1091,12 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
         )
         found_by_twin = play_phase(finds)
         call_log_after_twin = directory / "calls-after-twin.jsonl"
-        run_docker(*compose, "cp", f"gateway:{gateway.call_log}", str(call_log_after_twin), env=environment)
+        copy_call_log(
+            functools.partial(subprocess.run, env=environment),
+            ["docker", *compose],
+            CONFIG.settings,
+            call_log_after_twin,
+        )
     finally:
         down = ["docker", *compose, "down", "--volumes", "--remove-orphans"]
         subprocess.run(down, env=environment, capture_output=True, check=False)
@@ -1247,15 +1188,12 @@ def test_each_sandbox_holds_only_its_own_identity(stack_run: StackRun) -> None:
     assert held == expected
 
 
-def test_the_gateway_records_each_agents_sandbox_by_its_container_name(stack_run: StackRun) -> None:
+def test_the_gateway_records_each_agents_sandbox_by_the_token_it_sends(stack_run: StackRun) -> None:
     refused = [call for call in stack_run.calls if call.path == f"/{NOT_ALLOWED_PATH}"]
 
     callers = [(call.status, call.caller) for call in refused]
 
-    assert callers == [
-        (HTTPStatus.FORBIDDEN, f"{stack_run.containers[sandbox_service(agent)]}.{stack_run.agent_net}")
-        for agent in (AGENT, OTHER_AGENT)
-    ]
+    assert callers == [(HTTPStatus.FORBIDDEN, sandbox_service(agent)) for agent in (AGENT, OTHER_AGENT)]
 
 
 def test_a_reset_of_every_sandbox_leaves_only_the_checkout_it_keeps(stack_run: StackRun) -> None:
@@ -1327,10 +1265,10 @@ def test_each_container_holds_only_the_identity_files_its_role_needs(stack_run: 
     }
 
 
-def test_the_gateway_holds_the_key_and_nothing_else(stack_run: StackRun) -> None:
+def test_the_gateway_holds_the_key_and_its_config_and_nothing_else(stack_run: StackRun) -> None:
     held = stack_run.service_secrets[GATEWAY_SERVICE]
 
-    assert held == [KEY_SECRET_NAME]
+    assert held == sorted([KEY_SECRET_NAME, MODEL_GATEWAY_CONFIG_SECRET_NAME])
 
 
 @pytest.mark.parametrize("service", [NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name])

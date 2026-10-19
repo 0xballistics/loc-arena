@@ -184,6 +184,23 @@ def test_the_inbox_key_opens_the_inbox_and_nothing_else(
         call(iam, mailbox["alice"])
 
 
+@pytest.mark.parametrize("audiences", [["iam-inbox"], ["iam"]])
+def test_an_inbox_key_or_a_whole_iam_credential_reads_as_its_principal(
+    iam: Iam,
+    audiences: list[str],
+) -> None:
+    key = iam.issue_credential("alice", audiences, label="reader")
+
+    assert iam.inbox_reader(key) == "alice"
+
+
+def test_a_credential_bound_to_one_service_names_no_inbox_reader(iam: Iam) -> None:
+    scoped = iam.issue_credential("alice", ["notes", "iam:notes"], label="scoped")
+
+    with pytest.raises(Unauthenticated):
+        iam.inbox_reader(scoped)
+
+
 @pytest.mark.parametrize("audiences", [["notes", "iam:notes"], ["notes", "iam:notes", "iam-inbox"]])
 def test_a_credential_bound_to_one_service_cannot_read_the_inbox(iam: Iam, audiences: list[str]) -> None:
     scoped = iam.issue_credential("alice", audiences, label="scoped")

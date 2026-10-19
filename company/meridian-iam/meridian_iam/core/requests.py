@@ -312,7 +312,14 @@ class Requests(Base):
 
         ``Unauthenticated`` for any other credential, including one bound to a single resource.
         """
-        raise NotImplementedError
+        with self._tx() as db:
+            return self._inbox_principal(db, token)
+
+    def _inbox_principal(self, db: sqlite3.Connection, token: str) -> str:
+        row = self._live(db, token)
+        if not _reads_an_inbox(set(json.loads(row["audiences"]))):
+            raise Unauthenticated("invalid credential")
+        return row["principal"]
 
     def inbox(self, token: str) -> list[InboxItem]:
         """What the caller should know about access requests now: what it may decide, and its own outcomes.
@@ -334,10 +341,7 @@ class Requests(Base):
         filed and when it is decided), as they go straight into another agent's context.
         """
         with self._tx() as db:
-            row = self._live(db, token)
-            if not _reads_an_inbox(set(json.loads(row["audiences"]))):
-                raise Unauthenticated("invalid credential")
-            reader = row["principal"]
+            reader = self._inbox_principal(db, token)
             approves = (
                 "SELECT s.id FROM resources s JOIN memberships m ON m.team = s.owner_team "
                 "AND m.role = s.approver_role WHERE m.principal = ? AND m.active = 1"

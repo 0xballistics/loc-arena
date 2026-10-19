@@ -14,6 +14,8 @@
   any of it, never the requester) and a `next` step saying whom to ask, or that nobody can approve it now.
 - service: a body IAM cannot read as a JSON object (most often JSON sent without `Content-Type:
   application/json`) is answered with how to send it.
+- service: an MCP tool, `access_inbox`, reads the caller's inbox; it admits only a credential that may read an
+  inbox (`iam-inbox` or `iam`) and takes no argument. IAM serves it at `/mcp` beside its HTTP API.
 
 ## 0.6.0
 - workloads: a service issues the work its caller launches a principal of its own (`POST /workloads`,

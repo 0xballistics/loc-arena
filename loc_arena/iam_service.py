@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
 import uvicorn
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from loc_arena.config import load_run_config
 from loc_arena.iam_bootstrap import BOOTSTRAP_SECRET, IAM_AUDIENCE, SERVICE_CREDENTIAL_PREFIX
@@ -29,6 +31,7 @@ from meridian_iam.core import Iam
 from meridian_iam.core.base import SCOPE_PREFIX
 from meridian_iam.core.lifecycle import OPERATOR_ROLE, OPERATOR_TEAM
 from meridian_iam.service import create_app
+from meridian_iam.service.mcp import INBOX_TOOL, inbox_server
 
 
 def read_credentials(secrets_directory: Path) -> tuple[dict[tuple[str, str], str], dict[str, str]]:
@@ -110,13 +113,21 @@ def _seed(
             iam.import_credential(agent, token, audiences, label=service)
 
 
-def serving_app(iam: Iam, service: str) -> Starlette:
+def serving_app(iam: Iam, service: str, offered: Collection[str]) -> Starlette:
     """IAM's HTTP API with its ``access_inbox`` MCP server at ``/mcp``, for requests addressed to ``service``.
 
-    One app on one port and one event loop, so the tool and the HTTP handlers never touch the core at once. It
-    refuses to start unless the tools it serves are exactly the ``iam`` live service's ``tools``.
+    One app on one port and one event loop, so the tool and the HTTP handlers never touch the core at once.
+    ``offered`` is the ``iam`` live service's ``tools``: it refuses to start if they name any tool but the one
+    it serves, and serves the HTTP API alone, with no ``/mcp``, when they name none.
     """
-    raise NotImplementedError
+    if unknown := set(offered) - {INBOX_TOOL}:
+        raise ValueError(f"the iam service offers tools it does not serve: {sorted(unknown)}")
+    if not offered:
+        return create_app(iam)
+    security = TransportSecuritySettings(allowed_hosts=[service, f"{service}:*"])
+    app = inbox_server(iam).streamable_http_app(transport_security=security)
+    app.router.routes.append(Mount("/", app=create_app(iam)))  # after /mcp, so the HTTP API serves the rest
+    return app
 
 
 def main(arguments: list[str]) -> None:
@@ -135,8 +146,9 @@ def main(arguments: list[str]) -> None:
     if not iam.bootstrapped():
         identities, services = read_credentials(secrets_directory)
         seed_iam(iam, document, identities, services, arguments[1])
+    offered = next(service.tools for service in config.live_services if service.name == arguments[1])
     uvicorn.run(
-        create_app(iam),
+        serving_app(iam, arguments[1], offered),
         host=ALL_ADDRESSES,
         port=settings.port,
         log_level="warning",

@@ -179,7 +179,7 @@ maps to an episode time.
 
 ## The gateway
 
-![One model call: the caller sends an OpenRouter request with its own token; the gateway admits it, swaps in the key, returns the reply unchanged, and exports the request, reply and caller to the Collector, which appends them to the sealed record](06-model-call.png)
+![The model gateway in a stack run: callers on agent-net send their own tokens to the gateway, which alone joins agent-net, egress-net and record-net; it calls OpenRouter over egress-net and exports each call's record over record-net to the Collector, whose sealed volume the host copies out for grading and the explorer](06-model-call.png)
 
 agentgateway, configured per play by `loc_arena/gateway/model_gateway.py`. Anything that works against OpenRouter
 works against it by changing its base URL and sending the caller's token, streaming included. It admits callers

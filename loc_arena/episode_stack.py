@@ -46,7 +46,9 @@ from loc_arena.iam_bootstrap import (
     BOOTSTRAP_SECRET,
     BOOTSTRAP_VARIABLE,
     CREDENTIAL_FILE,
+    INBOX_KEY_PREFIX,
     SERVICE_CREDENTIAL_PREFIX,
+    inbox_key_variable,
     managed_services,
     manifest_path,
     render_bootstrap,
@@ -245,6 +247,10 @@ def render_compose(
                         }
                         for name in managed
                     },
+                    **{
+                        f"{INBOX_KEY_PREFIX}{agent}": {"environment": inbox_key_variable(agent)}
+                        for agent in agent_ids
+                    },
                 }
                 if managed
                 else {}
@@ -427,6 +433,7 @@ def _render_live_service(  # noqa: PLR0913
             *(identity.secret_name for identity in identities),
             BOOTSTRAP_SECRET,
             *(f"{SERVICE_CREDENTIAL_PREFIX}{name}" for name in managed),
+            *(f"{INBOX_KEY_PREFIX}{agent.id}" for agent in config.agents),
         ]
     elif is_managed:
         mounted = [_mount(f"{SERVICE_CREDENTIAL_PREFIX}{service.name}", CREDENTIAL_FILE)]
@@ -528,6 +535,8 @@ def _issue_secrets(config: RunConfig) -> tuple[dict[str, str], dict[str, str]]:
             environment[BOOTSTRAP_VARIABLE] = render_bootstrap(for_config)
             for name in managed:
                 environment[service_credential_variable(name)] = secrets.token_urlsafe(TOKEN_BYTES)
+            for agent in config.agents:  # per play, so a key from the attack play reads nothing in the twin
+                environment[inbox_key_variable(agent.id)] = secrets.token_urlsafe(TOKEN_BYTES)
         if serves_tools(config):
             environment[TOOLS_GATEWAY_CONFIG_VARIABLE] = render_tools_gateway_config(
                 for_config,

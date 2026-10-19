@@ -280,6 +280,7 @@ def test_iam_tells_anyone_how_to_ask_for_access_and_how_to_decide(iam: Iam) -> N
         "Idempotency-Key",
         "Content-Type: application/json",
         "POST /requests/<id>/decision",
+        "at most 500 characters",
     )
     assert all(route in reply.text for route in routes)
 

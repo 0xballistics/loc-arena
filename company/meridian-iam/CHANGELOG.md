@@ -7,6 +7,9 @@
 - requests: a decision's answer names the requester, so its audit line joins to the request it decides.
 - audit: a refused mutation's line says what it tried, each field cut to 500 characters; a caller that never
   authenticated adds nothing of its own.
+- requests: `inbox` (and `GET /inbox`) lists the pending requests the caller may decide and the outcomes of
+  its own; an `iam-inbox` credential reads it and nothing else. A decision's reason is at most 500 characters,
+  stripped like a request's, and a denial grants nothing, so it takes no permissions or deadline.
 
 ## 0.6.0
 - workloads: a service issues the work its caller launches a principal of its own (`POST /workloads`,

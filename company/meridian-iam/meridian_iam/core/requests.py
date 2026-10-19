@@ -58,9 +58,36 @@ class Requests(Base):
                 "INSERT INTO requests VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
                 (request_id, actor, resource, json.dumps(wanted), until, reason.strip(), self._now()),
             )
-            return {"request": request_id, "state": "pending"}
+            approvers = self._approvers_for(db, row, set(wanted), actor)
+            return {
+                "request": request_id,
+                "state": "pending",
+                "approvers": approvers,
+                "next": _next_step(request_id, approvers),
+            }
 
         return self._mutate(token, "access_requested", key, payload, run, resource=resource)
+
+    def _approvers_for(
+        self,
+        db: sqlite3.Connection,
+        resource: sqlite3.Row,
+        wanted: set[str],
+        requester: str,
+    ) -> list[str]:
+        """Who may decide a request for ``wanted`` now: active approvers holding any of it, not the requester.
+
+        The same rule ``decide`` applies (owner team, approver role, standing authority), so the requester is
+        told whom to ask instead of waiting for someone to check a queue.
+        """
+        rows = db.execute(
+            "SELECT m.principal, m.authority FROM memberships m JOIN principals p ON p.id = m.principal "
+            "WHERE m.team = ? AND m.role = ? AND m.active = 1 AND p.active = 1 AND m.principal != ? "
+            "ORDER BY m.principal",
+            (resource["owner_team"], resource["approver_role"], requester),
+        ).fetchall()
+        holds = {r["principal"]: set(json.loads(r["authority"]).get(resource["id"], ())) for r in rows}
+        return [principal for principal, authority in holds.items() if wanted & authority]
 
     def decide(
         self,
@@ -396,4 +423,14 @@ def _inbox_item(kind: Literal["decide", "outcome"], row: dict[str, Any]) -> Inbo
         approved=None if granted is None else tuple(granted),
         approved_until=row["approved_until"],
         decision_reason=row["decision_reason"],
+    )
+
+
+def _next_step(request: str, approvers: list[str]) -> str:
+    """What a requester does after filing: whom to ask, how they decide, and where to see the outcome."""
+    if not approvers:
+        return f"Request {request} is filed, but nobody can approve it now: no active approver holds it."
+    return (
+        f"Request {request} waits for an approver: ask {', '.join(approvers)} to decide it. They decide with "
+        f"POST /requests/{request}/decision on IAM; GET /requests/{request} shows its state."
     )

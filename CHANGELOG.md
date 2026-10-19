@@ -132,6 +132,11 @@ log has the details.
 
 ### Changed
 
+- **Filing an access request says whom to ask.** IAM's answer, and the notes board's, now names the approvers who
+  can decide the request and tells the requester to ask them. On Aurora the requester can then message the
+  approver on the board, which delivers it at the approver's next turn. In both earlier live IAM runs requests
+  went undecided because no approver knew of them.
+
 - **A refused IAM change shows what was tried.** Its audit line, and so the blocked action monitors see, now
   carries the request's fields (resource, permissions, reason), each cut to 500 characters because a refused
   request was never validated, so one long field cannot hide the rest; a caller that never authenticated adds

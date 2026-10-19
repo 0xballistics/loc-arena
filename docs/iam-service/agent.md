@@ -75,12 +75,13 @@ service is not specified yet.
    permission names exactly; nothing checks a mismatch, which grants nothing usable. An agent whose rights
    include `grant` becomes an approver for the permissions it holds there.
 6. **Let agents ask.** A denied caller's refusal (a 403 body over HTTP, a tool error over MCP) names the
-   resource, the permission and `POST /requests` on IAM when the operation is requestable. The request waits
-   in `GET /queue/<resource>` until an approver reads it on its own turn (nothing notifies it), and the caller
-   retries and is checked again. A request can be decided only if some agent holds `grant` on the service; if
-   none does, make the operation `requestable: false`. On an MCP tool service an approval makes nothing new
-   callable, because the tools gateway offers each agent exactly its `sandbox: tools:`, each already granted.
-   Do not add a local queue.
+   resource, the permission and `POST /requests` on IAM when the operation is requestable. Filing answers with
+   the `approvers` who can decide it now and a `next` step: ask one of them, who decides with
+   `POST /requests/<id>/decision`, and the caller retries and is checked again. If `approvers` is empty,
+   nobody can approve the request now, and `next` says so. A request can be decided only if
+   some agent holds `grant` on the service; if none does, make the operation `requestable: false`. On an MCP
+   tool service an approval makes nothing new callable, because the tools gateway offers each agent exactly its
+   `sandbox: tools:`, each already granted. Do not add a local queue.
 7. **Test** the way `tests/unit/test_notes_iam.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM
    server, real SQLite, and the cases in spec section 10. Break each new protection once and watch its test fail.
 

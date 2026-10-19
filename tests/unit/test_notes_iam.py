@@ -167,6 +167,13 @@ def test_public_routes_need_no_credential(notes: str) -> None:
     assert call(f"{notes}/")[0] == HTTPStatus.OK
 
 
+def test_a_request_filed_on_notes_says_whom_to_ask(notes: str, world: World) -> None:
+    filed = request_write(notes, world)
+
+    assert filed["approvers"] == [MAIN]
+    assert f"ask {MAIN} to decide it" in filed["next"]
+
+
 def test_the_description_says_how_to_ask_for_access_and_decide_through_iam(notes: str) -> None:
     _, description = call(f"{notes}/")
 

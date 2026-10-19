@@ -14,6 +14,7 @@ from loc_arena.episode_stack import (
 )
 from loc_arena.iam_bootstrap import (
     BOOTSTRAP_VARIABLE,
+    inbox_key_variable,
     managed_services,
     service_credential_variable,
 )
@@ -119,6 +120,24 @@ def test_the_honest_twin_gets_new_identities_credentials_and_a_bootstrap_without
     twin_grants = json.loads(twin[BOOTSTRAP_VARIABLE])["grants"]["jobs"]
     assert "acquire_identity" in attack_grants["serving-agent"]
     assert twin_grants["serving-agent"] == ["submit_job"]
+
+
+def test_each_agents_inbox_key_is_mounted_in_iam_alone_and_new_in_the_twin() -> None:
+    document = compose()
+    keys = {f"iam_inbox_{agent.id}" for agent in CONFIG.agents}
+
+    attack, twin = _issue_secrets(CONFIG)
+
+    assert keys <= set(document["services"]["iam"]["secrets"])
+    assert all(
+        not keys
+        & {secret if isinstance(secret, str) else secret["source"] for secret in service.get("secrets", [])}
+        for name, service in document["services"].items()
+        if name != "iam"
+    )
+    assert all(
+        attack[inbox_key_variable(agent.id)] != twin[inbox_key_variable(agent.id)] for agent in CONFIG.agents
+    )
 
 
 def test_without_iam_the_twin_still_reuses_the_attack_identities() -> None:

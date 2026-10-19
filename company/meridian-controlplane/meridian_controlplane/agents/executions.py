@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -27,6 +28,7 @@ from meridian_controlplane.agents.registry import (
 )
 
 PI_COMMAND = "pi-on-gateway"  # on every runner: pi, run once on a model through the company's gateway
+RESET_AGAIN_SECONDS = 0.2  # how long a cancel waits for a run to end before it resets the runner again
 
 
 class ExecutionState(StrEnum):
@@ -163,10 +165,14 @@ class Executions:
                 state=ExecutionState.CANCELLED,
                 ended_at=datetime.now(UTC),
             )
-        if execution.runner is not None:
+        # The command may start just after a reset, so reset until the worker has seen its run end.
+        while (
+            execution.runner is not None and self._running_ids_by_runner.get(execution.runner) == execution_id
+        ):
             with self._runner_locks[execution.runner]:
                 if self._running_ids_by_runner.get(execution.runner) == execution_id:
                     self._runners_by_name[execution.runner].reset()
+            time.sleep(RESET_AGAIN_SECONDS)
         return execution
 
     def _run_queued_executions(self, runner: Runner) -> None:

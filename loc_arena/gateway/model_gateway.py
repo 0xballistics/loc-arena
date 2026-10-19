@@ -32,7 +32,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from loc_arena.compose_document import ComposeService
 from loc_arena.gateway.core import (
@@ -203,7 +203,11 @@ def render_model_gateway_config(settings: LocArenaSettings, callers: Sequence[Ca
         },
         "backendAuth": {"key": {"file": str(gateway.secrets_dir / KEY_SECRET_NAME)}},
         "transformations": {"request": {"remove": ["accept-encoding"]}},
-        "timeout": {"requestTimeout": f"{gateway.timeout_seconds}s"},
+        # The first bounds the wait for a reply's headers, the second each wait for more of its body.
+        "timeout": {
+            "requestTimeout": f"{gateway.timeout_seconds}s",
+            "responseIdleTimeout": f"{gateway.timeout_seconds}s",
+        },
         "ai": {"routes": {"*": "passthrough"}},  # forwarded as the caller sent it
     }
     runner_models = json.dumps(list(gateway.runner_models))
@@ -454,20 +458,48 @@ def list_logged_plays(gateway_log: str) -> list[str]:
 
 
 def fetch_record(run: RunCompose, compose: list[str], settings: LocArenaSettings) -> str | None:
-    """The Collector's file as it stands, copied out of its container; ``None`` if it cannot be."""
+    """The Collector's file as it stands, up to its last complete line; ``None`` if it cannot be copied.
+
+    The Collector appends to the file in place, so a copy can end inside a line it is still writing: that tail
+    is left for the next copy.
+    """
     with tempfile.TemporaryDirectory() as directory:
         copy = Path(directory) / "record.jsonl"
         source = f"{COLLECTOR_SERVICE}:{settings.gateway.call_log}"
         if run([*compose, "cp", source, str(copy)], capture_output=True, text=True).returncode != 0:
             return None
-        return copy.read_text(encoding="utf-8") if copy.exists() else ""
+        record = copy.read_text(encoding="utf-8") if copy.exists() else ""
+        return record[: record.rfind("\n") + 1]
 
 
-def drain_record(run: RunCompose, compose: list[str], settings: LocArenaSettings) -> bool:
-    """Wait until the Collector holds a record of every request the running gateway logged, in its play.
+def stop_callers(run: RunCompose, compose: list[str], callers: Sequence[str] | None = None) -> bool:
+    """Stop the gateway's ``callers``, by default every service but the gateway and the Collector.
 
-    False if it still falls short when ``gateway.drain_timeout_seconds`` runs out.
+    Then no call is in flight: a call cut off ends as its caller stops, and the gateway logs it.
     """
+    if callers is None:
+        listed = run([*compose, "config", "--services"], capture_output=True, text=True)
+        if listed.returncode != 0:
+            return False
+        callers = [
+            name for name in listed.stdout.split() if name not in (MODEL_GATEWAY_SERVICE, COLLECTOR_SERVICE)
+        ]
+    return not callers or run([*compose, "stop", *callers], capture_output=True, text=True).returncode == 0
+
+
+def drain_record(
+    run: RunCompose,
+    compose: list[str],
+    settings: LocArenaSettings,
+    callers: Sequence[str] | None = None,
+) -> bool:
+    """Stop the gateway's ``callers``, then wait until the Collector holds a record of each request it logged.
+
+    False if the callers cannot be stopped, if a complete line of the record does not parse, or if the record
+    still falls short when ``gateway.drain_timeout_seconds`` runs out.
+    """
+    if not stop_callers(run, compose, callers):
+        return False
     logs = [*compose, "logs", "--no-color", "--no-log-prefix", MODEL_GATEWAY_SERVICE]
     deadline = time.monotonic() + settings.gateway.drain_timeout_seconds
     while True:
@@ -475,7 +507,10 @@ def drain_record(run: RunCompose, compose: list[str], settings: LocArenaSettings
         record = fetch_record(run, compose, settings)
         if logged.returncode == 0 and record is not None:
             plays = list_logged_plays(logged.stdout)
-            held = [each.text("play") or "" for each in read_records(record)]
+            try:
+                held = [each.text("play") or "" for each in read_records(record)]
+            except ValidationError:
+                return False
             if all(held.count(play) >= plays.count(play) for play in set(plays)):
                 return True
         if time.monotonic() >= deadline:
@@ -483,16 +518,26 @@ def drain_record(run: RunCompose, compose: list[str], settings: LocArenaSettings
         time.sleep(POLL_SECONDS)
 
 
-def copy_call_log(run: RunCompose, compose: list[str], settings: LocArenaSettings, call_log: Path) -> bool:
-    """Drain the sealed record, then copy it out: as ``GatewayCall`` lines at ``call_log``, and as received.
+def copy_call_log(
+    run: RunCompose,
+    compose: list[str],
+    settings: LocArenaSettings,
+    call_log: Path,
+    callers: Sequence[str] | None = None,
+) -> bool:
+    """Stop ``callers`` (by default every one), drain the record, and copy it out as ``GatewayCall`` lines.
 
-    False, and nothing written, if it does not drain or cannot be copied.
+    The lines go to ``call_log``, the Collector's own beside it. False, and nothing written, if the record
+    does not drain, cannot be copied, or holds a line that does not parse.
     """
-    record = fetch_record(run, compose, settings) if drain_record(run, compose, settings) else None
+    record = fetch_record(run, compose, settings) if drain_record(run, compose, settings, callers) else None
     if record is None:
         return False
+    try:
+        calls = [convert_record(each).model_dump_json() for each in read_records(record)]
+    except ValidationError:
+        return False
     call_log.with_suffix(".otlp.jsonl").write_text(record, encoding="utf-8")
-    calls = [convert_record(each).model_dump_json() for each in read_records(record)]
     call_log.write_text("".join(f"{call}\n" for call in calls), encoding="utf-8")
     return True
 

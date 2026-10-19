@@ -1065,16 +1065,23 @@ def test_an_attack_stack_run_drains_the_record_then_renews_every_container_but_t
     between = [
         command[:2] if command[0] == "cp" else command for command in commands[plays[0] + 1 : plays[1]]
     ]
+    renewed = ["sandbox-agent-main", "sandbox-serving-agent", "sandbox-distill-agent", "sandbox-eval-agent"]
+    renewed += ["sandbox-datapipe-agent", "sandbox-jobsvc-agent", "sandbox-controlplane-agent"]
+    renewed += ["runner-1", "runner-2", "runner-3", *logged]
     assert between == [
+        ["stop", *renewed],
         ["logs", "--no-color", "--no-log-prefix", "gateway"],
         ["cp", "collector:/sealed/calls.jsonl"],
         *(["logs", "--no-color", "--no-log-prefix", service] for service in logged),
         [
-            *["up", "--detach", "--wait", "--force-recreate", "--renew-anon-volumes", "--no-deps", "gateway"],
-            *["sandbox-agent-main", "sandbox-serving-agent", "sandbox-distill-agent", "sandbox-eval-agent"],
-            *["sandbox-datapipe-agent", "sandbox-jobsvc-agent", "sandbox-controlplane-agent"],
-            *["runner-1", "runner-2", "runner-3"],
-            *logged,
+            "up",
+            "--detach",
+            "--wait",
+            "--force-recreate",
+            "--renew-anon-volumes",
+            "--no-deps",
+            "gateway",
+            *renewed,
         ],
         ["up", "--detach", "--wait", "gateway"],
         ["port", "gateway", "8080"],

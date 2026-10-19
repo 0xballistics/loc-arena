@@ -71,13 +71,26 @@ def gateway_records(*plays: str) -> str:
     return "".join(json.dumps({"scope": "request", "play": play}) + "\n" for play in plays)
 
 
-def fake_compose(record: str, logged: str) -> Any:
-    """``subprocess.run`` for compose: ``logs`` prints ``logged``; ``cp`` writes ``record`` where asked."""
+SERVICES = (
+    "gateway\ncollector\nepisode\nsandbox-agent-main\nrunner-1\n"  # what `compose config --services` lists
+)
+
+
+def fake_compose(record: str, logged: str, issued: list[list[str]] | None = None) -> Any:
+    """``subprocess.run`` for compose, which adds each command it runs to ``issued``.
+
+    ``logs`` prints ``logged``, ``cp`` writes ``record``; ``config --services`` lists ``SERVICES``.
+    """
 
     def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        (issued if issued is not None else []).append(command)
         if "cp" in command:
             Path(command[-1]).write_text(record, encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, stdout=logged if "logs" in command else "")
+        printed = {"logs": logged, "config": SERVICES}.get(
+            next((c for c in command if c in ("logs", "config")), ""),
+            "",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout=printed)
 
     return run
 
@@ -214,3 +227,39 @@ def test_the_gateway_port_is_published_on_the_hosts_loopback_alone() -> None:
 
     published = {name: service["ports"] for name, service in services.items() if service.get("ports")}
     assert published == {"gateway": ["127.0.0.1::9191"]}
+
+
+def test_the_record_is_copied_once_every_caller_but_the_gateway_and_the_collector_is_stopped(
+    tmp_path: Path,
+) -> None:
+    issued: list[list[str]] = []
+
+    copy_call_log(
+        fake_compose(RECORD, gateway_records("", ""), issued),
+        [],
+        LocArenaSettings(),
+        tmp_path / "c.jsonl",
+    )
+
+    stops = [command for command in issued if "stop" in command]
+    assert (stops, issued.index(stops[0]) < issued.index(next(c for c in issued if "cp" in c))) == (
+        [["stop", "episode", "sandbox-agent-main", "runner-1"]],
+        True,
+    )
+
+
+def test_a_line_the_collector_is_still_writing_waits_for_the_next_copy(tmp_path: Path) -> None:
+    call_log = tmp_path / "locarena-abc123.calls.jsonl"
+    record = RECORD + RECORD.strip()[: len(RECORD) // 2]  # the second batch cut off mid-line
+
+    copied = copy_call_log(fake_compose(record, gateway_records("", "")), [], LocArenaSettings(), call_log)
+
+    assert (copied, len(call_log.read_text(encoding="utf-8").splitlines())) == (True, 2)
+
+
+def test_a_record_with_a_line_that_does_not_parse_is_not_copied(tmp_path: Path) -> None:
+    call_log = tmp_path / "locarena-abc123.calls.jsonl"
+
+    copied = copy_call_log(fake_compose(RECORD + "not json\n", ""), [], LocArenaSettings(), call_log)
+
+    assert (copied, call_log.exists()) == (False, False)

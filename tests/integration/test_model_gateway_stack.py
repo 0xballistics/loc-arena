@@ -133,7 +133,13 @@ def recorded(stack: Stack, model: str, deadline_seconds: float = 15.0) -> Gatewa
     call_log = stack.directory / "locarena-test.calls.jsonl"
     deadline = time.monotonic() + deadline_seconds
     while True:
-        assert copy_call_log(stack.run, stack.compose, SETTINGS, call_log)
+        assert copy_call_log(
+            stack.run,
+            stack.compose,
+            SETTINGS,
+            call_log,
+            callers=[],
+        )  # the test is the caller
         calls = [
             GatewayCall.model_validate_json(line)
             for line in call_log.read_text(encoding="utf-8").splitlines()
@@ -262,3 +268,22 @@ def test_the_record_survives_a_restart_of_the_collector(stack: Stack) -> None:
     stack.run([*stack.compose, "restart", "collector"], capture_output=True)
 
     assert recorded(stack, "a-call-before-the-restart").status == 200
+
+
+def test_a_call_in_flight_when_its_callers_stop_is_in_the_copied_record(stack: Stack) -> None:
+    body = {"model": "a-stream-in-flight-slow", "messages": [], "stream": True}
+    headers = {"authorization": f"Bearer {SANDBOX_TOKEN}"}
+    with httpx2.stream("POST", stack.url + CHAT, json=body, headers=headers, timeout=60) as reply:
+        next(reply.iter_bytes())
+        copied = copy_call_log(
+            stack.run,
+            stack.compose,
+            SETTINGS,
+            stack.directory / "in-flight.calls.jsonl",
+            ["mock"],
+        )
+    stack.run([*stack.compose, "start", "mock"], capture_output=True)
+
+    lines = (stack.directory / "in-flight.calls.jsonl").read_text(encoding="utf-8").splitlines()
+    found = [GatewayCall.model_validate_json(line) for line in lines if "a-stream-in-flight-slow" in line]
+    assert (copied, [call.complete for call in found]) == (True, [False])

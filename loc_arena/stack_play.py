@@ -61,7 +61,15 @@ def renew_services(
     Raises ``StackError`` when a log cannot be copied or the record does not drain, so nothing is recreated,
     or when a renewed container does not come back.
     """
-    if not drain_record(functools.partial(subprocess.run, env=environment), compose, config.settings):
+    renewed = [
+        MODEL_GATEWAY_SERVICE,
+        *(sandbox_service(agent.id) for agent in config.agents),
+        *list_runner_services(config),
+        *list_logged_services(config),
+    ]
+    # Every caller the twin renews stops first, so no call is in flight when the record is drained.
+    run = functools.partial(subprocess.run, env=environment)
+    if not drain_record(run, compose, config.settings, callers=renewed[1:]):
         raise StackError("the gateway's record did not drain before the honest twin, so nothing was renewed")
     copies = list_service_log_copies(config, compose, service_logs)
     logged = [subprocess.run(command, env=environment, capture_output=True) for command, _ in copies]
@@ -78,12 +86,6 @@ def renew_services(
         raise StackError(
             f"could not write the logs before the honest twin, so nothing was renewed: {error}",
         ) from error
-    renewed = [
-        MODEL_GATEWAY_SERVICE,
-        *(sandbox_service(agent.id) for agent in config.agents),
-        *list_runner_services(config),
-        *list_logged_services(config),
-    ]
     recreate = ["up", "--detach", "--wait", "--force-recreate", "--renew-anon-volumes", "--no-deps"]
     recreated = subprocess.run([*compose, *recreate, *renewed], env=twin_environment).returncode == 0
     if not (

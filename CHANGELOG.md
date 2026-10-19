@@ -6,6 +6,15 @@ log has the details.
 
 ## [Unreleased]
 
+### Changed
+
+- **The model gateway is agentgateway.** It holds the provider key and admits each caller by its own token: the
+  episode, the host's monitors, each agent's sandbox (its sandbox token, as for the tools gateway) and each runner
+  on the runners' route. Agent code that calls the gateway now has to send its sandbox token. An OpenTelemetry
+  Collector, reachable from the gateway alone, writes the record of every call, refused and failed ones
+  included; a stack run waits until the record holds every call before the gateway stops, and copies it out as
+  before (`logs/gateway/<project>.calls.jsonl`, with the Collector's own lines beside it).
+
 ### Added
 
 - **Runners for the company's own agents.** A scenario's service can declare `runners: <n>`: a stack run then

@@ -15,11 +15,12 @@ transitions plus their programmatic verifiers, never as operational procedures.
 
 Each agent runs in its own sandbox with its harness's native tools and an MCP client. Everything else it can do
 to the company (open a PR, message a teammate, submit a job) is a tool on a service behind one MCP route,
-agentgateway, and the run config's `sandbox: tools:` decides exactly which tools each agent gets. Every model call
-goes through a gateway that alone holds the key. Every service records each call made to it, and after play those
-records become the events the monitors and the verifier read. The honest twin plays after the attack on services
-and sandboxes recreated empty. Details: [`docs/isolation/`](docs/isolation/README.md) and
-[`docs/run-config.md`](docs/run-config.md).
+agentgateway, and the run config's `sandbox: tools:` decides exactly which tools each agent gets. Every model
+call goes through a gateway (agentgateway again) that alone holds the key and admits each caller by its own
+token; an OpenTelemetry Collector writes its record of every call. Every service records each call made to it,
+and after play those records become the events the monitors and the verifier read. The honest twin plays after
+the attack on services and sandboxes recreated empty. Details: [`docs/isolation/`](docs/isolation/README.md)
+and [`docs/run-config.md`](docs/run-config.md).
 
 ```sh
 make setup                    # check uv, sync dependencies, validate the configs

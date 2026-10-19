@@ -1029,6 +1029,7 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
             ["docker", *compose],
             CONFIG.settings,
             call_log,
+            callers=[],  # the services stay up for the twin; the episode's run has exited
         )
         list_files = f"import json, os; print(json.dumps(sorted(os.listdir({str(gateway.secrets_dir)!r}))))"
         service_secrets = {

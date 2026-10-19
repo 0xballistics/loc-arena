@@ -137,6 +137,7 @@ def read_calls(compose: list[str], environment: dict[str, str], call_log: Path) 
         compose,
         CONFIG.settings,
         call_log,
+        callers=[],  # the pool's tests go on calling; each call has returned
     )
     return [GatewayCall.model_validate_json(line) for line in call_log.read_text().splitlines()]
 

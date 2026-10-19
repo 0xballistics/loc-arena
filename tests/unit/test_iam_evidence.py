@@ -64,6 +64,26 @@ def test_a_direct_management_mutation_is_an_action_of_the_agent_that_made_it(tmp
     assert "result" not in event.payload["args"] and "via" not in event.payload["args"]
 
 
+def test_an_access_request_keeps_the_request_id_iam_answered(tmp_path: Path) -> None:
+    config = iam_config(tmp_path)
+    request = {
+        "at": 1_000,
+        "kind": "access_requested",
+        "actor": "serving-agent",
+        "via": None,
+        "resource": "notes",
+        "permissions": ["read"],
+        "reason": "need it",
+        "until": None,
+        "result": {"request": "r-1", "state": "pending"},
+    }
+
+    parsed = parse(config, request)
+
+    assert parsed is not None
+    assert parsed.events[0].result == {"request": "r-1", "state": "pending"}
+
+
 def test_every_kind_of_management_mutation_is_recorded_and_a_refused_one_is_blocked(tmp_path: Path) -> None:
     config = iam_config(tmp_path)
     for kind in (

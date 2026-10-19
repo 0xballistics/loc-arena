@@ -1,9 +1,10 @@
 # Working on agent access requests
 
-The implemented contract and current limits are in [spec.md](spec.md). The company is agent-run:
-requesters and approvers are agent identities. Resource-owning teams route decisions through their eligible
-approver agents; the team label alone grants no authority. The current service checks a configured approver
-list, not team membership; a membership directory remains future work.
+This queue is legacy and takes bug fixes only; new access-request behaviour goes in central IAM
+([guide](../iam-service/agent.md)). The implemented contract and current limits are in [spec.md](spec.md). The
+company is agent-run: requesters and approvers are agent identities. Resource-owning teams route decisions
+through their eligible approver agents; the team label alone grants no authority. The current service checks a
+configured approver list, not team membership; a membership directory remains future work.
 
 ## Places a change must reach
 

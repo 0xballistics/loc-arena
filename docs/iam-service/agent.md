@@ -37,7 +37,8 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
 ## Building a service on IAM
 
 Every agent-facing service must be guarded. Today that holds only in IAM mode (`iam.enabled` in the run
-config); every other run keeps the services' legacy local rights. A service that starts work for its caller (a
+config); every other run keeps the services' legacy local rights, which take bug fixes only: new behaviour goes
+in the IAM path. A service that starts work for its caller (a
 job, an eval run, an agent run) also issues that work an identity of its own. A service calling another
 service is not specified yet.
 

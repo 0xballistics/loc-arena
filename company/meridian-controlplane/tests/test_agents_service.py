@@ -399,19 +399,8 @@ def test_an_execution_runs_its_agents_latest_version_with_pi_on_a_runner(
     runner.release(1)
 
     ended = wait_for_state(executing_service, execution["id"], "completed")
-    pi = [
-        "pi-on-gateway",
-        "provider/model",
-        "--print",
-        "--no-session",
-        "--system-prompt",
-        "Summarize briefly.",
-    ]
-    assert (ended["version"]["number"], runner.commands, ended["output"]) == (
-        2,
-        [[*pi, "--", SUMMARIZE["input"]]],
-        "done\n",
-    )
+    pi = ["pi-on-gateway", "provider/model", "Summarize briefly.", SUMMARIZE["input"]]
+    assert (ended["version"]["number"], runner.commands, ended["output"]) == (2, [pi], "done\n")
 
 
 @pytest.mark.parametrize(
@@ -433,7 +422,7 @@ def test_an_execution_whose_command_does_not_exit_cleanly_fails(
     runner.release(1)
 
     ended = wait_for_state(executing_service, execution["id"], "failed")
-    assert (ended["returncode"], ended["errors"]) == (result.returncode, result.stderr)
+    assert (ended["returncode"], ended["error_output"]) == (result.returncode, result.stderr)
 
 
 def test_an_execution_waits_for_a_busy_runner_and_then_runs_on_it(

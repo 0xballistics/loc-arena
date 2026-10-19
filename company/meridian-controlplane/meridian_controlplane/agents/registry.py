@@ -19,6 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 SEEDED_AGENTS_FILE = Path(__file__).with_name("seed.yaml")
 AgentName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")]
+# A runner takes each argument of a command up to 128 KiB, and a character is up to 4 bytes.
+MAX_PROMPT_CHARACTERS = 32_000
 
 
 class AgentDefinition(BaseModel):
@@ -27,7 +29,7 @@ class AgentDefinition(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: str = Field(min_length=1)
-    system_prompt: str
+    system_prompt: str = Field(max_length=MAX_PROMPT_CHARACTERS)
 
 
 class AgentRegistration(AgentDefinition):

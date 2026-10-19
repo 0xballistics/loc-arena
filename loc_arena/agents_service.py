@@ -43,13 +43,14 @@ class RunnerClient:
     sandbox: SandboxClient
 
     def run(self, argv: list[str], timeout_seconds: float) -> RunnerResult:
-        """Run ``argv`` in the runner's workspace; a runner that never ran it fails the execution with why."""
+        """Run ``argv`` in the runner's workspace; with no exit code, stderr says why: not run, or killed."""
         command = CommandRequest(argv=argv, directory=RUNNER_WORKSPACE, timeout_seconds=timeout_seconds)
         try:
             result = self.sandbox.run(command)
         except SandboxError as error:
             return RunnerResult(returncode=None, stdout="", stderr=str(error))
-        return RunnerResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
+        killed = "" if result.returncode is not None else f"killed at its {timeout_seconds:g} s time limit\n"
+        return RunnerResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr + killed)
 
     def reset(self) -> None:
         """End what runs on the runner and empty its workspace and home."""

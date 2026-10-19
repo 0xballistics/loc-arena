@@ -55,9 +55,10 @@ turns each line with an `operation` into events: a refused request into a blocke
 ## Executions (step 2)
 
 An execution is one run of a registered agent's latest version on an input. `executions.py` queues it until a
-runner is free, runs pi there once (`pi-on-gateway <model> --print --no-session --system-prompt <prompt> --
-<input>`), and records `completed`, `failed` (a non-zero exit, or killed at `stack.runner_timeout_seconds`) or
-`cancelled`; the runner is reset after each one.
+runner is free, runs pi there once (`pi-on-gateway <model> <system prompt> <input>`, which hands pi the prompt
+as a file and the input on stdin, so pi never reads either as a path), and records `completed`, `failed` (a
+non-zero exit, or killed at `stack.runner_timeout_seconds`) or `cancelled`; the runner is reset after each one.
+System prompts and inputs are capped at 32,000 characters, which fit a runner's command.
 
 | Call | Needs |
 |---|---|

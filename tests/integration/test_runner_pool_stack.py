@@ -223,7 +223,7 @@ def test_a_reset_leaves_a_runners_workspace_and_home_empty(pool: RunnerPool) -> 
 
 
 def test_the_gateway_names_a_runners_pi_and_refuses_it_a_model_runners_may_not_call(pool: RunnerPool) -> None:
-    result = pool.run_on_runner("runner-1", "pi-on-gateway", COSTLY_MODEL, "-p", "--no-session", "--", "hi")
+    result = pool.run_on_runner("runner-1", "pi-on-gateway", COSTLY_MODEL, "Summarize.", "hi")
 
     by_runner = {
         (name_compose_service(call.caller), call.status, call.request["model"])

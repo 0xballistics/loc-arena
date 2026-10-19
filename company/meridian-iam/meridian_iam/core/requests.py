@@ -115,15 +115,13 @@ class Requests(Base):
                     req["id"],
                     actor,
                 )
-            db.execute(
-                "UPDATE requests SET state = ? WHERE id = ?",
-                ("approved" if approve else "denied", request),
-            )
+            state = "approved" if approve else "denied"
+            db.execute("UPDATE requests SET state = ? WHERE id = ?", (state, request))
             db.execute(
                 "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (request, actor, approve, json.dumps(sorted(granted)), expiry, reason, self._now()),
             )
-            return {"request": request, "state": "approved" if approve else "denied"}
+            return {"request": request, "state": state, "requester": req["requester"]}
 
         return self._mutate(
             token,

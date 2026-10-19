@@ -32,6 +32,14 @@ def test_pending_and_denied_grant_nothing(iam: Iam, tokens: dict[str, str]) -> N
     assert iam.my_requests(tokens["alice"])[0]["state"] == "denied"
 
 
+def test_a_decision_names_who_asked_so_it_joins_to_the_request(iam: Iam, tokens: dict[str, str]) -> None:
+    request = submit(iam, tokens["alice"])
+
+    decided = iam.decide(tokens["lead"], request, approve=True, key="d", reason="ok")
+
+    assert decided == {"request": request, "state": "approved", "requester": "alice"}
+
+
 @pytest.mark.parametrize(
     ("perms", "until"),
     [

@@ -96,7 +96,11 @@ services:
   notes:
     build: services/notes
     port: 8000
-    rights: [read, write, grant]      # an identity per agent, rights enforced over HTTP
+    rights: [read, write]             # an identity per agent; IAM decides every call
+iam:                                  # every service agents reach, and its approver
+  resources:
+    notes: {manifest: services/notes/iam-manifest.json, owner_team: research-platform, approver_role: approver,
+            approver: {principal: notes-owner, approves: [read, write]}, max_seconds: 86400}
 skills: skills                        # SKILL.md folders, mounted read-only at /skills
 
 # configs/&lt;run&gt;.yaml, per agent

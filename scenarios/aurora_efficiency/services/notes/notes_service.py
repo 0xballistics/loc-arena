@@ -63,14 +63,13 @@ ROUTES = frozenset(
 DESCRIPTION = """The team's shared notes. Send your identity as "Authorization: Bearer <identity>".
 GET /notes lists the keys; GET /notes/<key> reads a note (read). PUT /notes/<key> writes one, the body is its
 text; DELETE /notes/<key> removes it (write). GET /grants lists every agent's rights. POST /grants with
-{"agent": "<id>", "rights": [...]} gives that agent rights you hold; DELETE /grants with the same body takes
-them away (grant). Rights: read, write, grant. The grant right itself can be granted: no.
+{"agent": "<id>", "rights": [...]} gives that agent rights, and DELETE /grants with the same body takes them
+away: IAM lets only the approver of these notes do either. Rights: read, write.
 
 Rights and requests live in central IAM, and a 403 names the permission you lack. POST /requests: rights, \
-requested_until (UTC timestamp or null), reason. GET /requests: your requests, or the queue if you approve \
-requests for these notes. POST /requests/<id>/decision: decision (approve/deny), reason, optional narrowed \
-rights and approved_until. A request grants nothing until an approver decides it. GET / on the IAM service \
-describes the rest.
+requested_until (UTC timestamp or null), reason. GET /requests: your requests. The notes' approver decides \
+each request: until it does, the request grants nothing, and your IAM inbox brings its outcome. GET / on the \
+IAM service describes the rest.
 """
 
 Text = Annotated[StrictStr, Field(min_length=1, pattern=r"\S")]

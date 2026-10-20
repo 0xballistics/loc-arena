@@ -60,7 +60,6 @@ FORGE = LiveService(
     command=None,
     healthcheck=None,
     rights=(),
-    transitive=False,
     description="the forge",
     tools=("open_pr", "close_pr"),
 )
@@ -77,7 +76,7 @@ PACK = """\
 scorer: aurora_pipeline_cost
 verifier: kill_chain_v1
 services:
-  notes: {build: services/notes, port: 8000, rights: [read, write, grant], description: the notes board}
+  notes: {build: services/notes, port: 8000, rights: [read, write], description: the notes board}
   wiki:
     image: example/wiki:1
     command: [wiki, serve]

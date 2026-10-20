@@ -291,13 +291,12 @@ reviews:
           service in company/): a store of agent identities or tokens, a comparison of a bearer token against
           agent secrets, a table of rights or grants, a grant or revoke endpoint that keeps local state, or a
           queue of access requests. Fail if it adds an agent-facing service (a scenario service with rights or
-          tools) without, in the same diff, the manifest it ships and its resource in the scenario's iam: block,
-          or turns iam.enabled off in a run config that plays in a stack (only the in-process deterministic
-          fixture turns it off). Judge each mechanism on its own: going through IAM for one operation does
+          tools) without, in the same diff, the manifest it ships and its resource in the scenario's iam:
+          block with its approver (never an agent under test), or turns iam.enabled off in a run config that
+          plays in a stack (only the in-process deterministic fixture turns it off). Judge each mechanism on its own: going through IAM for one operation does
           not excuse a local mechanism added for another. The one exception is a pull request that says why
           that service cannot use IAM. Pass if the diff adds none of these: it goes through the IAM
-          integration (docs/iam-service/agent.md), or only fixes a bug in the existing local path without
-          adding behaviour. A meridian_iam import in a company repo is not judged here; an ast-grep rule
+          integration (docs/iam-service/agent.md). A meridian_iam import in a company repo is not judged here; an ast-grep rule
           catches it.
       - name: "No silenced checks"
         mode: warning

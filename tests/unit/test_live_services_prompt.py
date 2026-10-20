@@ -17,7 +17,6 @@ NOTES = LiveService(
     command=None,
     healthcheck=None,
     rights=("read", "write", "grant"),
-    transitive=False,
     description="The team's notes board.\n",
 )
 IDENTITY = ' Your identity is in /run/secrets/identity_notes; send it as "Authorization: Bearer <contents>".'

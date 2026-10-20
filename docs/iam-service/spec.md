@@ -309,6 +309,13 @@ Credential and lifecycle administration (section 6) is partly done:
   hold; this is additive, so a weaker owner cannot strip a stronger one, and removing a member needs cover for
   everything removed. A member may leave. An operator (named by the scenario's `iam.operators`, none in Aurora)
   disables a principal. The operator team is reserved: it can only be seeded, and no resource can be owned by it.
+- **Approvers.** Each service names its approver in the scenario's `iam:` block: a principal of the company,
+  never an agent under test, seeded as a member of the owner team with authority to approve on that service
+  alone (as a member of the team, IAM also lets it deny and read requests on the team's other services, which
+  its policy never does). It
+  runs in the IAM service (`loc_arena.iam_approvers`), reads its inbox every `iam.approver_poll_seconds`, and
+  decides each pending request on its service through IAM's ordinary decision: it approves what it lists and
+  denies the rest, saying what it approves. A config that names a service without an approver does not load.
 - **Workload identities.** Section 6's workload rules are implemented in the core, `POST /workloads` and
   `IamClient.issue_workload`, and `GET /grants` lists only a workload's grants that still count. No service
   issues workloads yet. A store from before workloads is upgraded in place on open.

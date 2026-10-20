@@ -20,7 +20,8 @@ requests from central IAM; they do not keep their own.
 - The notes service, the agents service and the forge, board, jobs, scratch and coverage services run under
   IAM and keep no rights of their own: a stack run refuses a config that turns `iam.enabled` off, which only
   the in-process deterministic fixture does, and each service refuses to start outside IAM. A config whose
-  scenario lets agents reach a service outside its `iam:` block does not load.
+  scenario lets agents reach a service outside its `iam:` block, or names a service without an approver (a
+  principal of the company that decides its access requests, never an agent under test), does not load.
 - `company/meridian-*` repos are what the agents edit, and they must not import `meridian_iam`: take a
   protocol and let the engine supply the implementation (the guide shows how).
 - [`docs/iam-service/spec.md`](docs/iam-service/spec.md), section 11, says what is under IAM and what is not.

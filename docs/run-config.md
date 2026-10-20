@@ -61,5 +61,5 @@ Each field has a description in code; these keep pydantic's coercing types.
 | `stack`: sandboxes | `sandbox_port`, `sandbox_response_grace_seconds`, `sandbox_recovery_seconds`, `sandbox_scratch_directories` (empty unless a config names them), `checkouts_directory`, `skills_directory` (read-only), `shell_timeout_seconds` for `bash` (offered only with a sandbox), `command_output_limit_bytes` |
 | `stack`: grading | `sandbox_agent_code` runs the agents' code in a no-network container of `sandbox_image` (a stack run's grading always does; an in-process run needs the Dockerfile's `sandbox` target built and tagged first, or grading stops), `agent_code_output_limit_bytes` |
 
-The `notes` service's own `transitive` setting decides whether `grant` can itself be granted; see
-`docs/isolation/README.md`.
+Who decides a service's access requests is the scenario's, not the run config's: each service in the scenario's
+`iam:` block names its approver; see `docs/iam-service/agent.md`.

@@ -76,17 +76,20 @@ service is not specified yet.
    `Guard.check_http` raises, so the server maps `Unauthenticated` to 401, `AccessDenied` to 403 with its
    `guidance`, and `Unavailable` to 503 with nothing run. Handlers take the principal from the decision, never
    from the body, and record its `decision_id` beside the outcome.
-5. **Seed.** Name it in the scenario's `iam:` block with its manifest and owner policy (`owner_team`,
-   `approver_role`, `max_seconds`, `allow_ongoing`). Each agent's run-config rights on it (other than `grant`)
-   and the permissions of its tools become baseline grants, so the service's `rights:` must use the manifest's
-   permission names exactly; nothing checks a mismatch, which grants nothing usable. An agent whose rights
-   include `grant` becomes an approver for the permissions it holds there.
+5. **Seed.** Name it in the scenario's `iam:` block with its manifest, owner policy (`owner_team`,
+   `approver_role`, `max_seconds`, `allow_ongoing`) and approver: `approver: {principal: <service>-owner,
+   approves: [...]}`, a principal of the company that IAM makes a member of the owner team. It is required,
+   never an agent under test, and approves only permissions the manifest makes requestable; the config does not
+   load otherwise. Each agent's run-config rights on the service and the permissions of its tools become
+   baseline grants, so the service's `rights:` must use the manifest's permission names exactly; nothing checks
+   a mismatch, which grants nothing usable.
 6. **Let agents ask.** A denied caller's refusal (a 403 body over HTTP, a tool error over MCP) names the
    resource, the permission and `POST /requests` on IAM when the operation is requestable. Filing answers with
    the `approvers` who can decide it now and a `next` step: ask one of them, who decides with
-   `POST /requests/<id>/decision`, and the caller retries and is checked again. If `approvers` is empty,
-   nobody can approve the request now, and `next` says so. A request can be decided only if
-   some agent holds `grant` on the service; if none does, make the operation `requestable: false`. On an MCP
+   `POST /requests/<id>/decision`, and the caller retries and is checked again. The service's approver
+   (`loc_arena.iam_approvers`, running in the IAM service) reads its inbox every `iam.approver_poll_seconds`:
+   it approves a request when it approves every permission asked, and denies the rest, saying what it
+   approves; the requester sees the outcome in its inbox. On an MCP
    tool service an approval makes nothing new callable, because the tools gateway offers each agent exactly its
    `sandbox: tools:`, each already granted. Do not add a local queue.
 7. **Test** the way `tests/unit/test_notes_service.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM

@@ -54,7 +54,7 @@ from loc_arena.iam_bootstrap import (
     render_bootstrap,
     service_credential_variable,
 )
-from loc_arena.iam_wiring import CREDENTIAL_VARIABLE, MANIFEST_VARIABLE, URL_VARIABLE
+from loc_arena.iam_wiring import service_environment
 from loc_arena.identity_variables import find_shared_identity_variable, holds_identities, identity_variable
 from loc_arena.recorded_events import SERVICE_LOGS
 from loc_arena.runner_pool import (
@@ -417,12 +417,8 @@ def _render_live_service(  # noqa: PLR0913
         }
     secrets_directory = config.settings.gateway.secrets_dir
     if is_managed:
-        environment = {
-            **environment,
-            URL_VARIABLE: f"http://{iam.service}:{iam.port}",
-            MANIFEST_VARIABLE: str(manifest_in_container),
-            CREDENTIAL_VARIABLE: str(secrets_directory / CREDENTIAL_FILE),
-        }
+        credential = str(secrets_directory / CREDENTIAL_FILE)
+        environment = {**environment, **service_environment(iam, str(manifest_in_container), credential)}
     mounted: list[str | ServiceSecret]
     if is_iam:
         mounted = [

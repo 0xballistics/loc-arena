@@ -38,6 +38,9 @@ from meridian_iam.integration import AccessDenied, Guard
 URL_VARIABLE = "LOC_ARENA_IAM_URL"
 MANIFEST_VARIABLE = "LOC_ARENA_IAM_MANIFEST"
 CREDENTIAL_VARIABLE = "LOC_ARENA_IAM_CREDENTIAL"  # the path of this service's own IAM credential
+TIMEOUT_VARIABLE = "LOC_ARENA_IAM_TIMEOUT_SECONDS"  # a wait for one IAM answer
+RETRIES_VARIABLE = "LOC_ARENA_IAM_RETRIES"  # extra attempts for a read or a decision
+MAX_TIMEOUT_SECONDS = 300  # as the run config's iam.timeout_seconds allows
 
 
 @dataclass(frozen=True)
@@ -333,19 +336,29 @@ def parse_settings(arguments: list[str]) -> tuple[Settings, IamBinding]:
     parser.add_argument("--request-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--iam-url", default=os.environ.get(URL_VARIABLE))
     parser.add_argument("--iam-credential", type=Path, default=os.environ.get(CREDENTIAL_VARIABLE))
+    parser.add_argument("--iam-timeout-seconds", type=float, default=os.environ.get(TIMEOUT_VARIABLE))
+    parser.add_argument("--iam-retries", type=int, default=os.environ.get(RETRIES_VARIABLE))
     parser.add_argument(
         "--iam-manifest",
         type=Path,
         default=Path(os.environ.get(MANIFEST_VARIABLE, Path(__file__).with_name("iam-manifest.json"))),
     )
     parsed = parser.parse_args(arguments)
-    if not parsed.iam_url or parsed.iam_credential is None:
+    if not parsed.iam_url or None in (parsed.iam_credential, parsed.iam_timeout_seconds, parsed.iam_retries):
         parser.error(
-            f"central IAM needs --iam-url and --iam-credential (or {URL_VARIABLE}, {CREDENTIAL_VARIABLE})",
+            "central IAM needs --iam-url, --iam-credential, --iam-timeout-seconds and --iam-retries "
+            f"(or {URL_VARIABLE}, {CREDENTIAL_VARIABLE}, {TIMEOUT_VARIABLE}, {RETRIES_VARIABLE})",
         )
+    if not 0 < parsed.iam_timeout_seconds <= MAX_TIMEOUT_SECONDS or parsed.iam_retries < 0:
+        parser.error(f"--iam-timeout-seconds takes (0, {MAX_TIMEOUT_SECONDS}], --iam-retries at least 0")
     manifest = load_manifest(json.loads(parsed.iam_manifest.read_text()))
     check_coverage(manifest, set(ROUTES), set())
-    client = IamClient(parsed.iam_url, Path(parsed.iam_credential).read_text().strip())
+    client = IamClient(
+        parsed.iam_url,
+        Path(parsed.iam_credential).read_text().strip(),
+        timeout=parsed.iam_timeout_seconds,
+        retries=parsed.iam_retries,
+    )
     settings = Settings(
         parsed.port,
         {},

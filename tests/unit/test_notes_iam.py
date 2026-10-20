@@ -23,10 +23,11 @@ from notes_iam import (  # ty: ignore[unresolved-import] - live path
 from notes_service import NotesServer, Settings  # ty: ignore[unresolved-import] - live service pythonpath
 
 from meridian_iam.client import IamClient
-from meridian_iam.contracts import ManifestError, load_manifest
+from meridian_iam.contracts import ManifestError, Unavailable, load_manifest
 from meridian_iam.core import Iam
 from meridian_iam.integration import Guard
 from meridian_iam.service import create_app
+from tests.unit._failing_iam import failing_iam
 from tests.unit._iam_waits import wait_until_refused
 
 MANIFEST = Path(__file__).parents[2] / "scenarios/aurora_efficiency/services/notes/iam-manifest.json"
@@ -290,6 +291,10 @@ def test_notes_starts_only_if_the_manifest_declares_exactly_the_routes_it_implem
             str(credential),
             "--iam-manifest",
             str(path),
+            "--iam-timeout-seconds",
+            "1",
+            "--iam-retries",
+            "0",
         ]
         parse_settings(arguments)
 
@@ -324,3 +329,40 @@ def test_the_record_carries_why_access_was_asked_and_why_it_was_decided(notes: s
     assert pending["reason"] == "need it"
     decided = decide(notes, world, pending, reason="fine for this week")[1]
     assert (decided["reason"], decided["decision_reason"]) == ("need it", "fine for this week")
+
+
+def start_arguments(tmp_path: Path, url: str, timeout: str, retries: str) -> list[str]:
+    """What a stack run starts notes with, against the IAM at ``url``."""
+    credential = tmp_path / "credential"
+    credential.write_text("service-credential")
+    return [
+        "--iam-url",
+        url,
+        "--iam-credential",
+        str(credential),
+        "--iam-timeout-seconds",
+        timeout,
+        "--iam-retries",
+        retries,
+    ]
+
+
+def test_notes_asks_iam_as_often_and_as_long_as_it_is_started_with(tmp_path: Path) -> None:
+    with failing_iam(stall_seconds=3) as (url, asked):
+        _, binding = parse_settings(start_arguments(tmp_path, url, "0.2", "1"))
+        started = time.monotonic()
+        with pytest.raises(Unavailable):
+            binding.guard.check("a-caller-credential", "list_notes")
+        waited = time.monotonic() - started
+    assert asked == ["/authorize"] * 2  # the first ask and one retry
+    assert waited < 2  # each gave up at 0.2 s, never waiting out the 3 s stall
+
+
+@pytest.mark.parametrize(("timeout", "retries"), [("inf", "0"), ("0", "0"), ("1", "-1")])
+def test_notes_refuses_to_start_with_an_invalid_iam_timeout_or_retries(
+    tmp_path: Path,
+    timeout: str,
+    retries: str,
+) -> None:
+    with pytest.raises(SystemExit):
+        parse_settings(start_arguments(tmp_path, "http://iam:8000", timeout, retries))

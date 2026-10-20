@@ -237,6 +237,9 @@ log has the details.
 
 ### Fixed
 
+- **Services under central IAM ask it as the run config says.** The `iam:` block's `timeout_seconds` (now at most
+  five minutes) and `retries` reach every managed service's IAM client, which kept its defaults, and a service
+  with an invalid one does not start.
 - **A monitor past its deadline goes quiet before grading returns.** An async monitor that runs out of time still
   scores 0 and records its timeout, but it starts no further model call and grading waits for the call it has in
   flight, so every monitor call is in the sealed log and the gateway's record before the run copies them out.

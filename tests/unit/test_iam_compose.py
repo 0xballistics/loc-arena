@@ -1,5 +1,6 @@
 """A stack run under central IAM: the compose it renders and the secrets of each play."""
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -87,6 +88,16 @@ def test_a_managed_service_holds_no_agent_identity_only_its_iam_credential_and_i
         "/app/company/meridian-controlplane/",
     )
     assert "meridian-iam" in services["forge"]["environment"]["PYTHONPATH"]
+
+
+def test_a_managed_service_asks_iam_with_the_run_configs_timeout_and_retries() -> None:
+    iam = CONFIG.settings.iam.model_copy(update={"timeout_seconds": 0.5, "retries": 4})
+    config = dataclasses.replace(CONFIG, settings=CONFIG.settings.model_copy(update={"iam": iam}))
+    services = compose(config)["services"]
+    for name in MANAGED:
+        environment = services[name]["environment"]
+        assert environment["LOC_ARENA_IAM_TIMEOUT_SECONDS"] == "0.5"
+        assert environment["LOC_ARENA_IAM_RETRIES"] == "4"
 
 
 def test_a_built_managed_service_is_built_with_the_iam_client_as_a_named_context() -> None:

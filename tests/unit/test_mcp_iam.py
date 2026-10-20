@@ -17,7 +17,7 @@ import pytest
 import uvicorn
 from loc_arena.board import SERVICE, Board, build_server
 from loc_arena.config import load_run_config
-from loc_arena.iam_wiring import iam_options
+from loc_arena.iam_wiring import guard_from_environment, iam_options
 from loc_arena.mcp_service import build_app, caller_from_token
 from loc_arena.recording_service import build_server as build_recording_server
 from loc_arena.tool_records import ToolRecord
@@ -26,10 +26,11 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, TextContent
 
 from meridian_iam.client import IamClient
-from meridian_iam.contracts import Invalid, check_coverage, load_manifest
+from meridian_iam.contracts import Invalid, Unavailable, check_coverage, load_manifest
 from meridian_iam.core import Iam
 from meridian_iam.integration import Guard
 from meridian_iam.service import create_app
+from tests.unit._failing_iam import failing_iam
 from tests.unit._iam_waits import wait_until_refused
 
 CFG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
@@ -303,6 +304,8 @@ def environment_for(tmp_path: Path, world: World, resource: str, manifest: dict[
         "LOC_ARENA_IAM_URL": world.iam_url,
         "LOC_ARENA_IAM_MANIFEST": str(manifest_file),
         "LOC_ARENA_IAM_CREDENTIAL": str(credential_file),
+        "LOC_ARENA_IAM_TIMEOUT_SECONDS": "1",
+        "LOC_ARENA_IAM_RETRIES": "0",
     }
 
 
@@ -325,3 +328,43 @@ def test_a_service_starts_only_if_its_tools_are_exactly_the_manifests(world: Wor
         match="declared but unregistered tool purge",
     ):  # a binding with no tool behind it
         check_served_tools(environment_for(tmp_path, world, "board", extra), server)
+
+
+def test_a_service_asks_iam_as_often_and_as_long_as_its_environment_says(
+    world: World,
+    tmp_path: Path,
+) -> None:
+    board = json.loads((MANIFESTS / "board.json").read_text())
+    with failing_iam(stall_seconds=3) as (url, asked):
+        limits = {"LOC_ARENA_IAM_TIMEOUT_SECONDS": "0.2", "LOC_ARENA_IAM_RETRIES": "1"}
+        environ = environment_for(tmp_path, world, "board", board) | {"LOC_ARENA_IAM_URL": url} | limits
+        guard = guard_from_environment(environ)
+        assert guard is not None
+        started = time.monotonic()
+        with pytest.raises(Unavailable):
+            guard.check(world.tokens["serving-agent"], "read")
+        waited = time.monotonic() - started
+    assert asked == ["/authorize"] * 2  # the first ask and one retry
+    assert waited < 2  # each gave up at 0.2 s, never waiting out the 3 s stall
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"LOC_ARENA_IAM_TIMEOUT_SECONDS": "inf"},
+        {"LOC_ARENA_IAM_TIMEOUT_SECONDS": "0"},
+        {"LOC_ARENA_IAM_RETRIES": "-1"},
+        {"LOC_ARENA_IAM_RETRIES": None},
+    ],
+    ids=["an infinite timeout", "no timeout", "negative retries", "no retries given"],
+)
+def test_a_service_with_an_invalid_iam_timeout_or_retries_does_not_start(
+    world: World,
+    tmp_path: Path,
+    change: dict[str, str | None],
+) -> None:
+    environ = environment_for(tmp_path, world, "board", json.loads((MANIFESTS / "board.json").read_text()))
+    environ = {key: value for key, value in (environ | change).items() if value is not None}
+
+    with pytest.raises(SystemExit, match="central IAM needs a valid"):
+        guard_from_environment(environ)

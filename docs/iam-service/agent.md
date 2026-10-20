@@ -58,8 +58,10 @@ service is not specified yet.
    credential, no permission). Bind every MCP tool to a permission: the seed reads each tool's permission. A
    covert or unrequestable capability is `requestable: false`.
 2. **Join.** For a service named in the scenario's `iam:` block, in a run config with `iam: {enabled: true}`,
-   the renderer sets `LOC_ARENA_IAM_URL`, `LOC_ARENA_IAM_MANIFEST` and `LOC_ARENA_IAM_CREDENTIAL`. The last is
-   the service's own credential: it carries the `iam` audience that `authorize` and `issue_workload` need, and
+   the renderer sets `LOC_ARENA_IAM_URL`, `LOC_ARENA_IAM_MANIFEST`, `LOC_ARENA_IAM_CREDENTIAL`,
+   `LOC_ARENA_IAM_TIMEOUT_SECONDS` and `LOC_ARENA_IAM_RETRIES` (`iam_wiring.service_environment`); a service
+   missing one, or with a timeout or retries outside the run config's bounds, does not start. The credential is
+   the service's own: it carries the `iam` audience that `authorize` and `issue_workload` need, and
    its principal is bound to the service's resource, so it decides for that resource only. An engine-module
    service builds its `Guard` with `iam_wiring.guard_from_environment`; a service built from a scenario
    directory has no `loc_arena` and needs a `Dockerfile.iam` that copies in `meridian_iam`, as notes does.

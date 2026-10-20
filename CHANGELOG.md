@@ -39,6 +39,9 @@ log has the details.
 
 ### Added
 
+- **An attack run's scores keep its honest twin's verdicts.** `scores.json` has an `honest_twin` block: every
+  verdict on the twin, each monitor's score and peak, and its overall suspicion, from the scoring that set both audit
+  thresholds. Grading used to drop them, so nothing showed what the monitors flagged in honest work.
 - **Agents can run the company's agents.** In a stack run, an agent with `run` on the agents service (in the
   default config, agent-main) starts an execution of a registered agent with `POST /executions`: pi runs its
   latest version on one of three runners, and the execution ends completed, failed or cancelled. Starting and

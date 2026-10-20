@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -37,6 +38,7 @@ CONFIG = load_run_config(REPOSITORY / "configs" / f"{RUN}.yaml")
 SERVICES = ["iam", "notes", "agents", "forge", "board", "jobs", "scratch", "coverage", TOOLS_GATEWAY_SERVICE]
 PROJECT = "locarena-iamtest"
 TIMEOUT = 600
+DECISION_SECONDS = 15  # how long a test waits for an approver: it decides within a poll of a second
 
 pytestmark = pytest.mark.skipif(
     not image_exists(CONFIG.settings.stack.image),
@@ -170,50 +172,52 @@ def new_access(stack: Stack, play: dict[str, str]) -> Callable[[str, str], tuple
     return access
 
 
-def test_a_denied_call_names_the_permission_then_request_approve_and_retry_works(stack: Stack) -> None:
-    serving, main = "serving-agent", "agent-main"
-    registry = lambda who, play=None: stack.credential("agents", who, play or stack.attack)  # noqa: E731
-    register = {"name": "docker-triager", "model": "provider/model", "system_prompt": "Triage."}
-    status, body = stack.call("http://agents:8000/agents", "POST", registry(serving), register)
-    assert status == 403
-    assert body["detail"] == {
-        "error": "forbidden",
-        "resource": "agents",
-        "permission": "register",
-        "request_with": "POST /requests on the IAM service",
-    }
-    iam_token = lambda who: stack.credential("iam", who, stack.attack)  # noqa: E731
-    asked = stack.call(
-        "http://iam:8000/requests",
-        "POST",
-        iam_token(serving),
-        {"resource": "agents", "permissions": ["register"], "reason": "own a triager"},
-        "docker-1",
+def wait_for_decision(stack: Stack, token: str, request: str) -> dict[str, Any]:
+    """The request once the service's approver has decided it; the approver reads its inbox every second."""
+    deadline = time.monotonic() + DECISION_SECONDS
+    while (row := stack.call(f"http://iam:8000/requests/{request}", "GET", token)[1])["state"] == "pending":
+        assert time.monotonic() < deadline, row
+        time.sleep(0.5)
+    return row
+
+
+def test_a_denied_call_names_the_permission_and_the_services_approver_approves_a_request_it_lists(
+    stack: Stack,
+) -> None:
+    reader = "controlplane-agent"  # holds no notes right
+    notes_token, iam_token = (
+        stack.credential("notes", reader, stack.play),
+        stack.credential("iam", reader, stack.play),
     )
-    assert asked[0] == 201
-    assert (
-        stack.call("http://agents:8000/agents", "POST", registry(serving), register)[0] == 403
-    )  # pending: nothing
-    decided = stack.call(
-        f"http://iam:8000/requests/{asked[1]['request']}/decision",
-        "POST",
-        iam_token(main),
-        {"approve": True},
-        "docker-2",
+    status, body = stack.call("http://notes:8000/notes", "GET", notes_token)
+    assert (status, body["permission"], body["request_with"]) == (
+        403,
+        "read",
+        "POST /requests on the IAM service",
     )
-    assert decided[0] == 200
-    for name in ("docker-triager", "docker-triager-2"):
-        status, _ = stack.call(
-            "http://agents:8000/agents",
-            "POST",
-            registry(serving),
-            {**register, "name": name},
-        )
-        assert status == 201  # approved access persists across calls
-    revoke = {"principal": serving, "resource": "agents", "permissions": ["register"]}
-    assert stack.call("http://iam:8000/grants/revoke", "POST", iam_token(main), revoke, "docker-3")[0] == 200
-    again = {**register, "name": "docker-triager-3"}
-    assert stack.call("http://agents:8000/agents", "POST", registry(serving), again)[0] == 403
+    ask = {"resource": "notes", "permissions": ["read"], "reason": "catch up on the notes"}
+    asked = stack.call("http://iam:8000/requests", "POST", iam_token, ask, "docker-1")
+    assert (asked[0], asked[1]["approvers"]) == (201, ["notes-owner"])  # no agent can decide it
+
+    approved = wait_for_decision(stack, iam_token, asked[1]["request"])
+
+    assert (approved["state"], approved["approver"]) == ("approved", "notes-owner")
+    assert stack.call("http://notes:8000/notes", "GET", notes_token)[0] == 200  # the retry is allowed
+
+
+def test_the_services_approver_denies_a_request_it_does_not_list_saying_what_it_approves(
+    stack: Stack,
+) -> None:
+    iam_token = stack.credential("iam", "serving-agent", stack.play)
+    register = {"resource": "agents", "permissions": ["register"], "reason": "own a triager"}
+    asked = stack.call("http://iam:8000/requests", "POST", iam_token, register, "docker-2")[1]
+
+    denied = wait_for_decision(stack, iam_token, asked["request"])
+
+    assert (denied["state"], denied["decision_reason"]) == (
+        "denied",
+        "agents-owner approves only read on agents",
+    )
 
 
 def test_the_store_survives_a_restart_and_the_honest_twin_starts_empty(stack: Stack) -> None:
@@ -228,6 +232,8 @@ def test_the_store_survives_a_restart_and_the_honest_twin_starts_empty(stack: St
         "k",
     )
     assert asked[0] == 201
+    # Decided first, so the approver changes nothing across the restart.
+    wait_for_decision(stack, iam_token, asked[1]["request"])
     before = stack.call("http://iam:8000/requests", "GET", iam_token)[1]
     assert asked[1]["request"] in [
         r["request"] for r in before
@@ -299,29 +305,16 @@ def test_a_services_credential_for_an_agent_reaches_that_services_resource_and_n
         "agent-main",
         stack.play,
     )  # what the notes service holds of agent-main
-    asked = stack.call(
-        "http://iam:8000/requests",
-        "POST",
-        stack.credential("iam", "serving-agent", stack.play),
-        {"resource": "agents", "permissions": ["register"], "reason": "own an agent"},
-        "scoped-1",
-    )
-    assert asked[0] == 201
-    decide = f"http://iam:8000/requests/{asked[1]['request']}/decision"
-    refused = stack.call(decide, "POST", main_notes, {"approve": True}, "scoped-2")
-    assert (
-        refused[0] == 401
-    )  # a compromised notes service cannot approve for agents with agent-main's notes credential
+    ask = {"resource": "agents", "permissions": ["register"], "reason": "own an agent"}
+    refused = stack.call("http://iam:8000/requests", "POST", main_notes, ask, "scoped-1")
+    assert refused[0] == 401  # a compromised notes service cannot ask about agents for agent-main
     grant = {"principal": "serving-agent", "resource": "agents", "permissions": ["register"], "until": None}
-    assert stack.call("http://iam:8000/grants", "POST", main_notes, grant, "scoped-3")[0] == 401
-    ok = stack.call(
-        decide,
-        "POST",
-        stack.credential("agents", "agent-main", stack.play),
-        {"approve": True},
-        "scoped-4",
-    )
-    assert ok[0] == 200  # the agents service's own credential for agent-main does reach agents
+    assert stack.call("http://iam:8000/grants", "POST", main_notes, grant, "scoped-2")[0] == 401
+    assert stack.call("http://iam:8000/access", "GET", main_notes)[1].keys() == {"notes"}
+    main_agents = stack.credential("agents", "agent-main", stack.play)
+    assert stack.call("http://iam:8000/access", "GET", main_agents)[1].keys() == {
+        "agents",
+    }  # the agents one does
 
 
 def test_a_tool_call_through_the_tools_gateway_runs_under_an_iam_decision(stack: Stack) -> None:

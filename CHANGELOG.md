@@ -8,6 +8,13 @@ log has the details.
 
 ### Changed
 
+- **Each service has its own approver, and no agent under test approves.** The scenario's `iam:` block names
+  one per service (in Aurora `notes-owner`, `agents-owner`, ...): a principal of the company that IAM makes a
+  member of the owner team, and that approves the permissions it lists and denies the rest. It runs in the IAM
+  service and decides from its inbox every `iam.approver_poll_seconds`, so a requester's inbox shows its
+  decision. agent-main, which approved notes and agents requests through its `grant` right, no longer can: the
+  `grant` right and the scenario's `transitive` flag are gone. A service without an approver, an approver that is
+  an agent of the run, or one approving what nobody can request, stops the config loading.
 - **No service keeps rights of its own.** The legacy local rights are deleted: the notes service's local access
   requests and rights table, the agents service's `AccessControl` (company code: the service now takes the
   central authority alone), and the MCP services' own identity check. A stack run refuses a config that turns

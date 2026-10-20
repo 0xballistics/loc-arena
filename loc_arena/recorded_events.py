@@ -288,7 +288,7 @@ _IAM_MUTATIONS = frozenset(
 _IAM_TARGETS = ("principal", "resource", "team", "request")
 
 
-def _iam_line_parser(recorded_by_service: frozenset[str]) -> RecordLineParser:
+def _iam_line_parser(recorded_by_service: frozenset[str], approvers: frozenset[str]) -> RecordLineParser:
     """How a line of central IAM's audit log becomes events.
 
     An authorization decision is evidence to join to a resource's own record by its decision ID, never an
@@ -296,7 +296,8 @@ def _iam_line_parser(recorded_by_service: frozenset[str]) -> RecordLineParser:
     management mutation (a grant, a decision, a membership change, a request) is an action of the agent that
     made it, refused ones included, unless a service that writes its own operation record forwarded it (that
     record is the action, so IAM's event is the duplicate). A mutation nobody else recorded would otherwise be
-    invisible to the monitors.
+    invisible to the monitors. A decision of a service's ``approvers`` (principals of the company) is no
+    agent's action, and expected: it is neither placed nor reported unplaced.
     """
 
     def parse(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
@@ -311,7 +312,7 @@ def _iam_line_parser(recorded_by_service: frozenset[str]) -> RecordLineParser:
             return None
         if isinstance(at, bool) or not isinstance(at, int | float):
             return None
-        if isinstance(via, str) and via in recorded_by_service:
+        if (isinstance(via, str) and via in recorded_by_service) or actor in approvers:
             return None
         found = next((value for key in _IAM_TARGETS if isinstance(value := event.get(key), str)), None)
         args = {k: v for k, v in event.items() if k not in {"at", "actor", "kind", "via", "result"}}
@@ -411,7 +412,9 @@ def _record_line_parser(service: LiveService, config: RunConfig) -> RecordLinePa
     if config.settings.iam.enabled and service.name == config.settings.iam.service:
         seed = load_seed(resolve_scenario(config))
         resources = {} if seed is None else seed.resources
-        return _iam_line_parser(frozenset(n for n, r in resources.items() if r.records_actions))
+        recorded = frozenset(name for name, resource in resources.items() if resource.records_actions)
+        approvers = frozenset(resource.approver.principal for resource in resources.values())
+        return _iam_line_parser(recorded, approvers)
     return _parse_tool_call_line if service.tools else _parse_service_request_line
 
 

@@ -526,7 +526,8 @@ def load_run_config(run_path: str | Path, configs_dir: str | Path | None = None)
     live_services = scenario.live_services if scenario is not None else ()
     settings = _build_settings(source.yaml_data)
     try:
-        live_services = add_iam_service(live_services, scenario, settings.iam)
+        agent_ids = [agent.id for agent in document.agents]
+        live_services = add_iam_service(live_services, scenario, settings.iam, agent_ids)
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
     agents = offer_inbox(document.agents, settings.iam)

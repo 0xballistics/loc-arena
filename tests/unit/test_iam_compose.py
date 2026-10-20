@@ -168,7 +168,7 @@ def test_a_managed_service_with_a_ready_image_is_refused() -> None:
         from loc_arena.episode_stack import _render_live_service  # noqa: PLC0415
         from scenarios.loader import LiveService  # noqa: PLC0415
 
-        image = LiveService("notes", "some/image", 8000, None, ("true",), (), False, "", ())
+        image = LiveService("notes", "some/image", 8000, None, ("true",), (), "", ())
         _render_live_service(CONFIG, image, issue_identities(CONFIG), {}, "aurora-efficiency.iam", ("notes",))
 
 

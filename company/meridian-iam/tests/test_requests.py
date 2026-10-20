@@ -46,8 +46,8 @@ def test_a_filed_request_says_whom_to_ask_and_what_happens_next(iam: Iam, tokens
     request = filed["request"]
     assert filed["approvers"] == ["lead"]
     assert filed["next"] == (
-        f"Request {request} waits for an approver: ask lead to decide it. They decide with "
-        f"POST /requests/{request}/decision on IAM; GET /requests/{request} shows its state."
+        f"Request {request} waits for lead, who decide it from their own inbox: you need not ask. "
+        f"GET /requests/{request} shows its state, and your inbox brings the outcome."
     )
 
 

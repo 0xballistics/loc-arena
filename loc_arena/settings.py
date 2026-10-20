@@ -282,6 +282,10 @@ class IamSettings(SettingsGroup):
         default=2,
         description="Extra attempts for a read or a decision, never a write.",
     )
+    approver_poll_seconds: Annotated[float, Field(strict=True, gt=0)] = Field(
+        default=1.0,
+        description="Seconds between two readings of an approver's inbox, each deciding what is pending.",
+    )
 
 
 class LocArenaSettings(SettingsGroup):

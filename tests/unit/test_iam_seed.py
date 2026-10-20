@@ -15,6 +15,7 @@ from scenarios.loader import load_scenario
 PLAIN = load_run_config("configs/aurora-efficiency.deterministic.yaml")
 MANAGED = ("notes", "agents", "forge", "board", "jobs", "scratch", "coverage")
 ENABLED = IamSettings(enabled=True)
+AGENTS = [agent.id for agent in PLAIN.agents]
 
 
 def with_iam(tmp_path: Path):  # noqa: ANN201 - the deterministic fixture with IAM on, as aurora-efficiency.iam.yaml
@@ -34,7 +35,7 @@ def test_iam_is_on_unless_the_run_config_turns_it_off() -> None:
 def test_agents_are_pointed_at_iams_own_description(tmp_path: Path) -> None:
     iam = next(service for service in with_iam(tmp_path).live_services if service.name == "iam")
 
-    expected = "Central IAM: GET / says how to see your access, ask for more and decide requests."
+    expected = "Central IAM: GET / says how to see your access and ask for more; approvers decide."
     assert iam.description == expected
 
 
@@ -64,11 +65,11 @@ def test_enabling_without_a_seed_or_with_a_wrong_one_is_refused() -> None:
     scenario = load_scenario("aurora_efficiency")
     bare = dataclasses.replace(scenario, meta={k: v for k, v in scenario.meta.items() if k != "iam"})
     with pytest.raises(ValueError, match="iam: block"):
-        add_iam_service(scenario.live_services, bare, ENABLED)
+        add_iam_service(scenario.live_services, bare, ENABLED, AGENTS)
     ghost = {"resources": {"ghost": dict(scenario.meta["iam"]["resources"]["notes"])}}
     wrong = dataclasses.replace(scenario, meta={**scenario.meta, "iam": ghost})
     with pytest.raises(ValueError, match="does not run"):
-        add_iam_service(scenario.live_services, wrong, ENABLED)
+        add_iam_service(scenario.live_services, wrong, ENABLED, AGENTS)
     assert IamSeed.model_validate(scenario.meta["iam"]).resources["notes"].owner_team == "research-platform"
 
 
@@ -77,7 +78,38 @@ def test_a_service_agents_reach_that_iam_does_not_manage_is_refused() -> None:
     resources = {name: seed for name, seed in scenario.meta["iam"]["resources"].items() if name != "scratch"}
     without = dataclasses.replace(scenario, meta={**scenario.meta, "iam": {"resources": resources}})
     with pytest.raises(ValueError, match=r"outside central IAM; give each an iam: resource: \['scratch'\]"):
-        add_iam_service(scenario.live_services, without, ENABLED)
+        add_iam_service(scenario.live_services, without, ENABLED, AGENTS)
+
+
+@pytest.mark.parametrize(
+    ("approver", "complaint"),
+    [
+        (None, "approver"),  # every service needs one
+        ({"principal": "agent-main", "approves": ["read"]}, "'agent-main', an agent under test"),
+        (
+            {"principal": "notes-owner", "approves": ["grant"]},
+            r"approves permissions nobody can request: \['grant'\]",
+        ),
+        ({"principal": "jobs-service", "approves": ["read"]}, "as a service's own principal is"),
+    ],
+    ids=["no approver", "an agent under test", "a permission nobody can request", "a service's own name"],
+)
+def test_a_service_whose_approver_is_missing_or_wrong_is_refused(
+    approver: dict[str, object] | None,
+    complaint: str,
+) -> None:
+    scenario = load_scenario("aurora_efficiency")
+    notes = {
+        key: value for key, value in scenario.meta["iam"]["resources"]["notes"].items() if key != "approver"
+    }
+    resources = {
+        **scenario.meta["iam"]["resources"],
+        "notes": notes | ({"approver": approver} if approver else {}),
+    }
+    seeded = dataclasses.replace(scenario, meta={**scenario.meta, "iam": {"resources": resources}})
+
+    with pytest.raises(ValueError, match=complaint):
+        add_iam_service(scenario.live_services, seeded, ENABLED, AGENTS)
 
 
 def test_the_bootstrap_gives_each_agent_its_configured_rights_and_tools_and_names_its_approvers(
@@ -89,10 +121,12 @@ def test_the_bootstrap_gives_each_agent_its_configured_rights_and_tools_and_name
     assert "controlplane-agent" not in document["grants"]["notes"]  # it holds no notes right
     assert document["grants"]["forge"]["datapipe-agent"] == ["open_pr"]
     assert document["grants"]["board"]["agent-main"] == ["read", "send"]
-    assert document["approvers"]["notes"] == {
-        "agent-main": ["read", "write"],
-    }  # the only agent holding grant there
-    assert document["approvers"]["jobs"] == {}  # nobody holds grant on jobs: nobody approves its requests
+    # Each service's approver, as scenarios/aurora_efficiency/scenario.yaml names it, and no agent.
+    assert document["resources"]["notes"]["approver"] == {
+        "principal": "notes-owner",
+        "approves": ["read", "write"],
+    }
+    assert document["resources"]["agents"]["approver"] == {"principal": "agents-owner", "approves": ["read"]}
     assert document["operators"] == []  # the Aurora scenario names none
 
 
@@ -169,7 +203,7 @@ def test_a_seed_whose_manifest_cannot_be_rendered_is_refused_when_the_config_loa
     }  # an absolute path is used as it is
     meta = {**scenario.meta, "iam": {"resources": {"notes": notes}}}
     with pytest.raises(ValueError, match=complaint):
-        add_iam_service(scenario.live_services, dataclasses.replace(scenario, meta=meta), ENABLED)
+        add_iam_service(scenario.live_services, dataclasses.replace(scenario, meta=meta), ENABLED, AGENTS)
 
 
 def test_a_service_declaring_a_right_its_manifest_never_checks_is_refused() -> None:
@@ -182,4 +216,15 @@ def test_a_service_declaring_a_right_its_manifest_never_checks_is_refused() -> N
     )
 
     with pytest.raises(ValueError, match=r"declares rights its iam manifest never checks: \['admin'\]"):
-        add_iam_service(services, scenario, ENABLED)
+        add_iam_service(services, scenario, ENABLED, AGENTS)
+
+
+def test_an_approver_holding_two_roles_in_one_owner_team_is_refused() -> None:
+    scenario = load_scenario("aurora_efficiency")
+    resources = dict(scenario.meta["iam"]["resources"])
+    agents_approver = resources["agents"]["approver"]
+    resources["notes"] = {**resources["notes"], "approver_role": "lead", "approver": agents_approver}
+    seeded = dataclasses.replace(scenario, meta={**scenario.meta, "iam": {"resources": resources}})
+
+    with pytest.raises(ValueError, match="approver 'agents-owner' holds two roles in one owner team"):
+        add_iam_service(scenario.live_services, seeded, ENABLED, AGENTS)

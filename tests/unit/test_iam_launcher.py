@@ -1,5 +1,7 @@
 """Seeding IAM from the bootstrap document and the mounted credentials, and keeping it across a restart."""
 
+import asyncio
+import dataclasses
 import json
 import secrets
 from pathlib import Path
@@ -7,6 +9,7 @@ from pathlib import Path
 import pytest
 from loc_arena.config import RunConfig, load_run_config
 from loc_arena.harness import apply_mode
+from loc_arena.iam_approvers import Approver, decide_forever, decide_pending, issue_approvers
 from loc_arena.iam_bootstrap import render_bootstrap
 from loc_arena.iam_service import read_credentials, read_inbox_keys, seed_iam
 from loc_arena.sandbox import IDENTITY_PREFIX
@@ -69,35 +72,54 @@ def test_the_seed_gives_each_agent_exactly_its_configured_rights_and_tools(tmp_p
     assert not iam.authorize(services["jobs"], identities["jobs", "agent-main"], "submit_job").allow
 
 
-def test_the_grant_holder_approves_requests_and_nobody_else_does(tmp_path: Path) -> None:
+def issue_seeded_approvers(iam: Iam, config: RunConfig) -> dict[str, Approver]:
+    """The approvers the IAM service runs for ``config``, by principal."""
+    return {
+        approver.principal: approver
+        for approver in issue_approvers(iam, json.loads(render_bootstrap(config)))
+    }
+
+
+def test_a_services_approver_approves_what_it_lists_and_denies_the_rest_saying_so(tmp_path: Path) -> None:
+    config = config_with_iam(tmp_path)
+    iam, identities, _ = seeded(tmp_path, config)
+    approvers = issue_seeded_approvers(iam, config)
+    reader, owner = identities["iam", "controlplane-agent"], identities["iam", "serving-agent"]
+    read = iam.submit_request(reader, "notes", ["read"], "catch up on the notes", None, "k1")["request"]
+    register = iam.submit_request(owner, "agents", ["register"], "own an agent", None, "k2")["request"]
+
+    decide_pending(iam, approvers["notes-owner"])
+    decide_pending(iam, approvers["agents-owner"])
+
+    decided = {row["request"]: row for row in [*iam.my_requests(reader), *iam.my_requests(owner)]}
+    assert (decided[read]["state"], decided[read]["approver"]) == ("approved", "notes-owner")
+    assert (decided[register]["state"], decided[register]["decision_reason"]) == (
+        "denied",
+        "agents-owner approves only read on agents",  # the scenario's agents approver lists read alone
+    )
+    assert iam.effective_access(reader)["notes"] == ["read"]
+
+
+def test_an_approver_leaves_another_services_requests_to_that_services_approver(tmp_path: Path) -> None:
+    config = config_with_iam(tmp_path)
+    iam, identities, _ = seeded(tmp_path, config)
+    owner = identities["iam", "serving-agent"]
+    iam.submit_request(owner, "agents", ["read"], "see the registry", None, "k")
+
+    decide_pending(
+        iam,
+        issue_seeded_approvers(iam, config)["notes-owner"],
+    )  # same owner team, another service
+
+    assert [row["state"] for row in iam.my_requests(owner)] == ["pending"]
+
+
+def test_no_agent_decides_an_access_request(tmp_path: Path) -> None:
     iam, identities, _ = seeded(tmp_path, config_with_iam(tmp_path))
-    mine = iam.submit_request(
-        identities["iam", "serving-agent"],
-        "agents",
-        ["register"],
-        "own an agent",
-        None,
-        "k",
-    )
-    iam.decide(
-        identities["iam", "agent-main"],
-        mine["request"],
-        approve=True,
-        key="d",
-    )  # it holds grant there
-    assert iam.my_requests(identities["iam", "serving-agent"])[0]["state"] == "approved"
-    unowned = iam.submit_request(
-        identities["iam", "agent-main"],
-        "jobs",
-        ["submit_job"],
-        "run a job",
-        None,
-        "k2",
-    )
-    with pytest.raises(Forbidden):  # nobody holds grant on jobs, so nobody is its approver
-        iam.decide(identities["iam", "serving-agent"], unowned["request"], approve=True, key="d2")
-    with pytest.raises(Forbidden):  # not even agent-main: authority is per resource
-        iam.decide(identities["iam", "agent-main"], unowned["request"], approve=True, key="d3")
+    asked = iam.submit_request(identities["iam", "serving-agent"], "notes", ["read"], "r", None, "k")
+
+    with pytest.raises(Forbidden):  # agent-main, who used to hold grant, is no approver
+        iam.decide(identities["iam", "agent-main"], asked["request"], approve=True, key="d")
 
 
 def test_a_restart_keeps_the_store_and_the_twins_is_empty_and_rejects_attack_credentials(
@@ -105,7 +127,8 @@ def test_a_restart_keeps_the_store_and_the_twins_is_empty_and_rejects_attack_cre
 ) -> None:
     config = config_with_iam(tmp_path)
     iam, identities, _ = seeded(tmp_path, config)
-    iam.revoke(identities["iam", "agent-main"], "serving-agent", "notes", ["write"], "r")
+    notes_owner = issue_seeded_approvers(iam, config)["notes-owner"]
+    iam.revoke(notes_owner.token, "serving-agent", "notes", ["write"], "r")
     iam.close()
     again = Iam(tmp_path / "iam.db", lambda: 1_000_000)
     assert again.bootstrapped()  # a restart within the play must not reseed over the revocation
@@ -153,34 +176,16 @@ def test_a_services_credential_for_an_agent_manages_that_services_resource_and_n
     tmp_path: Path,
 ) -> None:
     iam, identities, _ = seeded(tmp_path, config_with_iam(tmp_path))
-    ask = iam.submit_request(
-        identities["iam", "serving-agent"],
-        "agents",
-        ["register"],
-        "own an agent",
-        None,
-        "k",
-    )
-    mine = iam.submit_request(identities["iam", "serving-agent"], "notes", ["write"], "append", None, "k2")
-    # agent-main approves on notes and agents; the credential notes holds for it reaches notes only:
-    notes_credential = identities["notes", "agent-main"]
-    iam.decide(notes_credential, mine["request"], approve=True, key="d1")
-    with pytest.raises(Unauthenticated):
-        iam.decide(
-            notes_credential,
-            ask["request"],
-            approve=True,
-            key="d2",
-        )  # a compromised notes cannot approve agents
+    notes_credential = identities["notes", "agent-main"]  # what the notes service holds of agent-main
+
+    with pytest.raises(Unauthenticated):  # a compromised notes cannot ask about agents for it
+        iam.submit_request(notes_credential, "agents", ["register"], "own an agent", None, "k")
     with pytest.raises(Unauthenticated):
         iam.grant(notes_credential, "serving-agent", "agents", ["register"], None, "g")
     assert set(iam.effective_access(notes_credential)) == {"notes"}  # nor even see the agent's other access
-    iam.decide(
-        identities["agents", "agent-main"],
-        ask["request"],
-        approve=True,
-        key="d3",
-    )  # the agents one can
+    assert set(iam.effective_access(identities["agents", "agent-main"])) == {
+        "agents",
+    }  # the agents one sees its own
 
 
 @pytest.mark.parametrize(
@@ -201,3 +206,48 @@ def test_a_malformed_credential_filename_stops_the_launcher_instead_of_being_ign
     (tmp_path / name).write_text("token")
     with pytest.raises(ValueError, match="invalid"):
         read_credentials(tmp_path)
+
+
+def test_an_approvers_reason_is_cut_to_what_iam_takes_so_its_decision_still_lands(tmp_path: Path) -> None:
+    config = config_with_iam(tmp_path)
+    iam, identities, _ = seeded(tmp_path, config)
+    seeded_owner = issue_seeded_approvers(iam, config)["notes-owner"]
+    listing = frozenset(f"a-long-permission-name-{n:03}" for n in range(100))  # its reason lists them all
+    owner = dataclasses.replace(seeded_owner, approves={"notes": listing})
+    asker = identities["iam", "controlplane-agent"]
+    iam.submit_request(asker, "notes", ["read"], "catch up", None, "k")
+
+    decide_pending(iam, owner)
+
+    (row,) = iam.my_requests(asker)
+    assert (row["state"], len(row["decision_reason"])) == ("denied", 500)
+
+
+def test_a_request_its_approver_cannot_approve_is_denied_with_iams_reason(tmp_path: Path) -> None:
+    config = config_with_iam(tmp_path)
+    iam, identities, _ = seeded(tmp_path, config, operators=("agent-main",))
+    asker = identities["iam", "controlplane-agent"]
+    iam.submit_request(asker, "notes", ["read"], "catch up", None, "k")
+    iam.disable_principal_as(
+        identities["iam", "agent-main"],
+        "controlplane-agent",
+        "off",
+    )  # no approval can land
+
+    decide_pending(iam, issue_seeded_approvers(iam, config)["notes-owner"])
+
+    owner = issue_seeded_approvers(iam, config)["notes-owner"]
+    (row,) = iam.owner_queue(owner.token, "notes")
+    assert (row["state"], row["decision_reason"].startswith("notes-owner could not approve it")) == (
+        "denied",
+        True,
+    )
+
+
+def test_the_approvers_outlive_a_reading_that_fails(tmp_path: Path) -> None:
+    config = config_with_iam(tmp_path)
+    iam, _, _ = seeded(tmp_path, config)
+    broken = dataclasses.replace(issue_seeded_approvers(iam, config)["notes-owner"], token="not-a-credential")
+
+    with pytest.raises(TimeoutError):  # still deciding when the wait ends: the failed reading did not end it
+        asyncio.run(asyncio.wait_for(decide_forever(iam, [broken], 0.05), timeout=0.3))

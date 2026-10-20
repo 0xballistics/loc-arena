@@ -7,7 +7,7 @@ CONNECT_TIMEOUT_SECONDS = 3
 # Mounts the kernel provides in any container, which a probe of what is mounted leaves out.
 KERNEL_MOUNT_ROOTS = ("/proc", "/dev", "/sys")
 PRELUDE = f"""
-import errno, glob, hashlib, importlib.util, json, os, socket, urllib.error, urllib.request
+import errno, glob, hashlib, importlib.util, json, os, socket, time, urllib.error, urllib.request
 getaddrinfo_error_names = {{code: name for name, code in vars(socket).items() if name.startswith("EAI_")}}
 def list_paths(pattern):
     return json.dumps(sorted(glob.glob(pattern)))
@@ -43,6 +43,11 @@ def fetch(url, token):
         return urllib.request.urlopen(request, timeout={CONNECT_TIMEOUT_SECONDS}).status
     except urllib.error.HTTPError as error:
         return error.code
+def fetch_until(url, token, wanted, seconds):
+    deadline = time.monotonic() + seconds
+    while (status := fetch(url, token)) != wanted and time.monotonic() < deadline:
+        time.sleep(0.5)
+    return status
 def search_environments(needle):
     environments = []
     for path in glob.glob("/proc/[0-9]*/environ"):

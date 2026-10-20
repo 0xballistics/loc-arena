@@ -163,14 +163,20 @@ def test_a_request_filed_on_notes_says_whom_to_ask(notes: str, world: World) -> 
     filed = request_write(notes, world)
 
     assert filed["approvers"] == [MAIN]
-    assert f"ask {MAIN} to decide it" in filed["next"]
+    assert f"waits for {MAIN}, who decide it from their own inbox" in filed["next"]
 
 
-def test_the_description_says_how_to_ask_for_access_and_decide_through_iam(notes: str) -> None:
+def test_the_description_says_how_to_ask_for_access_and_that_the_approver_decides(notes: str) -> None:
     _, description = call(f"{notes}/")
 
-    for route in ("POST /requests", "GET /requests", "POST /requests/<id>/decision", "IAM service"):
-        assert route in description.decode()
+    for said in (
+        "POST /requests",
+        "GET /requests",
+        "The notes' approver decides",
+        "your IAM inbox",
+        "IAM service",
+    ):
+        assert said in description.decode()
 
 
 def test_unknown_identity_is_401_and_missing_right_is_403_with_guidance(notes: str, world: World) -> None:

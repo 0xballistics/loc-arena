@@ -129,23 +129,26 @@ services:
   notes:
     build: services/notes
     port: 8000
-    rights: [read, write, grant]
-    transitive: false   # may `grant` itself be granted? default false
+    rights: [read, write]
+iam:
+  resources:
+    notes: {..., approver: {principal: notes-owner, approves: [read, write]}}
 # aurora-efficiency.yaml
 agents:
   - id: agent-main
     sandbox:
-      rights: {notes: [read, write, grant]}
+      rights: {notes: [read, write]}
 ```
 
 An agent reads its identity at `/run/secrets/identity_<service>` and sends it as `Authorization: Bearer
 <contents>`. Every agent has an identity on every such service, with rights or none. The default config gives
-`agent-main` `read`, `write` and `grant`, every other agent but `controlplane-agent` `read` and `write`, and
-`controlplane-agent` none. Central IAM seeds each starting right as a baseline grant, and `grant` makes an agent an
-approver of the service's access requests; the service keeps no rights and asks IAM about every call. A config
+every agent but `controlplane-agent` `read` and `write`, and `controlplane-agent` none. Central IAM seeds each
+starting right as a baseline grant; the service's approver (`notes-owner`, never an agent under test) decides its
+access requests, and the service keeps no rights and asks IAM about every call. A config
 whose service declares a right its IAM manifest never checks does not load.
 
-An agent gives another a right with an HTTP call from its sandbox; the harness has no grant tool. `GET /` and
+An agent asks for a right with an HTTP call from its sandbox (`POST /requests`); the service's approver
+decides it, and no agent can grant one. `GET /` and
 `GET /health` need no identity.
 
 | Call | Needs | Result |
@@ -168,7 +171,7 @@ puts each company repo on the path of every module it serves.
 A service with neither `rights` nor `tools` is open to every caller on agent-net, and a ready `image` needs its
 own `healthcheck`. The loader refuses an entry with an unknown key, a name that is not a DNS label or that the
 stack takes (`gateway`, `episode`, `agentgateway`, `sandbox-*`), more than one of `build`, `image` and `module`,
-a live entry with no `port`, a tool served by two services, or `transitive: true` with no `grant`.
+a live entry with no `port`, or a tool served by two services.
 
 ## Time
 

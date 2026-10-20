@@ -1,7 +1,8 @@
 """Central IAM as a stack run's live service: ``python -m loc_arena.iam_service <config> <entry>``.
 
-It serves ``meridian_iam`` over one SQLite store in an anonymous volume: a restarted container keeps its
-grants and requests, a recreated one (the honest twin's) starts empty and seeds itself again. The seed is a
+It serves ``meridian_iam`` over one SQLite store in an anonymous volume, and runs each service's approver
+(``loc_arena.iam_approvers``) on the same event loop. A restarted container keeps its grants and requests, a
+recreated one (the honest twin's) starts empty and seeds itself again. The seed is a
 document the host renders per play (``loc_arena.iam_bootstrap``) and compose mounts as a secret; the
 credentials it imports are the identities compose mounts, so agents keep using the files they already have.
 Each audit event is one JSON line on stdout, written after its transaction commits.
@@ -9,10 +10,11 @@ Each audit event is one JSON line on stdout, written after its transaction commi
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import time
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Coroutine, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 
 from loc_arena.config import load_run_config
+from loc_arena.iam_approvers import decide_forever, issue_approvers
 from loc_arena.iam_bootstrap import (
     BOOTSTRAP_SECRET,
     IAM_AUDIENCE,
@@ -94,7 +97,7 @@ def _seed(
     service_credentials: Mapping[str, str],
     iam_name: str,
 ) -> None:
-    """Principals, resources, credentials, baseline grants and approvers.
+    """Principals, resources, credentials, baseline grants and each resource's approver.
 
     A managed service's credential for an agent carries ``iam:<service>``, not the whole ``iam`` audience: the
     service forwards its callers' credentials to IAM, and can then speak for them about its own resource only.
@@ -121,11 +124,13 @@ def _seed(
         iam.import_credential(service_principal, service_credentials[name], [IAM_AUDIENCE], label="service")
         for agent, permissions in document["grants"].get(name, {}).items():
             iam.add_baseline_grant(agent, name, permissions)
-        for agent, permissions in document["approvers"].get(name, {}).items():
-            key = (agent, resource["owner_team"], resource["approver_role"])
-            team_authority.setdefault(key, {})[name] = permissions
-    for (agent, team, role), authority in team_authority.items():
-        iam.add_member(agent, team, role, authority)
+        approver = resource["approver"]
+        key = (approver["principal"], resource["owner_team"], resource["approver_role"])
+        team_authority.setdefault(key, {})[name] = list(approver["approves"])
+    for principal in sorted({principal for principal, _, _ in team_authority}):
+        iam.add_principal(principal, "agent")  # a principal of the company, never an agent of the run
+    for (principal, team, role), authority in team_authority.items():
+        iam.add_member(principal, team, role, authority)
     for operator in document.get("operators", []):
         iam.add_member(operator, OPERATOR_TEAM, OPERATOR_ROLE)
     managed = set(document["resources"])
@@ -169,13 +174,21 @@ def main(arguments: list[str]) -> None:
         identities, services = read_credentials(secrets_directory)
         seed_iam(iam, document, identities, services, arguments[1], read_inbox_keys(secrets_directory))
     offered = next(service.tools for service in config.live_services if service.name == arguments[1])
-    uvicorn.run(
-        serving_app(iam, arguments[1], offered),
-        host=ALL_ADDRESSES,
-        port=settings.port,
-        log_level="warning",
-        access_log=False,
+    app = serving_app(iam, arguments[1], offered)
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=ALL_ADDRESSES, port=settings.port, log_level="warning", access_log=False),
     )
+    approvers = issue_approvers(iam, document)
+    asyncio.run(serve(server, decide_forever(iam, approvers, settings.approver_poll_seconds)))
+
+
+async def serve(server: uvicorn.Server, approving: Coroutine[Any, Any, None]) -> None:
+    """Serve IAM with its approvers deciding beside it, on one loop, until the server stops."""
+    deciding = asyncio.create_task(approving)
+    try:
+        await server.serve()
+    finally:
+        deciding.cancel()
 
 
 if __name__ == "__main__":

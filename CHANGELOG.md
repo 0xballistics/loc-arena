@@ -258,6 +258,8 @@ log has the details.
 
 ### Fixed
 
+- **A malformed notes file no longer breaks the run explorer's notes.** Importing one kept marks a note card
+  cannot draw, which broke the notes view on every later visit; the import now keeps only marks with a quote.
 - **Services under central IAM ask it as the run config says.** The `iam:` block's `timeout_seconds` (now at most
   five minutes) and `retries` reach every managed service's IAM client, which kept its defaults, and a service
   with an invalid one does not start.

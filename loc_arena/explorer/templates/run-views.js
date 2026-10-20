@@ -253,16 +253,19 @@
   // ---------- notes in and out: one file holds the whole state, never a subset
   const notesJson = () => JSON.stringify({ ...NOTES, savedAt: new Date().toISOString() }, null, 1);
   function markSaved() { NOTES.savedAt = new Date().toISOString(); keepNotes(); }
+  // A file's marks are kept only if a note card can draw them, so a bad file cannot break the notes for good.
+  const drawableMarks = ms => (Array.isArray(ms) ? ms : []).filter(m => m && typeof m.id === 'string' && typeof m.quote === 'string');
   function mergeNotes(text) {
     const incoming = JSON.parse(text);
     if (!incoming || !incoming.steps || typeof incoming.steps !== 'object') throw new Error('no `steps` object in that file');
     let added = 0, merged = 0;
     for (const [id, n] of Object.entries(incoming.steps)) {
+      if (!n || typeof n !== 'object') continue;
       const mine = NOTES.steps[id];
-      if (!mine) { NOTES.steps[id] = { text: String(n.text || ''), marks: (n.marks || []).slice(), at: n.at || new Date().toISOString(), ...(n.read ? { read: true } : {}) }; added++; continue; }
+      if (!mine) { NOTES.steps[id] = { text: String(n.text || ''), marks: drawableMarks(n.marks), at: n.at || new Date().toISOString(), ...(n.read ? { read: true } : {}) }; added++; continue; }
       if (n.read) mine.read = true;
       const seen = new Set((mine.marks || []).map(m => m.id));
-      (n.marks || []).forEach(m => { if (!seen.has(m.id)) mine.marks.push(m); });
+      drawableMarks(n.marks).forEach(m => { if (!seen.has(m.id)) (mine.marks ||= []).push(m); });
       const here = String(mine.text || '').trim(), there = String(n.text || '').trim();
       mine.text = !there || here === there ? here : (here ? here + '\n\n---\n\n' + there : there);
       mine.at = new Date().toISOString(); merged++;

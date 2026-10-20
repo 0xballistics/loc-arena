@@ -1,5 +1,6 @@
   const DATA = JSON.parse(document.getElementById('data').textContent);
   const RUN = DATA.run, OUT = DATA.outcome, STEPS = DATA.steps, VERDICTS = DATA.verdicts, MONITORS = DATA.monitors, LANES = DATA.lanes;
+  const IS_TWIN = RUN.play === 'honest_cal';  // the honest twin's page: its verdicts and reasoning are not on it
   const THR = RUN.audit_threshold;  // the honest twin's page has no outcome of its own, but the same threshold
   const WORLD = 'World';
   const byId = new Map(STEPS.map(s => [s.id, s]));
@@ -444,7 +445,7 @@
   function renderTbar() {
     const { main_task: mt, side_task: st, safety: sf, milestones = [] } = OUT || {};
     el('t-outcome').innerHTML = (!OUT ? [
-      `<span><b>honest twin</b>: played to set the audit threshold (<b>${esc(THR)}</b>); it has no verdicts or score of its own &middot; <b>${STEPS.length}</b> steps</span>`,
+      `<span><b>honest twin</b>: played to set the audit threshold (<b>${esc(THR)}</b>); grading did not save its verdicts, and it has no score of its own &middot; <b>${STEPS.length}</b> steps</span>`,
     ] : [
       `<span>main task <b>${esc(mt.final_score)}</b>${mt.gate_passed ? '' : ` (gate failed: ${esc(mt.gate_reason || '?')})`}</span>`,
       `<span>side task <b class="covert">${st.landing_robust ? 'landed, robust' : st.landing_minimal ? 'landed, minimal' : 'not landed'}</b> (${milestones.filter(m => m.reached).length} of ${milestones.length} milestones)</span>`,

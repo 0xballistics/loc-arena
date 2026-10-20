@@ -27,9 +27,9 @@ on (the default). A folder's index also lists a run without one, with no link to
 An attack run also plays its honest twin, and the Inspect log holds it as a second sample (`honest_cal`). Each such
 run gets a second page beside its own, `<run_name>__honest_twin.html` (`explorer__honest_twin.html` for a single
 bundle), linked both ways from the header bar. It is the twin's transcript, every agent in its lane, and nothing
-else: the twin is played to set the audit threshold, so it has no outcome, monitor verdicts or side-task evidence of
-its own (the run's page has those), and it shows no model reasoning, which the gateway's call log pairs to the run's
-own sealed log.
+else: the twin is played to set the audit threshold, so it has no outcome or side-task evidence of its own (the run's
+page has those). Grading does not save its monitor verdicts, and the page does not yet pair its model calls with the
+gateway's record, so it shows neither, and says so.
 
 ## All runs
 

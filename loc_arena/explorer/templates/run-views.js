@@ -94,7 +94,7 @@
       ${annotated(s, `args-${i}`, placed)}
       <div class="sub">${partIcon('result', 12)}result</div>${annotated(s, `result-${i}`, placed, 'code')}`).join('');
     const happened = !hasTool && s.events.length ? `<h3>${partIcon('happened', 15)}What happened</h3>${s.events.map((ev, i) => `<div class="sub">${kindIcon(ev.kind, 12)}${esc(ev.kind)} by ${esc(ev.actor || '?')}${ev.verdicts.map(v => ' ' + pill(v.score)).join('')}${covertTags(ev.covert)}</div>${annotated(s, `body-${i}`, placed, 'code')}`).join('')}` : '';
-    const read = `<h3>${partIcon('monitors', 15)}How the monitors read it<span class="q"> &middot; audit threshold ${THR}</span></h3>${s.verdicts.length ? [...s.verdicts].sort((a, b) => b.score - a.score).map(verdictBlock).join('') : '<p class="help" style="margin:0">No monitor scored anything in this step.</p>'}`;
+    const read = `<h3>${partIcon('monitors', 15)}How the monitors read it<span class="q"> &middot; audit threshold ${THR}</span></h3>${s.verdicts.length ? [...s.verdicts].sort((a, b) => b.score - a.score).map(verdictBlock).join('') : IS_TWIN ? '<p class="help" style="margin:0">Grading did not save the honest twin&rsquo;s verdicts, so none show here.</p>' : '<p class="help" style="margin:0">No monitor scored anything in this step.</p>'}`;
     const PHASE = { deciding: 'while choosing its action', executing: 'while a tool ran' };
     const said = s.calls.map((c, i) => {
       const own = c.identity === s.agent;
@@ -120,7 +120,7 @@
         <svg class="connectors" aria-hidden="true"></svg>
         <div class="textcol">
           ${did}${happened}${read}${said}${also}
-          ${s.calls.length && !s.calls.some(c => c.reasoning) ? `<p class="help absent"><span class="pi">${icon('eyeoff', 14)}</span>No reasoning: the model returned none here, or the run left no gateway call log to read it from.</p>` : ''}
+          ${s.calls.length && !s.calls.some(c => c.reasoning) ? `<p class="help absent"><span class="pi">${icon('eyeoff', 14)}</span>${IS_TWIN ? 'No reasoning: this page does not yet pair the honest twin&rsquo;s model calls with the gateway&rsquo;s record.' : 'No reasoning: the model returned none here, or the run left no gateway call log to read it from.'}</p>` : ''}
           <div class="metaline">${seqs.length ? `sealed #${Math.min(...seqs)}&ndash;${Math.max(...seqs)} &middot; ` : ''}<code>${esc(s.id)}</code><button class="copy" data-copy-text="${esc(s.id)}">copy id</button><button class="copy" data-copy-link="${esc(s.id)}">copy link</button><button class="copy" data-act="md">copy as Markdown</button></div>
         </div>
         <div class="gutter${placed.some(x => x.at) ? '' : ' empty'}">

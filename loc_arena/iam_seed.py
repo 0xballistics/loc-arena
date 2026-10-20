@@ -10,6 +10,7 @@ agent reaches, by tools or by rights, must be one of its resources.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Collection
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -69,14 +70,14 @@ def load_seed(scenario: Scenario | None) -> IamSeed | None:
 
 def find_seed_problem(seed: IamSeed, live_services: tuple[LiveService, ...]) -> str | None:
     """What is wrong with a seed against the scenario's live services, else ``None``."""
-    live = {service.name for service in live_services}
-    if unknown := sorted(set(seed.resources) - live):
+    live = {service.name: service for service in live_services}
+    if unknown := sorted(set(seed.resources) - set(live)):
         return f"the iam seed names services the scenario does not run: {unknown}"
     for name, resource in seed.resources.items():
         path = REPOSITORY / resource.manifest
         if not path.is_file():
             return f"the iam seed for {name!r} names no manifest file: {resource.manifest}"
-        if problem := _manifest_problem(name, path):
+        if problem := _manifest_problem(name, path, live[name].rights):
             return problem
     reached = {service.name for service in live_services if service.tools or service.rights}
     if unmanaged := sorted(reached - set(seed.resources)):
@@ -99,8 +100,12 @@ class _ManifestHead(BaseModel):
     tools: dict[StrictStr, StrictStr] = Field(default_factory=dict)
 
 
-def _manifest_problem(name: str, path: Path) -> str | None:
-    """What is wrong with the manifest a seed names, else ``None``: unreadable, malformed or another's."""
+def _manifest_problem(name: str, path: Path, rights: Collection[str]) -> str | None:
+    """What is wrong with the manifest a seed names, else ``None``.
+
+    Unreadable, malformed or another resource's, or never checking one of the service's ``rights``: a right no
+    operation checks could be granted and never enforced. ``grant`` names an approver, not a permission.
+    """
     try:
         head = _ManifestHead.model_validate_json(path.read_text())
     except (OSError, ValueError) as error:
@@ -109,6 +114,9 @@ def _manifest_problem(name: str, path: Path) -> str | None:
         return f"the iam manifest of {name!r} declares resource {head.resource!r}"
     if unknown := sorted(set(head.tools.values()) - set(head.operations)):
         return f"the iam manifest of {name!r} binds tools to operations it does not declare: {unknown}"
+    checked = {spec.get("permission") for spec in head.operations.values()}
+    if unchecked := sorted(set(rights) - {"grant"} - checked):
+        return f"the service {name!r} declares rights its iam manifest never checks: {unchecked}"
     return None
 
 

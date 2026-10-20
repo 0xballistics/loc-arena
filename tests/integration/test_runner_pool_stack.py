@@ -1,7 +1,8 @@
 """The runner pool in a stack run: who may drive a runner, what it holds, how far its pi reaches, executions.
 
-Starts the gateway, the agents service with its runners, and agent-main's sandbox from the compose file a
-stack run renders. The gateway's key is a placeholder; the only model call made is one the gateway refuses.
+Starts the gateway, the agents service with its runners and central IAM, and agent-main's sandbox from the
+compose file a stack run renders, with one play's secrets. The gateway's key is a placeholder; the only model
+call made is one the gateway refuses.
 """
 
 from __future__ import annotations
@@ -19,21 +20,14 @@ from pathlib import Path
 import pytest
 import yaml
 from loc_arena.config import load_run_config, sandbox_service
-from loc_arena.episode_stack import REPOSITORY, issue_identities, render_compose, token_variable
+from loc_arena.episode_stack import REPOSITORY, issue_secrets, render_compose
 from loc_arena.gateway.core import API_KEY_VARIABLE
-from loc_arena.gateway.model_gateway import (
-    PROJECT_PREFIX,
-    GatewayCall,
-    copy_call_log,
-    issue_gateway_secrets,
-    issue_held_tokens,
-)
+from loc_arena.gateway.model_gateway import PROJECT_PREFIX, GatewayCall, copy_call_log
 from loc_arena.runner_pool import list_runner_services, runner_token_variable
-from loc_arena.tools_gateway import TOOLS_GATEWAY_CONFIG_VARIABLE
 
 from tests.integration._docker_support import image_exists
 
-RUN = "aurora-efficiency.deterministic"
+RUN = "aurora-efficiency.iam"
 OWNER = "agents"
 SANDBOX = sandbox_service("agent-main")
 COSTLY_MODEL = "costly/model"  # on no runner's list of models
@@ -146,17 +140,9 @@ def read_calls(compose: list[str], environment: dict[str, str], call_log: Path) 
 def pool(tmp_path_factory: pytest.TempPathFactory) -> Iterator[RunnerPool]:
     directory = tmp_path_factory.mktemp("runner-pool")
     (directory / "compose.yaml").write_text(yaml.safe_dump(render_compose(CONFIG, REPOSITORY, RUN, [])))
-    tokens = {runner: secrets.token_urlsafe(32) for runner in list_runner_services(CONFIG)}
-    sandboxes = {sandbox_service(agent.id): secrets.token_urlsafe(32) for agent in CONFIG.agents}
-    environment = {
-        **os.environ,
-        API_KEY_VARIABLE: secrets.token_urlsafe(24),
-        TOOLS_GATEWAY_CONFIG_VARIABLE: "unused: the tools gateway is not started",
-        **{token_variable(agent.id): sandboxes[sandbox_service(agent.id)] for agent in CONFIG.agents},
-        **issue_gateway_secrets(CONFIG.settings, issue_held_tokens(32), sandboxes, tokens, "attack"),
-        **{identity.variable: secrets.token_urlsafe(32) for identity in issue_identities(CONFIG)},
-        **{runner_token_variable(runner): token for runner, token in tokens.items()},
-    }
+    attack, _ = issue_secrets(CONFIG)
+    tokens = {runner: attack[runner_token_variable(runner)] for runner in list_runner_services(CONFIG)}
+    environment = {**os.environ, API_KEY_VARIABLE: secrets.token_urlsafe(24), **attack}
     project = f"{PROJECT_PREFIX}{secrets.token_hex(3)}"  # named as a stack run's
     compose = [
         "compose",

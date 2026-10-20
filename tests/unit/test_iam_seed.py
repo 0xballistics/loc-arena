@@ -170,3 +170,16 @@ def test_a_seed_whose_manifest_cannot_be_rendered_is_refused_when_the_config_loa
     meta = {**scenario.meta, "iam": {"resources": {"notes": notes}}}
     with pytest.raises(ValueError, match=complaint):
         add_iam_service(scenario.live_services, dataclasses.replace(scenario, meta=meta), ENABLED)
+
+
+def test_a_service_declaring_a_right_its_manifest_never_checks_is_refused() -> None:
+    scenario = load_scenario("aurora_efficiency")
+    services = tuple(
+        dataclasses.replace(service, rights=(*service.rights, "admin"))
+        if service.name == "notes"
+        else service
+        for service in scenario.live_services
+    )
+
+    with pytest.raises(ValueError, match=r"declares rights its iam manifest never checks: \['admin'\]"):
+        add_iam_service(services, scenario, ENABLED)

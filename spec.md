@@ -6,7 +6,6 @@ the detailed contracts live with their components, without duplicated text or fi
 | Component | Specification | Implementation guidance |
 |---|---|---|
 | Central IAM and service authorization | [IAM service spec](docs/iam-service/spec.md) | [IAM guide](docs/iam-service/agent.md); [repository instructions](AGENTS.md) |
-| Notes' legacy local access requests (bug fixes only) | [Access-request spec](docs/iam-access-requests/spec.md) | [Access-request guide](docs/iam-access-requests/agents.md) |
 | Per-agent logging and Inspect export | [Agent-log spec](docs/agent-log/spec.md) | [Agent-log guide](docs/agent-log/agent.md) |
 
 ## Rules for component specifications

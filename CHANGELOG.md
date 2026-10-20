@@ -8,6 +8,10 @@ log has the details.
 
 ### Changed
 
+- **No service keeps rights of its own.** The legacy local rights are deleted: the notes service's local access
+  requests and rights table, the agents service's `AccessControl` (company code: the service now takes the
+  central authority alone), and the MCP services' own identity check. A stack run refuses a config that turns
+  IAM off, and each service refuses to start outside it. Notes is one IAM-only module, `notes_service`.
 - **Central IAM is on by default.** `iam.enabled` is on unless a run config turns it off, which only the
   deterministic fixture does; `aurora-efficiency.iam-live.yaml` is gone, as the live config is that run now.
 - **A run plays where its config needs.** `make run` and `loc-arena run` play in a stack when the config turns IAM
@@ -41,19 +45,15 @@ log has the details.
 
 - Every PR checks whole edited files against 700 lines, or their base size if already larger; untouched files are excluded.
 
-- **Central IAM, opt-in.** A run config with `iam: {enabled: true}` runs
-  an `iam` service beside the others, and every call to the notes board, the agents service, the forge, the
+- **Central IAM.** A stack run runs an `iam` service beside the others, and every call to the notes board, the agents service, the forge, the
   board and the job, scratch and coverage services is checked against it online before it runs. Access is a
   grant with an owner, a lifetime and a revocation, not a bearer string: an agent refused a call is told which
   permission it lacks and how to ask; the resource's approver decides; the retry works, across calls, until the
   grant expires or is revoked. IAM unavailable stops the call. The honest twin gets a fresh store and fresh
-  credentials. `configs/aurora-efficiency.iam.yaml` runs the scripted fixture under it and
-  `configs/aurora-efficiency.iam-live.yaml` the live models, in a stack run. Every run config without the switch
-  behaves as before; see `docs/iam-service/spec.md` section 11 for what is and is not under it.
+  credentials. See `docs/iam-service/spec.md` section 11 for what is and is not under it.
 - **Agent-facing services must use central IAM.** A new or changed service declares its operations and
   enforces them through IAM's shared integration, never with its own identity store, rights table, stateful
-  grant endpoint or access-request queue; the services' legacy local rights, still the default, take bug fixes
-  only. CodeRabbit flags a pull request that adds such a mechanism, and an ast-grep rule flags a company repo
+  grant endpoint or access-request queue. CodeRabbit flags a pull request that adds such a mechanism, and an ast-grep rule flags a company repo
   that imports `meridian_iam`.
 - **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
   run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused

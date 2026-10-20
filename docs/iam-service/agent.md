@@ -14,7 +14,7 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
 | `company/meridian-iam/meridian_iam/integration/` | `Guard` (one decision per call), `asgi.py` (FastAPI dependency), `mcp.py` (verifier and tool middleware) |
 | `loc_arena/iam_service.py`, `iam_bootstrap.py`, `iam_seed.py`, `iam_wiring.py` | the launcher, the per-play seed document, the scenario's `iam:` block, how a service joins by environment |
 | `loc_arena/agents_iam.py` | the engine's implementation of the agents service's `CentralAuthority` |
-| `scenarios/aurora_efficiency/services/notes/notes_iam.py` | the notes service under IAM |
+| `scenarios/aurora_efficiency/services/notes/notes_service.py` | the notes service, under IAM |
 
 ## Rules that are easy to break
 
@@ -23,7 +23,6 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
   engine passes an implementation in instead. A test in the agents' own suite would fail to import it otherwise.
 - **Engine modules the episode imports must not import `meridian_iam`.** The episode container has no company
   packages on its path. Only `loc_arena/iam_wiring.py` reaches them, and only when a service starts.
-- **The legacy path stays byte-identical** when `iam.enabled` is off (`tests/unit/test_episode_stack.py`).
 - **Authority is per resource.** A member's standing authority maps resource to permissions; owning a team that
   owns two resources gives no authority over one by virtue of the other.
 - **A resource service holds a resource-bound credential.** An agent's credential on a managed service has the
@@ -39,9 +38,9 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
 ## Building a service on IAM
 
 Every agent-facing service must be guarded. `iam.enabled` is on unless a config turns it off, a config with it on
-plays in a stack, and a config whose scenario lets agents reach a service outside its `iam:` block does not load.
-The services' legacy local rights remain in the code, reached only by forcing an IAM-off config into a stack, and take bug fixes only: new
-behaviour goes in the IAM path. A service that starts work for its caller (a
+plays in a stack, a stack run refuses a config with it off, and a config whose scenario lets agents reach a
+service outside its `iam:` block does not load. No service keeps rights of its own, and each refuses to start
+outside IAM. A service that starts work for its caller (a
 job, an eval run, an agent run) also issues that work an identity of its own. A service calling another
 service is not specified yet.
 
@@ -64,16 +63,16 @@ service is not specified yet.
    missing one, or with a timeout or retries outside the run config's bounds, does not start. The credential is
    the service's own: it carries the `iam` audience that `authorize` and `issue_workload` need, and
    its principal is bound to the service's resource, so it decides for that resource only. An engine-module
-   service builds its `Guard` once with `iam_wiring.guard_from_environment` and hands it to both
-   `serving_options` and `build_service_app`; a service built from a scenario
-   directory has no `loc_arena` and needs a `Dockerfile.iam` that copies in `meridian_iam`, as notes does.
+   service builds its `Guard` once with `iam_wiring.guard_from_environment` and hands it to both `iam_options`
+   and `build_service_app`; a service built from a scenario directory has no `loc_arena`, so its `Dockerfile`
+   copies in `meridian_iam` from the `meridian-iam` build context the stack passes, as notes' does.
 3. **Check at startup.** FastAPI: `integration.asgi.verify_app(guard, app)`, which also refuses a route
    without the guard's dependency. MCP: `iam_wiring.build_service_app`. Stdlib: `Guard.verify_routes(routes)`.
    A route you forgot, or one you removed, stops the service.
 4. **Enforce before work.** FastAPI: `integration.asgi.dependency(guard)` on every route; it answers each
    refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: IAM verifies the credential of
    every request, so an outage is a 503 with a JSON-RPC error saying so (`build_service_app`), and a refusal of
-   the tool is a tool-error result (`serving_options`); no tool runs either way. Stdlib:
+   the tool is a tool-error result (`iam_options`); no tool runs either way. Stdlib:
    `Guard.check_http` raises, so the server maps `Unauthenticated` to 401, `AccessDenied` to 403 with its
    `guidance`, and `Unavailable` to 503 with nothing run. Handlers take the principal from the decision, never
    from the body, and record its `decision_id` beside the outcome.
@@ -90,7 +89,7 @@ service is not specified yet.
    some agent holds `grant` on the service; if none does, make the operation `requestable: false`. On an MCP
    tool service an approval makes nothing new callable, because the tools gateway offers each agent exactly its
    `sandbox: tools:`, each already granted. Do not add a local queue.
-7. **Test** the way `tests/unit/test_notes_iam.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM
+7. **Test** the way `tests/unit/test_notes_service.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM
    server, real SQLite, and the cases in spec section 10. Break each new protection once and watch its test fail.
 
 ### A service that launches work
@@ -138,7 +137,7 @@ service is not specified yet.
 7. **Test** the refusals `company/meridian-iam/tests/test_workloads.py` checks on the core (a caller without
    the launch permission, a grant outside the delegation, a grant the caller lacks, a revoked or disabled
    caller, a disabled issuer, a retry under the same key with different content) through a real IAM server, as
-   `tests/unit/test_notes_iam.py` does for guarding.
+   `tests/unit/test_notes_service.py` does for guarding.
 
 ## Checks
 

@@ -6,7 +6,6 @@ Identities and starting rights sit in their sandbox and service alone; services'
 from __future__ import annotations
 
 import dataclasses
-import json
 import socket
 import subprocess
 from collections.abc import Iterator
@@ -23,7 +22,7 @@ from loc_arena.episode_stack import (
     ComposeDocument,
     Identity,
     StackError,
-    _issue_secrets,
+    issue_secrets,
     render_compose,
     run_in_stack,
     sandbox_agent_code,
@@ -31,7 +30,7 @@ from loc_arena.episode_stack import (
 from loc_arena.gateway import core
 from loc_arena.harness import apply_mode
 from loc_arena.recording_service import COVERT_TOOL_NAMES
-from loc_arena.settings import GatewaySettings, IamSettings, LocArenaSettings, StackSettings
+from loc_arena.settings import GatewaySettings, LocArenaSettings, StackSettings
 from loc_arena.stack_play import renew_services
 from loc_arena.task import SANDBOX_URL_VARIABLE, TOOLS_URL_VARIABLE
 from loc_arena.tools_gateway import TOOLS_GATEWAY_CONFIG_VARIABLE, render_tools_gateway_config
@@ -41,8 +40,8 @@ from scenarios.loader import SCENARIOS_ROOT, EngineModule, LiveService, load_sce
 REPOSITORY = Path("/repository")
 COMPANY = ("common", "controlplane", "datapipe", "distill", "evalkit", "jobsvc", "serving")
 COMPANY_PATH = ":".join(
-    f"/app/company/meridian-{repo}" for repo in COMPANY
-)  # the engine image's company repos
+    f"/app/company/meridian-{repo}" for repo in (*COMPANY, "iam")
+)  # the engine image's company repos, and the IAM client
 SCRIPTED_CONFIG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
 TWO_AGENTS = (SCRIPTED_CONFIG.agent("agent-main"), SCRIPTED_CONFIG.agent("serving-agent"))
 SANDBOXES = ["sandbox-agent-main", "sandbox-serving-agent"]
@@ -52,7 +51,7 @@ SKILLS = SCENARIOS_ROOT / "aurora_efficiency" / "skills"
 SKILLS_MOUNT = f"{SKILLS}:/skills:ro"  # read-only, where the default settings put them
 # An agent with rights on notes and an agent with none, as the run config seeds them.
 WITH_RIGHTS_AND_WITHOUT = (SCRIPTED_CONFIG.agent("agent-main"), SCRIPTED_CONFIG.agent("controlplane-agent"))
-LIVE_SERVICES = ["notes", "wiki", "board"]
+LIVE_SERVICES = ["notes", "wiki", "status"]
 # A service with tools, run from the engine image: agent-main may call one of its tools, the other none.
 FORGE = LiveService(
     name="forge",
@@ -84,9 +83,7 @@ services:
     command: [wiki, serve]
     port: 9000
     healthcheck: [CMD, wiki, ping]
-    rights: [view, edit, grant]
-    transitive: true
-  board: {build: services/board, port: 7000}
+  status: {build: services/status, port: 7000}
   ticketboard: {port: 8090}
 """
 
@@ -94,7 +91,7 @@ services:
 def render(settings: LocArenaSettings | None = None, *, policy: str = "scripted") -> ComposeDocument:
     config = dataclasses.replace(
         SCRIPTED_CONFIG,
-        settings=(settings or LocArenaSettings()).model_copy(update={"iam": IamSettings(enabled=False)}),
+        settings=settings or LocArenaSettings(),
         policy=policy,
         agents=TWO_AGENTS,
         live_services=(),
@@ -105,9 +102,10 @@ def render(settings: LocArenaSettings | None = None, *, policy: str = "scripted"
 @pytest.fixture
 def pack(tmp_path: Path) -> Path:
     directory = tmp_path / "pack"
-    for built in ("notes", "board"):
+    for built in ("notes", "status"):
         (directory / "services" / built).mkdir(parents=True)
-        (directory / "services" / built / "Dockerfile").write_text("FROM scratch\n")
+        dockerfile = "FROM scratch\nCOPY --from=meridian-iam /meridian_iam ./meridian_iam\n"  # the IAM client
+        (directory / "services" / built / "Dockerfile").write_text(dockerfile)
     (directory / "scenario.yaml").write_text(PACK)
     return directory.resolve()
 
@@ -123,7 +121,7 @@ def render_live(
 ) -> ComposeDocument:
     config = dataclasses.replace(
         SCRIPTED_CONFIG,
-        settings=(settings or LocArenaSettings()).model_copy(update={"iam": IamSettings(enabled=False)}),
+        settings=settings or LocArenaSettings(),
         agents=WITH_RIGHTS_AND_WITHOUT,
         live_services=services,
     )
@@ -131,8 +129,7 @@ def render_live(
 
 
 def render_tools(settings: LocArenaSettings | None = None) -> ComposeDocument:
-    legacy = (settings or LocArenaSettings()).model_copy(update={"iam": IamSettings(enabled=False)})
-    config = dataclasses.replace(TOOLS_CONFIG, settings=legacy)
+    config = dataclasses.replace(TOOLS_CONFIG, settings=settings or LocArenaSettings())
     return render_compose(config, REPOSITORY, "a-run", ["--mode", "honest"])
 
 
@@ -399,7 +396,7 @@ def test_a_sandbox_its_agent_killed_comes_back(sandbox: str) -> None:
     assert restart == "unless-stopped"
 
 
-def test_a_live_service_built_from_its_pack_runs_bounded_on_agent_net_alone_with_every_agents_identity(
+def test_a_live_service_built_from_its_pack_runs_bounded_on_agent_net_alone_with_its_iam_credential(
     pack: Path,
     live_services: tuple[LiveService, ...],
 ) -> None:
@@ -408,7 +405,10 @@ def test_a_live_service_built_from_its_pack_runs_bounded_on_agent_net_alone_with
     notes = render_live(live_services, LocArenaSettings(stack=stack))["services"]["notes"]
 
     assert notes == {
-        "build": {"context": f"{pack}/services/notes"},
+        "build": {
+            "context": f"{pack}/services/notes",
+            "additional_contexts": {"meridian-iam": str(Path(__file__).parents[2] / "company/meridian-iam")},
+        },
         "image": "loc-arena-service-notes:latest",
         "cap_drop": ["ALL"],
         "mem_limit": "300m",
@@ -416,14 +416,14 @@ def test_a_live_service_built_from_its_pack_runs_bounded_on_agent_net_alone_with
         "pids_limit": 64,
         "networks": ["agent-net"],
         "environment": {
-            "LOC_ARENA_VOCABULARY": '["read", "write", "grant"]',
-            "LOC_ARENA_RIGHTS": '{"agent-main": ["read", "write", "grant"], "controlplane-agent": []}',
-            "LOC_ARENA_TRANSITIVE": "false",
+            "LOC_ARENA_IAM_URL": "http://iam:8000",
+            "LOC_ARENA_IAM_MANIFEST": "/srv/iam-manifest.json",
+            "LOC_ARENA_IAM_CREDENTIAL": "/run/secrets/iam_credential",
+            "LOC_ARENA_IAM_TIMEOUT_SECONDS": "2.0",
+            "LOC_ARENA_IAM_RETRIES": "2",
         },
-        "secrets": [
-            {"source": "identity_notes_agent-main", "target": "identity_agent-main"},
-            {"source": "identity_notes_controlplane-agent", "target": "identity_controlplane-agent"},
-        ],
+        "secrets": [{"source": "iam_service_notes", "target": "iam_credential"}],
+        "depends_on": {"iam": HEALTHY},
         "healthcheck": {
             "test": [
                 "CMD",
@@ -453,43 +453,14 @@ def test_a_live_service_from_a_ready_image_runs_its_command_and_healthcheck(
     )
 
 
-@pytest.mark.parametrize(("service", "transitive"), [("notes", "false"), ("wiki", "true")])
-def test_a_live_service_is_told_whether_the_grant_right_can_be_granted(
-    live_services: tuple[LiveService, ...],
-    service: str,
-    transitive: str,
-) -> None:
-    compose = render_live(live_services)
-
-    told = compose["services"][service]["environment"]["LOC_ARENA_TRANSITIVE"]
-
-    assert told == transitive
-
-
-@pytest.mark.parametrize(
-    ("service", "vocabulary"),
-    [("notes", ["read", "write", "grant"]), ("wiki", ["view", "edit", "grant"])],
-)
-def test_a_live_service_is_told_the_rights_its_scenario_declares(
-    live_services: tuple[LiveService, ...],
-    service: str,
-    vocabulary: list[str],
-) -> None:
-    compose = render_live(live_services)
-
-    told = compose["services"][service]["environment"]["LOC_ARENA_VOCABULARY"]
-
-    assert json.loads(told) == vocabulary
-
-
 def test_a_live_service_with_no_rights_gets_no_identity_and_no_rights(
     live_services: tuple[LiveService, ...],
 ) -> None:
     compose = render_live(live_services)
 
-    board = compose["services"]["board"]
+    status = compose["services"]["status"]
 
-    assert (board.get("secrets"), board.get("environment")) == (None, None)
+    assert (status.get("secrets"), status.get("environment")) == (None, None)
 
 
 def test_every_live_service_is_only_on_the_network_with_no_route_out(
@@ -499,7 +470,7 @@ def test_every_live_service_is_only_on_the_network_with_no_route_out(
 
     networks = {name: compose["services"][name]["networks"] for name in LIVE_SERVICES}
 
-    assert networks == {"notes": [AGENT_NETWORK], "wiki": [AGENT_NETWORK], "board": [AGENT_NETWORK]}
+    assert networks == {"notes": [AGENT_NETWORK], "wiki": [AGENT_NETWORK], "status": [AGENT_NETWORK]}
 
 
 def test_each_sandbox_holds_exactly_its_own_identity_on_each_service_with_rights(
@@ -513,12 +484,10 @@ def test_each_sandbox_holds_exactly_its_own_identity_on_each_service_with_rights
         "sandbox-agent-main": [
             {"source": "sandbox_token_agent_main", "target": "sandbox_token"},
             {"source": "identity_notes_agent-main", "target": "identity_notes"},
-            {"source": "identity_wiki_agent-main", "target": "identity_wiki"},
         ],
         "sandbox-controlplane-agent": [
             {"source": "sandbox_token_controlplane_agent", "target": "sandbox_token"},
             {"source": "identity_notes_controlplane-agent", "target": "identity_notes"},
-            {"source": "identity_wiki_controlplane-agent", "target": "identity_wiki"},
         ],
     }
 
@@ -546,8 +515,6 @@ def test_compose_reads_each_identity_from_its_own_host_variable(
     assert identities == {
         "identity_notes_agent-main": {"environment": "LOC_ARENA_IDENTITY_NOTES_AGENT_MAIN"},
         "identity_notes_controlplane-agent": {"environment": "LOC_ARENA_IDENTITY_NOTES_CONTROLPLANE_AGENT"},
-        "identity_wiki_agent-main": {"environment": "LOC_ARENA_IDENTITY_WIKI_AGENT_MAIN"},
-        "identity_wiki_controlplane-agent": {"environment": "LOC_ARENA_IDENTITY_WIKI_CONTROLPLANE_AGENT"},
     }
 
 
@@ -557,6 +524,7 @@ def test_identities_that_would_share_one_host_variable_are_refused_naming_both(
     notes = next(service for service in live_services if service.name == "notes")
     config = dataclasses.replace(
         SCRIPTED_CONFIG,
+        settings=LocArenaSettings(),
         agents=(
             SCRIPTED_CONFIG.agent("agent-main"),
             dataclasses.replace(SCRIPTED_CONFIG.agent("agent-main"), id="main"),
@@ -581,29 +549,11 @@ def test_the_episode_starts_once_every_live_service_is_healthy(
         "sandbox-controlplane-agent": HEALTHY,
         "notes": HEALTHY,
         "wiki": HEALTHY,
-        "board": HEALTHY,
+        "status": HEALTHY,
     }
 
 
-def test_the_run_config_seeds_grant_on_notes_for_agent_main_alone_and_no_right_for_controlplane_agent() -> (
-    None
-):
-    config = load_run_config("configs/aurora-efficiency.yaml")
-
-    notes = render_compose(config, REPOSITORY, "aurora-efficiency", [])["services"]["notes"]
-
-    assert json.loads(notes["environment"]["LOC_ARENA_RIGHTS"]) == {
-        "agent-main": ["read", "write", "grant"],
-        "serving-agent": ["read", "write"],
-        "distill-agent": ["read", "write"],
-        "eval-agent": ["read", "write"],
-        "datapipe-agent": ["read", "write"],
-        "jobsvc-agent": ["read", "write"],
-        "controlplane-agent": [],
-    }
-
-
-def test_a_service_with_tools_runs_its_engine_module_with_the_run_config_and_every_identity() -> None:
+def test_a_service_with_tools_runs_its_engine_module_with_the_run_config_and_its_iam_credential() -> None:
     stack = StackSettings(service_memory_limit="300m", service_cpus=0.5, service_pids_limit=64)
 
     forge = render_tools(LocArenaSettings(stack=stack))["services"]["forge"]
@@ -614,15 +564,20 @@ def test_a_service_with_tools_runs_its_engine_module_with_the_run_config_and_eve
         "cap_drop": ["ALL"],
         "command": ["python", "-m", "loc_arena.forge.service", "/app/configs/a-run.yaml", "forge"],
         "volumes": ["/repository/configs:/app/configs:ro"],
-        "environment": {"PYTHONPATH": COMPANY_PATH},
+        "environment": {
+            "PYTHONPATH": COMPANY_PATH,
+            "LOC_ARENA_IAM_URL": "http://iam:8000",
+            "LOC_ARENA_IAM_MANIFEST": "/app/scenarios/aurora_efficiency/services/iam-manifests/forge.json",
+            "LOC_ARENA_IAM_CREDENTIAL": "/run/secrets/iam_credential",
+            "LOC_ARENA_IAM_TIMEOUT_SECONDS": "2.0",
+            "LOC_ARENA_IAM_RETRIES": "2",
+        },
         "mem_limit": "300m",
         "cpus": 0.5,
         "pids_limit": 64,
         "networks": ["agent-net"],
-        "secrets": [
-            {"source": "identity_forge_agent-main", "target": "identity_agent-main"},
-            {"source": "identity_forge_controlplane-agent", "target": "identity_controlplane-agent"},
-        ],
+        "secrets": [{"source": "iam_service_forge", "target": "iam_credential"}],
+        "depends_on": {"iam": HEALTHY},
         "healthcheck": {
             "test": [
                 "CMD",
@@ -1193,7 +1148,7 @@ def test_honest_mode_drops_the_covert_tools_from_each_agents_sandbox_tools() -> 
 def test_the_honest_twin_env_carries_a_gateway_config_without_covert_tools() -> None:
     config = load_run_config("configs/aurora-efficiency.yaml")
 
-    attack_env, twin_env = _issue_secrets(config)
+    attack_env, twin_env = issue_secrets(config)
 
     attack_policy = attack_env[TOOLS_GATEWAY_CONFIG_VARIABLE]
     twin_policy = twin_env[TOOLS_GATEWAY_CONFIG_VARIABLE]

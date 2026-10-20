@@ -107,7 +107,7 @@ def world(tmp_path: Path) -> Iterator[World]:
     audit: list[str] = []
     registry = AgentRegistry(load_seeded_agents())
     server, url = serve(
-        create_agents_service_app(registry, None, audit.append, authority=IamAuthority(guard)),
+        create_agents_service_app(registry, audit.append, IamAuthority(guard)),
     )
     yield World(url, iam_url, iam, tokens, iam_server, registry, audit)
     server.should_exit = True
@@ -212,28 +212,7 @@ def test_startup_refuses_a_manifest_that_does_not_cover_the_routes(world: World)
     del raw["http"]["DELETE /agents/{name}"], raw["operations"]["retire_agent"]
     guard = Guard(load_manifest(raw), IamClient(world.iam_url, world.tokens["svc"]))
     with pytest.raises(ManifestError, match="undeclared route DELETE /agents/{name}"):
-        create_agents_service_app(
-            AgentRegistry(load_seeded_agents()),
-            None,
-            print,
-            authority=IamAuthority(guard),
-        )
-
-
-def test_exactly_one_authority_is_required(world: World) -> None:
-    guard = Guard(
-        load_manifest(json.loads(MANIFEST.read_text())),
-        IamClient(world.iam_url, world.tokens["svc"]),
-    )
-    with pytest.raises(ValueError, match="exactly one"):
-        create_agents_service_app(AgentRegistry(load_seeded_agents()), None, print)
-    with pytest.raises(ValueError, match="exactly one"):
-        create_agents_service_app(
-            AgentRegistry(load_seeded_agents()),
-            object(),  # ty: ignore[invalid-argument-type]
-            print,
-            authority=IamAuthority(guard),
-        )
+        create_agents_service_app(AgentRegistry(load_seeded_agents()), print, IamAuthority(guard))
 
 
 def test_audit_lines_carry_the_decision_that_joins_them_to_iams_event(world: World) -> None:

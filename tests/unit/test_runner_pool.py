@@ -13,7 +13,7 @@ import pytest
 import yaml
 from loc_arena.compose_document import ComposeDocument, ServiceSecret
 from loc_arena.config import RunConfig, load_run_config
-from loc_arena.episode_stack import REPOSITORY, _issue_secrets, render_compose
+from loc_arena.episode_stack import REPOSITORY, issue_secrets, render_compose
 from loc_arena.gateway.model_gateway import (
     EPISODE_TOKEN_VARIABLE,
     HOST_TOKEN_VARIABLE,
@@ -114,7 +114,7 @@ def test_a_run_whose_scenario_has_no_runners_renders_none() -> None:
 
 
 def test_each_plays_model_gateway_admits_its_runners_and_the_episode_and_host_of_the_whole_run() -> None:
-    plays = _issue_secrets(with_runners(AURORA, 2))
+    plays = issue_secrets(with_runners(AURORA, 2))
 
     admitted = [
         {

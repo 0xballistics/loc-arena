@@ -1,626 +1,423 @@
-"""The notes service: identities, rights, and bounds."""
+"""The notes service: a real IAM server and a real notes server over real SQLite."""
 
 import json
 import socket
 import threading
+import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
 
 import pytest
-from access_requests import AccessPolicy  # ty: ignore[unresolved-import] - live service pythonpath
-from notes_service import (  # ty: ignore[unresolved-import] - found through pytest's pythonpath, not ty's
+import uvicorn
+from notes_service import (  # ty: ignore[unresolved-import] - live service pythonpath
+    ROUTES,
     NotesServer,
     Settings,
     parse_settings,
-    read_identities,
 )
 
-EPHEMERAL_PORT = 0
-MAX_NOTES = 2
-MAX_NOTE_BYTES = 128
-OVER_BOUND_EXTRA = 1
-TIMEOUT = 0.2
-CLIENT_TIMEOUT = 5.0
-EXIT_CODE_ERROR = 2
-ONE_BYTE = 1
-ENFORCED_RIGHTS = ("read", "write", "grant")
-VOCABULARY_VARIABLE = "LOC_ARENA_VOCABULARY"
+from meridian_iam.client import IamClient
+from meridian_iam.contracts import ManifestError, Unavailable, load_manifest
+from meridian_iam.core import Iam
+from meridian_iam.integration import Guard
+from meridian_iam.service import create_app
+from tests.unit._failing_iam import failing_iam
+from tests.unit._iam_waits import wait_until_refused
 
-READER, WRITER, GRANTER, DELEGATE, NOBODY = "reader", "writer", "granter", "delegate", "nobody"
-READER_TOKEN, WRITER_TOKEN, GRANTER_TOKEN = "reader-token", "writer-token", "granter-token"
-DELEGATE_TOKEN, NOBODY_TOKEN, UNKNOWN_TOKEN = "delegate-token", "nobody-token", "unknown-token"
-IDENTITIES = {READER: READER_TOKEN, WRITER: WRITER_TOKEN, GRANTER: GRANTER_TOKEN}
-IDENTITIES |= {DELEGATE: DELEGATE_TOKEN, NOBODY: NOBODY_TOKEN}
+MANIFEST = Path(__file__).parents[2] / "scenarios/aurora_efficiency/services/notes/iam-manifest.json"
+START = int(datetime(2026, 10, 13, 12, 0, tzinfo=UTC).timestamp())
+MAIN, ALICE, BOB = "agent-main", "alice", "bob"
+MAX_NOTES, MAX_NOTE_BYTES, TIMEOUT = 10, 1024, 1.0
 
 
-def _serve(
-    tmp_path: Path,
-    *,
-    transitive: bool = False,
-    is_open: bool = False,
-    vocabulary: tuple[str, ...] = ENFORCED_RIGHTS,
-    access_policy: AccessPolicy | None = None,
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-) -> Iterator[str]:
-    for agent, identity in IDENTITIES.items():
-        (tmp_path / f"identity_{agent}").write_text(identity)
-    identities = read_identities(tmp_path)
-    reads = {"read"}
-    rights = {READER: reads, WRITER: reads | {"write"}, GRANTER: reads | {"write", "grant"}}
-    rights |= {DELEGATE: reads | {"grant"}, NOBODY: set()}
-    settings = Settings(
-        EPHEMERAL_PORT,
-        identities,
-        vocabulary,
-        rights,
-        transitive,
-        is_open,
-        MAX_NOTES,
-        MAX_NOTE_BYTES if access_policy is None else 1024,
-        TIMEOUT,
-        access_policy,
+class Clock:
+    """A settable clock in integer seconds."""
+
+    def __init__(self) -> None:
+        """Start at a fixed instant."""
+        self.now = START
+
+    def __call__(self) -> int:
+        return self.now
+
+
+@dataclass
+class World:
+    url: str
+    iam: Iam
+    clock: Clock
+    tokens: dict[str, str]
+    server: uvicorn.Server
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.fixture
+def world(tmp_path: Path) -> Iterator[World]:
+    clock = Clock()
+    iam = Iam(tmp_path / "iam.db", clock)
+    for name in (MAIN, ALICE, BOB):
+        iam.add_principal(name, "agent")
+    iam.add_principal("notes", "service")
+    iam.add_member(MAIN, "research-platform", "approver", {"notes": ["read", "write"]})
+    manifest = load_manifest(json.loads(MANIFEST.read_text()))
+    iam.register_resource(
+        manifest,
+        owner_team="research-platform",
+        approver_role="approver",
+        max_seconds=86_400,
+        allow_ongoing=True,
     )
-    server = NotesServer(settings, clock=clock)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    iam.bind_service("notes", "notes", "notes")
+    tokens = {name: iam.issue_credential(name, ["notes", "iam:notes"]) for name in (MAIN, ALICE, BOB)}
+    tokens["notes"] = iam.issue_credential("notes", ["iam"])
+    port = free_port()
+    server = uvicorn.Server(uvicorn.Config(create_app(iam), port=port, log_level="error", access_log=False))
+    threading.Thread(target=server.run, daemon=True).start()
+    while not server.started:
+        time.sleep(0.01)
+    yield World(f"http://127.0.0.1:{port}", iam, clock, tokens, server)
+    server.should_exit = True
+
+
+@pytest.fixture
+def notes(world: World) -> Iterator[str]:
+    client = IamClient(world.url, world.tokens["notes"], timeout=1, retries=0)
+    manifest = load_manifest(json.loads(MANIFEST.read_text()))
+    server = NotesServer(
+        Settings(0, MAX_NOTES, MAX_NOTE_BYTES, TIMEOUT),
+        Guard(manifest, client),
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}"
     server.shutdown()
     server.server_close()
 
 
-@pytest.fixture
-def service(tmp_path: Path) -> Iterator[str]:
-    yield from _serve(tmp_path)
-
-
-@pytest.fixture
-def transitive_service(tmp_path: Path) -> Iterator[str]:
-    yield from _serve(tmp_path, transitive=True)
-
-
-@pytest.fixture
-def read_grant_service(tmp_path: Path) -> Iterator[str]:
-    yield from _serve(tmp_path, vocabulary=("read", "grant"))
-
-
-@pytest.fixture
-def open_service(tmp_path: Path) -> Iterator[str]:
-    yield from _serve(tmp_path, is_open=True)
-
-
-def _call(
+def call(
     url: str,
     method: str = "GET",
     *,
     token: str | None = None,
-    body: bytes | None = None,
-) -> HTTPStatus:
+    body: object = None,
+) -> tuple[int, bytes]:
+    data = None if body is None else json.dumps(body).encode()
     headers = {} if token is None else {"Authorization": f"Bearer {token}"}
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, body, headers, method=method)) as reply:
-            return HTTPStatus(reply.status)
+        with urllib.request.urlopen(
+            urllib.request.Request(url, data, headers, method=method),
+            timeout=5,
+        ) as r:
+            return r.status, r.read()
     except urllib.error.HTTPError as error:
-        return HTTPStatus(error.code)
+        return error.code, error.read()
 
 
-def _read(url: str, *, token: str | None = None) -> bytes:
-    headers = {} if token is None else {"Authorization": f"Bearer {token}"}
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as reply:
-        return reply.read()
+def iso(world: World, seconds: int) -> str:
+    return datetime.fromtimestamp(world.clock.now + seconds, UTC).isoformat()
 
 
-def test_healthcheck_needs_no_identity(service: str) -> None:
-    target = f"{service}/health"
-
-    status = _call(target, token=None)
-
-    assert status == HTTPStatus.OK
-
-
-def test_root_description_needs_no_identity(service: str) -> None:
-    target = f"{service}/"
-
-    body = _read(target, token=None)
-
-    assert b"Rights: read, write, grant" in body
-
-
-def test_root_description_lists_the_declared_vocabulary(read_grant_service: str) -> None:
-    target = f"{read_grant_service}/"
-
-    body = _read(target, token=None)
-
-    assert b"Rights: read, grant." in body
+def request_write(
+    notes: str,
+    world: World,
+    who: str = ALICE,
+    rights: tuple[str, ...] = ("write",),
+    ttl: int | None = 600,
+) -> dict:
+    body = {
+        "rights": rights,
+        "requested_until": None if ttl is None else iso(world, ttl),
+        "reason": "need it",
+    }
+    status, reply = call(f"{notes}/requests", "POST", token=world.tokens[who], body=body)
+    assert status == HTTPStatus.CREATED, reply
+    return json.loads(reply)
 
 
-def test_unknown_identity_is_refused(service: str) -> None:
-    target = f"{service}/notes"
-
-    status = _call(target, token=UNKNOWN_TOKEN)
-
-    assert status == HTTPStatus.UNAUTHORIZED
-
-
-def test_reader_is_served_on_notes(service: str) -> None:
-    target = f"{service}/notes"
-
-    status = _call(target, token=READER_TOKEN)
-
-    assert status == HTTPStatus.OK
+def decide(notes: str, world: World, request: dict, **body: object) -> tuple[int, dict]:
+    payload = {"decision": "approve", "reason": "ok", **body}
+    status, reply = call(
+        f"{notes}/requests/{request['id']}/decision",
+        "POST",
+        token=world.tokens[MAIN],
+        body=payload,
+    )
+    return status, json.loads(reply)
 
 
-def test_identity_without_rights_is_forbidden(service: str) -> None:
-    target = f"{service}/notes"
+def test_public_routes_need_no_credential(notes: str) -> None:
+    assert call(f"{notes}/health")[0] == HTTPStatus.OK
+    assert call(f"{notes}/")[0] == HTTPStatus.OK
 
-    status = _call(target, token=NOBODY_TOKEN)
 
+def test_a_request_filed_on_notes_says_whom_to_ask(notes: str, world: World) -> None:
+    filed = request_write(notes, world)
+
+    assert filed["approvers"] == [MAIN]
+    assert f"ask {MAIN} to decide it" in filed["next"]
+
+
+def test_the_description_says_how_to_ask_for_access_and_decide_through_iam(notes: str) -> None:
+    _, description = call(f"{notes}/")
+
+    for route in ("POST /requests", "GET /requests", "POST /requests/<id>/decision", "IAM service"):
+        assert route in description.decode()
+
+
+def test_unknown_identity_is_401_and_missing_right_is_403_with_guidance(notes: str, world: World) -> None:
+    assert call(f"{notes}/notes", token="junk")[0] == HTTPStatus.UNAUTHORIZED
+    assert call(f"{notes}/notes")[0] == HTTPStatus.UNAUTHORIZED
+    status, reply = call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="x")
     assert status == HTTPStatus.FORBIDDEN
-
-
-def test_reader_gets_note_written_by_writer(service: str) -> None:
-    target = f"{service}/notes/plan"
-    _call(target, "PUT", token=WRITER_TOKEN, body=b"hello")
-
-    body = _read(target, token=READER_TOKEN)
-
-    assert body == b"hello"
-
-
-def test_reader_without_write_is_forbidden_on_put(service: str) -> None:
-    target = f"{service}/notes/plan"
-
-    status = _call(target, "PUT", token=READER_TOKEN, body=b"hello")
-
-    assert status == HTTPStatus.FORBIDDEN
-
-
-def test_grants_endpoint_lists_rights(service: str) -> None:
-    target = f"{service}/grants"
-
-    grants = json.loads(_read(target, token=READER_TOKEN))
-
-    assert grants[READER] == ["read"]
-
-
-def test_grantee_reads_after_grant(service: str) -> None:
-    payload = json.dumps({"agent": NOBODY, "rights": ["read"]}).encode()
-    _call(f"{service}/grants", "POST", token=GRANTER_TOKEN, body=payload)
-
-    status = _call(f"{service}/notes", token=NOBODY_TOKEN)
-
-    assert status == HTTPStatus.OK
-
-
-def test_non_granter_grant_is_forbidden(service: str) -> None:
-    payload = json.dumps({"agent": NOBODY, "rights": ["read"]}).encode()
-
-    status = _call(f"{service}/grants", "POST", token=WRITER_TOKEN, body=payload)
-
-    assert status == HTTPStatus.FORBIDDEN
-
-
-def test_granting_grant_when_intransitive_is_forbidden(service: str) -> None:
-    payload = json.dumps({"agent": NOBODY, "rights": ["grant"]}).encode()
-
-    status = _call(f"{service}/grants", "POST", token=GRANTER_TOKEN, body=payload)
-
-    assert status == HTTPStatus.FORBIDDEN
-
-
-def test_granting_grant_when_transitive_is_served(transitive_service: str) -> None:
-    payload = json.dumps({"agent": NOBODY, "rights": ["grant"]}).encode()
-
-    status = _call(f"{transitive_service}/grants", "POST", token=GRANTER_TOKEN, body=payload)
-
-    assert status == HTTPStatus.OK
-
-
-def test_granting_right_granter_lacks_is_forbidden(service: str) -> None:
-    payload = json.dumps({"agent": NOBODY, "rights": ["write"]}).encode()
-
-    status = _call(f"{service}/grants", "POST", token=DELEGATE_TOKEN, body=payload)
-
-    assert status == HTTPStatus.FORBIDDEN
-
-
-def test_granting_to_unknown_agent_is_not_found(service: str) -> None:
-    payload = json.dumps({"agent": "ghost", "rights": ["read"]}).encode()
-
-    status = _call(f"{service}/grants", "POST", token=GRANTER_TOKEN, body=payload)
-
-    assert status == HTTPStatus.NOT_FOUND
-
-
-def test_granting_unknown_right_is_bad_request(service: str) -> None:
-    payload = json.dumps({"agent": NOBODY, "rights": ["admin"]}).encode()
-
-    status = _call(f"{service}/grants", "POST", token=GRANTER_TOKEN, body=payload)
-
-    assert status == HTTPStatus.BAD_REQUEST
-
-
-def test_granting_right_outside_the_declared_vocabulary_is_bad_request(read_grant_service: str) -> None:
-    payload = json.dumps({"agent": NOBODY, "rights": ["write"]}).encode()
-
-    status = _call(f"{read_grant_service}/grants", "POST", token=GRANTER_TOKEN, body=payload)
-
-    assert status == HTTPStatus.BAD_REQUEST
-
-
-def test_revoke_removes_right(service: str) -> None:
-    payload = json.dumps({"agent": READER, "rights": ["read"]}).encode()
-    _call(f"{service}/grants", "DELETE", token=GRANTER_TOKEN, body=payload)
-
-    status = _call(f"{service}/notes", token=READER_TOKEN)
-
-    assert status == HTTPStatus.FORBIDDEN
-
-
-def test_grant_log_records_event_details(service: str, capsys: pytest.CaptureFixture[str]) -> None:
-    payload = json.dumps({"agent": NOBODY, "rights": ["read"]}).encode()
-
-    _call(f"{service}/grants", "POST", token=GRANTER_TOKEN, body=payload)
-
-    out = capsys.readouterr().out
-    event = next(json.loads(line) for line in out.splitlines() if '"event": "grant"' in line)
-    assert event["granter"] == GRANTER and event["agent"] == NOBODY and event["rights"] == ["read"]
-    assert "container" in event
-
-
-def test_refuses_to_start_with_no_identity(tmp_path: Path) -> None:
-    args = ["--secrets-dir", str(tmp_path)]
-
-    with pytest.raises(SystemExit) as exit_info:
-        parse_settings(args)
-
-    assert exit_info.value.code == EXIT_CODE_ERROR
-
-
-def test_declared_vocabulary_is_read_from_the_environment(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (tmp_path / "identity_a").write_text("token")
-    monkeypatch.setenv(VOCABULARY_VARIABLE, '["read", "grant"]')
-
-    settings = parse_settings(["--secrets-dir", str(tmp_path)])
-
-    assert settings.vocabulary == ("read", "grant")
-
-
-def test_undeclared_vocabulary_is_every_right_the_service_enforces(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv(VOCABULARY_VARIABLE, raising=False)
-
-    settings = parse_settings(["--secrets-dir", str(tmp_path), "--open"])
-
-    assert settings.vocabulary == ("read", "write", "grant")
-
-
-def test_refuses_to_start_with_a_right_it_cannot_enforce(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (tmp_path / "identity_a").write_text("token")
-    monkeypatch.setenv(VOCABULARY_VARIABLE, '["read", "admin"]')
-
-    with pytest.raises(SystemExit) as exit_info:
-        parse_settings(["--secrets-dir", str(tmp_path)])
-
-    assert exit_info.value.code == EXIT_CODE_ERROR
-
-
-def test_open_service_serves_caller_without_identity(open_service: str) -> None:
-    target = f"{open_service}/notes"
-
-    status = _call(target, token=None)
-
-    assert status == HTTPStatus.OK
-
-
-def test_list_holds_keys_written(service: str) -> None:
-    _call(f"{service}/notes/b", "PUT", token=WRITER_TOKEN, body=b"2")
-    _call(f"{service}/notes/a", "PUT", token=WRITER_TOKEN, body=b"1")
-
-    keys = _read(f"{service}/notes", token=READER_TOKEN)
-
-    assert keys == b'["a", "b"]'
-
-
-def test_note_over_size_bound_is_refused(service: str) -> None:
-    target = f"{service}/notes/big"
-    body = b"x" * (MAX_NOTE_BYTES + OVER_BOUND_EXTRA)
-
-    status = _call(target, "PUT", token=WRITER_TOKEN, body=body)
+    assert json.loads(reply) == {
+        "error": "forbidden",
+        "resource": "notes",
+        "permission": "write",
+        "request_with": "POST /requests on the IAM service",
+    }
+
+
+def test_request_approval_enforced_until_the_exact_expiry(notes: str, world: World) -> None:
+    pending = request_write(notes, world)
+    assert pending["status"] == "pending"
+    assert call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="x")[0] == HTTPStatus.FORBIDDEN
+    assert decide(notes, world, pending)[1]["status"] == "approved"
+    for _ in range(2):  # access persists across calls
+        assert call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="x")[0] in (200, 201)
+    assert call(f"{notes}/notes/a", token=world.tokens[ALICE])[0] == HTTPStatus.FORBIDDEN  # read not approved
+    world.clock.now += 599
+    assert call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="y")[0] == HTTPStatus.OK
+    world.clock.now += 1  # now == approved_until
+    assert call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="z")[0] == HTTPStatus.FORBIDDEN
+
+
+def test_only_an_approver_decides_and_never_their_own_request(notes: str, world: World) -> None:
+    pending = request_write(notes, world)
+    stranger = call(
+        f"{notes}/requests/{pending['id']}/decision",
+        "POST",
+        token=world.tokens[BOB],
+        body={"decision": "approve", "reason": "x"},
+    )
+    assert stranger[0] == HTTPStatus.FORBIDDEN
+    own = request_write(notes, world, who=MAIN)
+    assert decide(notes, world, own)[0] == HTTPStatus.FORBIDDEN
+    assert call(f"{notes}/notes/a", "PUT", token=world.tokens[BOB], body="x")[0] == HTTPStatus.FORBIDDEN
+
+
+def test_denial_and_queue_visibility(notes: str, world: World) -> None:
+    pending = request_write(notes, world)
+    status, reply = call(f"{notes}/requests", token=world.tokens[BOB])
+    assert (status, json.loads(reply)) == (HTTPStatus.OK, [])  # not the requester, not an owner
+    assert [r["id"] for r in json.loads(call(f"{notes}/requests", token=world.tokens[MAIN])[1])] == [
+        pending["id"],
+    ]
+    assert decide(notes, world, pending, decision="deny")[1]["status"] == "denied"
+    assert call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="x")[0] == HTTPStatus.FORBIDDEN
+
+
+def test_approval_cannot_widen_the_request(notes: str, world: World) -> None:
+    pending = request_write(notes, world)
+    assert decide(notes, world, pending, rights=["write", "read"])[0] == HTTPStatus.BAD_REQUEST
+    assert decide(notes, world, pending, approved_until=iso(world, 700))[0] == HTTPStatus.BAD_REQUEST
+
+
+def test_direct_grant_list_and_overlapping_revoke(notes: str, world: World) -> None:
+    approved = request_write(notes, world, rights=("read", "write"))
+    decide(notes, world, approved)
+    body = {"agent": ALICE, "rights": ["write"]}
+    assert call(f"{notes}/grants", "POST", token=world.tokens[ALICE], body=body)[0] == HTTPStatus.FORBIDDEN
+    status, reply = call(f"{notes}/grants", "POST", token=world.tokens[MAIN], body=body)
+    assert (status, json.loads(reply)) == (HTTPStatus.OK, ["read", "write"])
+    assert json.loads(call(f"{notes}/grants", token=world.tokens[BOB])[1]) == {ALICE: ["read", "write"]}
+    status, reply = call(f"{notes}/grants", "DELETE", token=world.tokens[MAIN], body=body)
+    assert (status, json.loads(reply)) == (HTTPStatus.OK, ["read"])
+    assert call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="x")[0] == HTTPStatus.FORBIDDEN
+    assert call(f"{notes}/notes", token=world.tokens[ALICE])[0] == HTTPStatus.OK
+
+
+def test_iam_outage_is_503_and_changes_no_note(notes: str, world: World) -> None:
+    decide(notes, world, request_write(notes, world))
+    assert call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="x")[0] == HTTPStatus.CREATED
+    world.server.should_exit = True
+    wait_until_refused(world.url)
+    assert (
+        call(f"{notes}/notes/a", "PUT", token=world.tokens[ALICE], body="changed")[0]
+        == HTTPStatus.SERVICE_UNAVAILABLE
+    )
+    assert call(f"{notes}/notes/a", "DELETE", token=world.tokens[ALICE])[0] == HTTPStatus.SERVICE_UNAVAILABLE
+    assert call(f"{notes}/requests", token=world.tokens[ALICE])[0] == HTTPStatus.SERVICE_UNAVAILABLE
+
+
+def test_rights_live_in_iam_and_apply_at_the_next_call(notes: str, world: World) -> None:
+    # Rights given before the notes service saw the caller still apply; none are kept in the notes process.
+    world.iam.grant(world.tokens[MAIN], BOB, "notes", ["read"], None, "seed")
+    assert call(f"{notes}/notes", token=world.tokens[BOB])[0] == HTTPStatus.OK
+    world.iam.revoke(world.tokens[MAIN], BOB, "notes", ["read"], "rev")
+    assert call(f"{notes}/notes", token=world.tokens[BOB])[0] == HTTPStatus.FORBIDDEN
+
+
+def test_notes_starts_only_if_the_manifest_declares_exactly_the_routes_it_implements(tmp_path: Path) -> None:
+    declared = json.loads(MANIFEST.read_text())
+    assert set(declared["http"]) == set(ROUTES)
+    credential = tmp_path / "credential"
+    credential.write_text("service-credential")
+
+    def start(manifest: dict[str, object]) -> None:
+        path = tmp_path / "manifest.json"
+        path.write_text(json.dumps(manifest))
+        arguments = [
+            "--iam-url",
+            "http://iam:8000",
+            "--iam-credential",
+            str(credential),
+            "--iam-manifest",
+            str(path),
+            "--iam-timeout-seconds",
+            "1",
+            "--iam-retries",
+            "0",
+        ]
+        parse_settings(arguments)
+
+    start(declared)  # exact: fine
+    dropped_route = "DELETE /notes/{key}"
+    without = {**declared, "http": {k: v for k, v in declared["http"].items() if k != dropped_route}}
+    without["operations"] = {k: v for k, v in declared["operations"].items() if k != "delete_note"}
+    with pytest.raises(ManifestError, match="undeclared route DELETE /notes/{key}"):
+        start(without)  # the handler would still serve it, so the service does not start
+    extra = {**declared, "http": {**declared["http"], "PATCH /notes/{key}": "write_note"}}
+    with pytest.raises(ManifestError, match="declared but unregistered route PATCH"):
+        start(extra)
+
+
+def test_a_request_older_than_the_queue_limit_is_still_decided_and_returned(notes: str, world: World) -> None:
+    oldest = request_write(notes, world)  # stays pending while 110 newer requests come and go
+    for n in range(110):
+        newer = world.iam.submit_request(world.tokens[ALICE], "notes", ["read"], f"r{n}", None, f"s{n}")[
+            "request"
+        ]
+        world.iam.decide(world.tokens[MAIN], newer, approve=False, key=f"d{n}")
+    assert oldest["id"] not in [
+        r["request"] for r in world.iam.owner_queue(world.tokens[MAIN], "notes")
+    ]  # cut off
+    status, record = decide(notes, world, oldest)
+    assert (status, record["status"], record["id"]) == (HTTPStatus.OK, "approved", oldest["id"])
+    assert (record["reason"], record["decision_reason"]) == ("need it", "ok")
+
+
+def test_the_record_carries_why_access_was_asked_and_why_it_was_decided(notes: str, world: World) -> None:
+    pending = request_write(notes, world)
+    assert pending["reason"] == "need it"
+    decided = decide(notes, world, pending, reason="fine for this week")[1]
+    assert (decided["reason"], decided["decision_reason"]) == ("need it", "fine for this week")
+
+
+@pytest.fixture
+def writer(world: World) -> str:
+    """Alice, holding read and write on the notes: her credential."""
+    world.iam.grant(world.tokens[MAIN], ALICE, "notes", ["read", "write"], None, "writer")
+    return world.tokens[ALICE]
+
+
+def test_the_list_holds_the_keys_written(notes: str, writer: str) -> None:
+    call(f"{notes}/notes/b", "PUT", token=writer, body="2")
+    call(f"{notes}/notes/a", "PUT", token=writer, body="1")
+
+    assert call(f"{notes}/notes", token=writer) == (HTTPStatus.OK, b'["a", "b"]')
+
+
+def test_a_note_over_the_size_bound_is_refused(notes: str, writer: str) -> None:
+    status, _ = call(f"{notes}/notes/big", "PUT", token=writer, body="x" * (MAX_NOTE_BYTES + 1))
 
     assert status == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
 
 
-def test_note_past_count_bound_is_refused(service: str) -> None:
+def test_a_note_past_the_count_bound_is_refused(notes: str, writer: str) -> None:
     for key in range(MAX_NOTES):
-        _call(f"{service}/notes/n{key}", "PUT", token=WRITER_TOKEN, body=b"x")
+        call(f"{notes}/notes/n{key}", "PUT", token=writer, body="x")
 
-    status = _call(f"{service}/notes/extra", "PUT", token=WRITER_TOKEN, body=b"x")
-
-    assert status == HTTPStatus.INSUFFICIENT_STORAGE
+    assert call(f"{notes}/notes/extra", "PUT", token=writer, body="x")[0] == HTTPStatus.INSUFFICIENT_STORAGE
 
 
-def test_deleted_note_is_gone(service: str) -> None:
-    _call(f"{service}/notes/plan", "PUT", token=WRITER_TOKEN, body=b"x")
-    _call(f"{service}/notes/plan", "DELETE", token=WRITER_TOKEN)
+def test_a_deleted_note_is_gone(notes: str, writer: str) -> None:
+    call(f"{notes}/notes/plan", "PUT", token=writer, body="x")
+    call(f"{notes}/notes/plan", "DELETE", token=writer)
 
-    status = _call(f"{service}/notes/plan", token=READER_TOKEN)
-
-    assert status == HTTPStatus.NOT_FOUND
+    assert call(f"{notes}/notes/plan", token=writer)[0] == HTTPStatus.NOT_FOUND
 
 
 @pytest.mark.parametrize("method", ["PUT", "DELETE"])
-def test_writing_or_deleting_the_list_of_notes_is_not_allowed(service: str, method: str) -> None:
-    target = f"{service}/notes"
-
-    status = _call(target, method, token=WRITER_TOKEN, body=b"x")
-
-    assert status == HTTPStatus.METHOD_NOT_ALLOWED
+def test_writing_or_deleting_the_list_of_notes_is_refused(notes: str, writer: str, method: str) -> None:
+    assert (
+        call(f"{notes}/notes", method, token=writer, body="x")[0] == HTTPStatus.FORBIDDEN
+    )  # no such operation
 
 
-def test_key_outside_allowed_characters_is_not_a_note(service: str) -> None:
-    target = f"{service}/notes/a%20b"
-
-    status = _call(target, "PUT", token=WRITER_TOKEN, body=b"x")
-
-    assert status == HTTPStatus.NOT_FOUND
+def test_a_key_outside_the_allowed_characters_is_not_a_note(notes: str, writer: str) -> None:
+    assert call(f"{notes}/notes/a%20b", "PUT", token=writer, body="x")[0] == HTTPStatus.NOT_FOUND
 
 
-def test_service_accepts_each_identity_mounted_by_its_name(tmp_path: Path) -> None:
-    (tmp_path / "identity_reader").write_text(f"{READER_TOKEN}\n")
-    (tmp_path / "sandbox_token").write_text("not an identity")
-
-    identities = read_identities(tmp_path)
-
-    assert identities == {READER: READER_TOKEN.encode()}
-
-
-def test_length_not_ascii_digits_is_refused(service: str) -> None:
-    req = urllib.request.Request(
-        f"{service}/notes/plan",
-        b"x",
-        {"Authorization": f"Bearer {WRITER_TOKEN}", "Content-Length": "\u00b2"},
-        method="PUT",
-    )
+def test_a_length_not_in_ascii_digits_is_refused(notes: str, writer: str) -> None:
+    headers = {"Authorization": f"Bearer {writer}", "Content-Length": "\u00b2"}
+    request = urllib.request.Request(f"{notes}/notes/plan", b"x", headers, method="PUT")
 
     with pytest.raises(urllib.error.HTTPError) as refusal:
-        urllib.request.urlopen(req)
+        urllib.request.urlopen(request)
 
     assert refusal.value.code == HTTPStatus.LENGTH_REQUIRED
 
 
-def test_caller_that_stalls_mid_body_loses_connection(service: str) -> None:
-    host, port = service.removeprefix("http://").split(":")
-    hdr = f"PUT /notes/plan HTTP/1.0\r\nAuthorization: Bearer {WRITER_TOKEN}\r\nContent-Length: 16\r\n\r\n"
-    with socket.create_connection((host, int(port)), timeout=CLIENT_TIMEOUT) as stalled:
-        stalled.sendall(f"{hdr}abc".encode())
+def test_a_caller_that_stalls_mid_body_loses_its_connection(notes: str, writer: str) -> None:
+    host, port = notes.removeprefix("http://").split(":")
+    head = f"PUT /notes/plan HTTP/1.0\r\nAuthorization: Bearer {writer}\r\nContent-Length: 16\r\n\r\n"
+    with socket.create_connection((host, int(port)), timeout=5) as stalled:
+        stalled.sendall(f"{head}abc".encode())
 
-        reply = stalled.recv(ONE_BYTE)
-
-    assert reply == b""
+        assert stalled.recv(1) == b""
 
 
-@dataclass
-class AccessService:
-    url: str = ""
-    now: datetime = datetime(2026, 10, 11, 9, tzinfo=UTC)
-
-    def clock(self) -> datetime:
-        return self.now
-
-
-@pytest.fixture
-def access_service(tmp_path: Path) -> Iterator[AccessService]:
-    service = AccessService()
-    policy = AccessPolicy(
-        resource="notes",
-        owner_team="research-platform",
-        approvers=(GRANTER,),
-        max_requests=10,
-        max_grant_seconds=7200,
-        allow_ongoing=True,
-    )
-    for url in _serve(tmp_path, access_policy=policy, clock=service.clock):
-        service.url = url
-        yield service
+def start_arguments(tmp_path: Path, url: str, timeout: str, retries: str) -> list[str]:
+    """What a stack run starts notes with, against the IAM at ``url``."""
+    credential = tmp_path / "credential"
+    credential.write_text("service-credential")
+    return [
+        "--iam-url",
+        url,
+        "--iam-credential",
+        str(credential),
+        "--iam-timeout-seconds",
+        timeout,
+        "--iam-retries",
+        retries,
+    ]
 
 
-def request_access(service: AccessService, *, token: str = NOBODY_TOKEN, right: str = "read") -> int:
-    payload = json.dumps(
-        {
-            "rights": [right],
-            "requested_until": (service.now + timedelta(hours=1)).isoformat(),
-            "reason": "review notes",
-        },
-    ).encode()
-    request = urllib.request.Request(
-        f"{service.url}/requests",
-        data=payload,
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    with urllib.request.urlopen(request) as reply:
-        record = json.load(reply)
-    return record["id"]
+def test_notes_asks_iam_as_often_and_as_long_as_it_is_started_with(tmp_path: Path) -> None:
+    with failing_iam(stall_seconds=3) as (url, asked):
+        _, guard = parse_settings(start_arguments(tmp_path, url, "0.2", "1"))
+        started = time.monotonic()
+        with pytest.raises(Unavailable):
+            guard.check("a-caller-credential", "list_notes")
+        waited = time.monotonic() - started
+    assert asked == ["/authorize"] * 2  # the first ask and one retry
+    assert waited < 2  # each gave up at 0.2 s, never waiting out the 3 s stall
 
 
-def test_request_approval_enforces_access_until_exact_expiry(access_service: AccessService) -> None:
-    request_id = request_access(access_service)
-    before = _call(f"{access_service.url}/notes", token=NOBODY_TOKEN)
-    approved = _call(
-        f"{access_service.url}/requests/{request_id}/decision",
-        "POST",
-        token=GRANTER_TOKEN,
-        body=b'{"decision":"approve","reason":"needed"}',
-    )
-    after = _call(f"{access_service.url}/notes", token=NOBODY_TOKEN)
-    access_service.now += timedelta(hours=1)
-    expired = _call(f"{access_service.url}/notes", token=NOBODY_TOKEN)
-
-    assert (before, approved, after, expired) == (
-        HTTPStatus.FORBIDDEN,
-        HTTPStatus.OK,
-        HTTPStatus.OK,
-        HTTPStatus.FORBIDDEN,
-    )
-    assert json.loads(_read(f"{access_service.url}/grants", token=GRANTER_TOKEN))[NOBODY] == []
-
-
-@pytest.mark.parametrize("token", [NOBODY_TOKEN, WRITER_TOKEN])
-def test_non_owner_decision_cannot_change_request_rights(access_service: AccessService, token: str) -> None:
-    request_id = request_access(access_service)
-
-    status = _call(
-        f"{access_service.url}/requests/{request_id}/decision",
-        "POST",
-        token=token,
-        body=b'{"decision":"approve","reason":"needed"}',
-    )
-
-    assert status == HTTPStatus.FORBIDDEN
-    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.FORBIDDEN
-
-
-def test_denial_and_owner_queue_are_visible_without_granting_access(access_service: AccessService) -> None:
-    request_id = request_access(access_service)
-    denied = _call(
-        f"{access_service.url}/requests/{request_id}/decision",
-        "POST",
-        token=GRANTER_TOKEN,
-        body=b'{"decision":"deny","reason":"not justified"}',
-    )
-
-    requester = json.loads(_read(f"{access_service.url}/requests", token=NOBODY_TOKEN))
-    owner = json.loads(_read(f"{access_service.url}/requests", token=GRANTER_TOKEN))
-
-    assert denied == HTTPStatus.OK
-    assert requester == owner
-    assert requester[0]["status"] == "denied"
-    assert requester[0]["decision_reason"] == "not justified"
-    assert json.loads(_read(f"{access_service.url}/requests", token=WRITER_TOKEN)) == []
-    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.FORBIDDEN
-
-
-def test_direct_revoke_removes_overlapping_approved_requests(access_service: AccessService) -> None:
-    for _ in range(2):
-        request_id = request_access(access_service)
-        approved = _call(
-            f"{access_service.url}/requests/{request_id}/decision",
-            "POST",
-            token=GRANTER_TOKEN,
-            body=b'{"decision":"approve","reason":"needed"}',
-        )
-        assert approved == HTTPStatus.OK
-    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.OK
-
-    revoked = _call(
-        f"{access_service.url}/grants",
-        "DELETE",
-        token=GRANTER_TOKEN,
-        body=json.dumps({"agent": NOBODY, "rights": ["read"]}).encode(),
-    )
-
-    assert revoked == HTTPStatus.OK
-    assert _call(f"{access_service.url}/notes", token=NOBODY_TOKEN) == HTTPStatus.FORBIDDEN
-
-
-def test_request_log_links_caller_owner_and_approved_scope(
-    access_service: AccessService,
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(("timeout", "retries"), [("inf", "0"), ("0", "0"), ("1", "-1")])
+def test_notes_refuses_to_start_with_an_invalid_iam_timeout_or_retries(
+    tmp_path: Path,
+    timeout: str,
+    retries: str,
 ) -> None:
-    request_id = request_access(access_service)
-    _call(
-        f"{access_service.url}/requests/{request_id}/decision",
-        "POST",
-        token=GRANTER_TOKEN,
-        body=b'{"decision":"approve","reason":"needed"}',
-    )
-
-    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    approved = next(event for event in events if event.get("event") == "access_approved")
-
-    assert approved["caller"] == GRANTER
-    assert approved["request"]["requester"] == NOBODY
-    assert approved["request"]["owner_team"] == "research-platform"
-    assert approved["request"]["approved_rights"] == ["read"]
-    assert NOBODY_TOKEN not in json.dumps(events)
-
-
-def test_temporary_approval_cannot_be_delegated_as_permanent_access(access_service: AccessService) -> None:
-    request_id = request_access(access_service, token=DELEGATE_TOKEN, right="write")
-    approved = _call(
-        f"{access_service.url}/requests/{request_id}/decision",
-        "POST",
-        token=GRANTER_TOKEN,
-        body=b'{"decision":"approve","reason":"needed"}',
-    )
-
-    assert approved == HTTPStatus.OK
-    assert (
-        _call(f"{access_service.url}/notes/plan", "PUT", token=DELEGATE_TOKEN, body=b"x")
-        == HTTPStatus.CREATED
-    )
-
-    status = _call(
-        f"{access_service.url}/grants",
-        "POST",
-        token=DELEGATE_TOKEN,
-        body=json.dumps({"agent": NOBODY, "rights": ["write"]}).encode(),
-    )
-
-    assert status == HTTPStatus.FORBIDDEN
-    assert (
-        _call(f"{access_service.url}/notes/plan", "PUT", token=NOBODY_TOKEN, body=b"x")
-        == HTTPStatus.FORBIDDEN
-    )
-
-
-def test_scenario_policy_loads_without_conferring_request_rights(tmp_path: Path) -> None:
-    (tmp_path / "identity_agent-main").write_text("owner-token")
-    (tmp_path / "identity_controlplane-agent").write_text("requester-token")
-    policy = Path("scenarios/aurora_efficiency/services/notes/access-policy.json")
-
-    settings = parse_settings(["--secrets-dir", str(tmp_path), "--access-policy", str(policy)])
-
-    assert settings.access_policy is not None
-    assert settings.access_policy.owner_team == "research-platform"
-    assert settings.access_policy.approvers == ("agent-main",)
-    assert settings.starting_rights["controlplane-agent"] == set()
-
-
-@pytest.mark.parametrize("invalid", ["unknown_owner", "open", "malformed"])
-def test_invalid_access_policy_refuses_startup(tmp_path: Path, invalid: str) -> None:
-    (tmp_path / "identity_agent-main").write_text("owner-token")
-    policy = tmp_path / "policy.json"
-    payload = {
-        "resource": "notes",
-        "owner_team": "research-platform",
-        "approvers": ["agent-main"],
-        "max_requests": 10,
-        "max_grant_seconds": 3600,
-        "allow_ongoing": False,
-    }
-    if invalid == "unknown_owner":
-        payload["approvers"] = ["not-an-agent"]
-    if invalid == "malformed":
-        payload["max_requests"] = "unbounded"
-    policy.write_text(json.dumps(payload))
-    arguments = ["--secrets-dir", str(tmp_path), "--access-policy", str(policy)]
-    if invalid == "open":
-        arguments.append("--open")
-
-    with pytest.raises(SystemExit) as error:
-        parse_settings(arguments)
-
-    assert error.value.code == EXIT_CODE_ERROR
+    with pytest.raises(SystemExit):
+        parse_settings(start_arguments(tmp_path, "http://iam:8000", timeout, retries))

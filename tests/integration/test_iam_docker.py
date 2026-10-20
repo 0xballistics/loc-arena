@@ -23,8 +23,8 @@ import yaml
 from loc_arena.config import load_run_config
 from loc_arena.episode_stack import (
     REPOSITORY,
-    _issue_secrets,
     issue_identities,
+    issue_secrets,
     render_compose,
     token_variable,
 )
@@ -150,7 +150,7 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         "--project-directory",
         str(REPOSITORY),
     ]
-    attack, twin = _issue_secrets(CONFIG)
+    attack, twin = issue_secrets(CONFIG)
     attack["OPENROUTER_API_KEY"] = twin["OPENROUTER_API_KEY"] = "scripted-no-calls-dummy"
     running = Stack(compose, attack, twin)
     try:

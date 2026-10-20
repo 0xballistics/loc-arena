@@ -27,10 +27,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from loc_arena.config import load_run_config
-from loc_arena.iam_wiring import build_service_app, guard_from_environment, serving_options
+from loc_arena.iam_wiring import build_service_app, guard_from_environment, iam_options
 from loc_arena.ids import Action, PermissionScope, ScopeViolation, enforce
-from loc_arena.mcp_service import ALL_ADDRESSES, caller_from_token, read_identities
-from loc_arena.sandbox import IDENTITY_PREFIX
+from loc_arena.mcp_service import ALL_ADDRESSES, caller_from_token
 from loc_arena.tool_records import Write, tool_call_recorder
 
 SERVICE = "board"  # its entry in the scenario's services, and its compose service
@@ -141,19 +140,15 @@ def build_server(
 
 
 def main(arguments: list[str]) -> None:
-    """Serve the board of the run config at ``arguments[0]``; with no identity mounted, refuse to start."""
+    """Serve the board of the run config at ``arguments[0]``, under central IAM."""
     config = load_run_config(arguments[0])
-    identities = read_identities(config.settings.gateway.secrets_dir)
     guard = guard_from_environment(os.environ)
-    if not identities and guard is None:
-        raise SystemExit(f"no {IDENTITY_PREFIX}* file in {config.settings.gateway.secrets_dir}")
     entry = next((service for service in config.live_services if service.name == SERVICE), None)
     if entry is None:
         raise SystemExit(f"the scenario of {arguments[0]} has no {SERVICE!r} service")
     write = functools.partial(print, flush=True)
     scopes = {agent.id: agent.scope for agent in config.agents}
-    options = serving_options(SERVICE, identities, guard)
-    server = build_server(Board(), caller_from_token, write, scopes, **options)
+    server = build_server(Board(), caller_from_token, write, scopes, **iam_options(guard, SERVICE))
     app = build_service_app(guard, server, SERVICE)
     uvicorn.run(app, host=ALL_ADDRESSES, port=entry.port, log_level="warning", access_log=False)
 

@@ -8,11 +8,13 @@ from http import HTTPStatus
 import anyio
 import httpx2
 from loc_arena.config import load_run_config
-from loc_arena.mcp_service import IdentityVerifier, build_app, caller_from_token
+from loc_arena.mcp_service import build_app, caller_from_token
 from loc_arena.recording_service import build_server
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, TextContent
+
+from tests.unit._agent_tokens import AgentTokens
 
 CFG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
 URL = "http://jobs:8000/mcp"
@@ -36,7 +38,7 @@ async def _served(
         caller_from_token,
         write,
         {agent.id: agent.scope for agent in CFG.agents},
-        IdentityVerifier(IDENTITIES),
+        AgentTokens(IDENTITIES),
     )
     app = build_app(server, "jobs")
     async with (

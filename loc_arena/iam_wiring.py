@@ -1,9 +1,9 @@
-"""How a stack service joins central IAM, and the only module of the engine that imports ``meridian_iam``.
+"""How a stack service joins central IAM, which every agent-facing service runs under.
 
 A service joins by environment (``service_environment``): the renderer sets ``LOC_ARENA_IAM_URL``, the path
 of its manifest, the path of its own IAM credential, and how long and how often it asks IAM. Company packages
 are importable only inside a service container (the episode and the host do not put them on the path), so the
-imports are made when a service starts, never at module load.
+imports are made when a service starts, never at module load. A service started without them does not start.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import anyio
 from mcp.server import MCPServer
 from starlette.applications import Starlette
 
-from loc_arena.mcp_service import IdentityVerifier, build_app
+from loc_arena.mcp_service import build_app
 from loc_arena.settings import IamSettings
 
 URL_VARIABLE = "LOC_ARENA_IAM_URL"
@@ -39,13 +39,13 @@ def service_environment(settings: IamSettings, manifest: str, credential: str) -
     }
 
 
-def guard_from_environment(environ: Mapping[str, str]) -> Any | None:  # noqa: ANN401 - a meridian_iam Guard
-    """The IAM guard this service is configured for, or ``None`` when it is not in IAM mode.
+def guard_from_environment(environ: Mapping[str, str]) -> Any:  # noqa: ANN401 - a meridian_iam Guard
+    """The IAM guard this service is configured for; without one, the service refuses to start.
 
-    In IAM mode a service without a valid timeout and retries does not start: the settings' bounds hold here.
+    It refuses as well without a valid timeout and retries: the settings' bounds hold here.
     """
     if URL_VARIABLE not in environ:
-        return None
+        raise SystemExit(f"this service runs only under central IAM, and {URL_VARIABLE} is not set")
     try:
         limits = IamSettings.model_validate(
             {"timeout_seconds": float(environ[TIMEOUT_VARIABLE]), "retries": int(environ[RETRIES_VARIABLE])},
@@ -67,34 +67,15 @@ def guard_from_environment(environ: Mapping[str, str]) -> Any | None:  # noqa: A
     return integration.Guard(manifest, client)
 
 
-def serving_options(
-    service: str,
-    identities: Mapping[str, bytes],
-    guard: Any | None,  # noqa: ANN401 - a meridian_iam Guard
-) -> dict[str, Any]:
-    """The ``verifier`` and ``extra_middleware`` an MCP service is built with: legacy, or IAM's ``guard``.
-
-    Under IAM the credential check and the per-call operation check both go to IAM, and the service needs no
-    identity of its own agents; otherwise the mounted identities admit callers as before.
-    """
-    if guard is None:
-        return {"verifier": IdentityVerifier(identities), "extra_middleware": (), "annotate": None}
-    return iam_options(guard, service)
-
-
-def build_service_app(guard: Any | None, server: MCPServer, service: str) -> Starlette:  # noqa: ANN401 - a Guard
-    """The app serving ``server`` as ``service``; under IAM's ``guard``, only if its tools are the manifest's.
+def build_service_app(guard: Any, server: MCPServer, service: str) -> Starlette:  # noqa: ANN401 - a Guard
+    """The app serving ``server`` as ``service``, only if its tools are exactly ``guard``'s manifest's.
 
     A tool added without a declared operation would otherwise be reachable and unchecked by name, and a
-    declared operation with no tool means the manifest describes a service that is not the one running. Under
-    IAM the app also answers 503 when IAM cannot verify a caller, so the same guard that builds the service's
-    verifier (``serving_options``) must build its app. A service not under IAM is not checked.
+    declared operation with no tool means the manifest describes a service that is not the one running. The
+    app also answers 503 when IAM cannot verify a caller.
     """
-    app = build_app(server, service)
-    if guard is None:
-        return app
     guard.verify_routes(set(), {tool.name for tool in anyio.run(server.list_tools)})
-    return importlib.import_module("meridian_iam.integration.mcp").answer_outages(app)
+    return importlib.import_module("meridian_iam.integration.mcp").answer_outages(build_app(server, service))
 
 
 def load_iam_authority(guard: Any) -> Any:  # noqa: ANN401 - a meridian_iam Guard, and the CentralAuthority over it

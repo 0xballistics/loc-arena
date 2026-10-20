@@ -330,7 +330,6 @@ def test_a_service_starts_only_if_its_tools_are_exactly_the_manifests(world: Wor
 
     declared = json.loads((MANIFESTS / "board.json").read_text())
     start(declared)  # exact: fine
-    build_service_app(None, server, SERVICE)  # a service not under IAM is not checked
     dropped = {**declared, "tools": {k: v for k, v in declared["tools"].items() if k != "unread"}}
     dropped["operations"] = {k: v for k, v in declared["operations"].items() if k != "unread"}
     with pytest.raises(ManifestError, match="undeclared tool unread"):  # a tool the manifest no longer binds

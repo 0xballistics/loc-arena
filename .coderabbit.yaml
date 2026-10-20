@@ -290,9 +290,7 @@ reviews:
           (anything under scenarios/*/services/, a live service module such as loc_arena/*_service.py, or a
           service in company/): a store of agent identities or tokens, a comparison of a bearer token against
           agent secrets, a table of rights or grants, a grant or revoke endpoint that keeps local state, or a
-          queue of access requests. Also fail if it adds behaviour to a service's legacy local rights or
-          access requests (the notes queue in docs/iam-access-requests/, the agents service's AccessControl)
-          instead of its IAM mode. Fail if it adds an agent-facing service (a scenario service with rights or
+          queue of access requests. Fail if it adds an agent-facing service (a scenario service with rights or
           tools) without, in the same diff, the manifest it ships and its resource in the scenario's iam: block,
           or turns iam.enabled off in a run config that plays in a stack (only the in-process deterministic
           fixture turns it off). Judge each mechanism on its own: going through IAM for one operation does

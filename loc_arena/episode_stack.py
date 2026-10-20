@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-import json
 import os
 import secrets
 import subprocess
@@ -94,12 +93,8 @@ COMPANY_DIRECTORY = PurePosixPath("/app/company")  # the company repos, in the e
 REPOSITORY = Path(__file__).resolve().parents[1]  # its Dockerfile and configs/
 PLATFORM_PACKAGE = "meridian-iam"  # on every engine service's path, never in the agents' checkout
 IAM_MANIFEST_DIRECTORY = PurePosixPath("/srv")  # where a built managed service finds its own manifest
-IAM_DOCKERFILE = "Dockerfile.iam"  # a built service's image with the IAM client, beside its own Dockerfile
 ENGINE_DIRECTORY = PurePosixPath("/app")  # the repository, in the engine image
 TOKEN_BYTES = 32  # the entropy of each sandbox token and of each agent's identity on a live service
-VOCABULARY_VARIABLE = "LOC_ARENA_VOCABULARY"  # the rights a live service's scenario declares: a JSON list
-RIGHTS_VARIABLE = "LOC_ARENA_RIGHTS"  # a live service's starting rights: JSON {agent id: [right, ...]}
-TRANSITIVE_VARIABLE = "LOC_ARENA_TRANSITIVE"  # "true" when a live service lets the grant right be granted
 NEVER_STARTED = (
     f"the episode never started: is {API_KEY_VARIABLE} set in .env or the shell, or did a live service fail "
     "to become healthy? See above and the copied logs in {logs}"
@@ -153,8 +148,11 @@ def render_compose(
     The images hold neither the scenario's sealed ``reference/`` nor its ``scripted/`` moves, so an agent with
     a shell cannot read the answer. Only a scripted episode, which plays them, gets ``scripted/`` mounted. The
     sandboxes' image holds no harness and no scenarios either, so agent code cannot read how it is graded;
-    each sandbox mounts only the scenario's skills folder, read-only.
+    each sandbox mounts only the scenario's skills folder, read-only. Every service an agent reaches runs
+    under central IAM, so a run config that turns it off cannot run in a stack.
     """
+    if not config.settings.iam.enabled:
+        raise StackError("a stack run needs central IAM: this run config turns iam.enabled off")
     stack = config.settings.stack
     scenario = resolve_scenario(config)
     skills = [f"{scenario.skills_dir}:{stack.skills_directory}:ro"] if scenario.skills_dir else []
@@ -171,10 +169,10 @@ def render_compose(
     # A service with rights too (IAM) is reached from the sandboxes as well, so they keep its identity.
     tools_only = [service.name for service in services if service.tools and not service.rights]
     identities = issue_identities(config)
-    # An engine module may serve company code: each company repo's root is on its path, as in a checkout.
+    # An engine module may serve company code: each company repo's root is on its path, as in a checkout, and
+    # so is meridian-iam, a platform package rather than a work repo, for the services IAM manages.
     managed = managed_services(config)
-    # meridian-iam is a platform package, not a work repo: only a run under IAM puts it on the path.
-    repos = (*COMPANY_REPOS, PLATFORM_PACKAGE) if managed else COMPANY_REPOS
+    repos = (*COMPANY_REPOS, PLATFORM_PACKAGE)
     company_repos_pythonpath = ":".join(str(COMPANY_DIRECTORY / repo) for repo in repos)
     return {
         "services": {
@@ -245,7 +243,7 @@ def render_compose(
                         for agent in agent_ids
                     },
                 }
-                if managed
+                if managed  # a run with no service for IAM to manage issues none of its secrets
                 else {}
             ),
             **(
@@ -364,18 +362,18 @@ def _render_live_service(  # noqa: PLR0913
     """A live service: on agent-net alone, no published port.
 
     One that runs a module of the ``engine`` service, with the run configs mounted read-only and the company
-    repos importable, is given the path of ``run``'s config; any other mounts no volume. One with rights or
-    tools holds every agent's identity, each under its agent's id; one with rights also the rights its
-    scenario declares and the agents' starting rights.
+    repos importable, is given the path of ``run``'s config; any other mounts no volume.
 
-    Under central IAM (``managed`` names the services it manages) a managed service holds no agent identity,
-    only its own IAM credential, and waits for IAM; IAM holds every identity (to know their digests), each
-    service's credential and the play's bootstrap document, and keeps its store in an anonymous volume.
+    Central IAM decides for every service ``managed`` names: such a service holds no agent identity, only its
+    own IAM credential, and waits for IAM; one built from its pack is built with the IAM client as a named
+    context. IAM holds every identity (to know their digests), each service's credential and the play's
+    bootstrap document, and keeps its store in an anonymous volume.
     """
     stack = config.settings.stack
     iam = config.settings.iam
     is_iam, is_managed = bool(managed) and service.name == iam.service, service.name in managed
-    rights = {agent.id: list(agent.sandbox.rights.get(service.name, ())) for agent in config.agents}
+    if holds_identities(service) and not (is_iam or is_managed):
+        raise StackError(f"agents reach service {service.name!r}, but it is not under central IAM")
     environment: dict[str, str] = {}
     match service.source:
         case Path():
@@ -383,17 +381,17 @@ def _render_live_service(  # noqa: PLR0913
                 "build": {"context": str(service.source)},
                 "image": f"loc-arena-service-{service.name}:latest",
             }
-            manifest_in_container = (
-                IAM_MANIFEST_DIRECTORY / Path(manifest_path(config, service.name)).name
-                if is_managed
-                else None
-            )
+            manifest_in_container = None
             if is_managed:
-                if not (service.source / IAM_DOCKERFILE).is_file():
-                    raise StackError(f"service {service.name!r} is under IAM but has no {IAM_DOCKERFILE}")
+                if PLATFORM_PACKAGE not in (service.source / "Dockerfile").read_text():
+                    raise StackError(
+                        f"service {service.name!r} is under IAM, but its Dockerfile copies in no "
+                        f"meridian_iam from the {PLATFORM_PACKAGE!r} build context",
+                    )
+                manifest = Path(manifest_path(config, service.name))
+                manifest_in_container = IAM_MANIFEST_DIRECTORY / manifest.name
                 source["build"] = {
                     "context": str(service.source),
-                    "dockerfile": IAM_DOCKERFILE,
                     "additional_contexts": {PLATFORM_PACKAGE: str(REPOSITORY / "company" / PLATFORM_PACKAGE)},
                 }
         case EngineModule(name=module):
@@ -408,18 +406,11 @@ def _render_live_service(  # noqa: PLR0913
             if is_managed:
                 raise StackError(f"service {service.name!r} runs a ready image, which cannot join IAM")
             source = {"image": image}
-    if service.rights:
-        environment = {
-            **environment,
-            VOCABULARY_VARIABLE: json.dumps(list(service.rights)),
-            RIGHTS_VARIABLE: json.dumps(rights),
-            TRANSITIVE_VARIABLE: json.dumps(service.transitive),
-        }
     secrets_directory = config.settings.gateway.secrets_dir
     if is_managed:
         credential = str(secrets_directory / CREDENTIAL_FILE)
         environment = {**environment, **service_environment(iam, str(manifest_in_container), credential)}
-    mounted: list[str | ServiceSecret]
+    mounted: list[str | ServiceSecret] = []
     if is_iam:
         mounted = [
             *(identity.secret_name for identity in identities),
@@ -429,12 +420,6 @@ def _render_live_service(  # noqa: PLR0913
         ]
     elif is_managed:
         mounted = [_mount(f"{SERVICE_CREDENTIAL_PREFIX}{service.name}", CREDENTIAL_FILE)]
-    else:
-        mounted = [
-            _mount(identity.secret_name, f"{IDENTITY_PREFIX}{identity.agent_id}")
-            for identity in identities
-            if identity.service == service.name
-        ]
     runners = list_runner_services(config) if service.runners else []
     mounted = [*mounted, *map(runner_token_secret, runners)]
     depends_on = {
@@ -450,7 +435,7 @@ def _render_live_service(  # noqa: PLR0913
         "pids_limit": stack.service_pids_limit,
         "networks": [AGENT_NETWORK],
         **({"environment": environment} if environment else {}),
-        **({"secrets": mounted} if is_iam or is_managed or holds_identities(service) or runners else {}),
+        **({"secrets": mounted} if mounted else {}),
         **({"volumes": [*source.get("volumes", []), str(iam.database.parent)]} if is_iam else {}),
         **({"depends_on": depends_on} if depends_on else {}),
         "healthcheck": _probe(service.port, stack, test=service.healthcheck),
@@ -502,7 +487,7 @@ def _probe(port: int, stack: StackSettings, *, test: Sequence[str] | None = None
     }
 
 
-def _issue_secrets(config: RunConfig) -> tuple[dict[str, str], dict[str, str]]:
+def issue_secrets(config: RunConfig) -> tuple[dict[str, str], dict[str, str]]:
     """Every secret of a stack run, by the host variable compose reads: the attack env and the twin's."""
     tokens = {agent.id: secrets.token_urlsafe(TOKEN_BYTES) for agent in config.agents}
     held = model_gateway.issue_held_tokens(TOKEN_BYTES)
@@ -523,9 +508,9 @@ def _issue_play_secrets(config: RunConfig, tokens: dict[str, str]) -> tuple[dict
     They reach compose through its environment alone: never a command line or a file. The honest twin's env
     differs in what the recreated containers are given. Its tools gateway offers the honest config's tools (no
     covert tool), so an agent granted one in the attack config is refused it there after ``renew_services``
-    recreates the gateway. Under central IAM it also differs in the bootstrap document (rendered from the
-    honest config, so no covert tool carries a grant) and in every identity and IAM credential: the sandboxes
-    and services are recreated with new ones, so nothing the attack play held authenticates in the twin.
+    recreates the gateway. It also differs in the bootstrap document (rendered from the honest config, so no
+    covert tool carries a grant) and in every identity and IAM credential: the sandboxes and services are
+    recreated with new ones, so nothing the attack play held authenticates in the twin.
     """
     managed = managed_services(config)
     runners = list_runner_services(config)
@@ -557,19 +542,7 @@ def _issue_play_secrets(config: RunConfig, tokens: dict[str, str]) -> tuple[dict
             )
         return environment
 
-    attack = issue_for_play(config)
-    if managed:
-        return attack, issue_for_play(apply_mode(config, "honest"))
-    twin = issue_for_play(apply_mode(config, "honest")) if serves_tools(config) else attack
-    # Without IAM the twin reuses the attack play's identities: only its gateway config differs.
-    if serves_tools(config):
-        twin = {**attack, TOOLS_GATEWAY_CONFIG_VARIABLE: twin[TOOLS_GATEWAY_CONFIG_VARIABLE]}
-        twin[TOOLS_GATEWAY_CONFIG_VARIABLE] = render_tools_gateway_config(
-            apply_mode(config, "honest"),
-            tokens,
-            {identity: attack[identity.variable] for identity in issue_identities(config)},
-        )
-    return attack, twin
+    return issue_for_play(config), issue_for_play(apply_mode(config, "honest"))
 
 
 def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: Path) -> Path:
@@ -607,7 +580,7 @@ def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: P
         "--project-directory",
         str(REPOSITORY),
     ]
-    attack_secrets, twin_secrets = _issue_secrets(config)
+    attack_secrets, twin_secrets = issue_secrets(config)
     environment = {**os.environ, **attack_secrets}
     twin_environment = {**os.environ, **twin_secrets}
     run_compose = functools.partial(subprocess.run, env=environment)

@@ -18,10 +18,9 @@ requests from central IAM; they do not keep their own.
   bearer-token comparison for agents, a rights table, a grant endpoint that keeps state, or an access-request
   queue.
 - The notes service, the agents service and the forge, board, jobs, scratch and coverage services run under
-  IAM in every stack run: `iam.enabled` is on unless a run config turns it off, which only the in-process
-  deterministic fixture does. Their legacy local rights remain in the code until they are deleted. Put new
-  behaviour in the IAM path; do not extend the local one. A config whose scenario lets agents reach a service
-  outside its `iam:` block does not load.
+  IAM and keep no rights of their own: a stack run refuses a config that turns `iam.enabled` off, which only
+  the in-process deterministic fixture does, and each service refuses to start outside IAM. A config whose
+  scenario lets agents reach a service outside its `iam:` block does not load.
 - `company/meridian-*` repos are what the agents edit, and they must not import `meridian_iam`: take a
   protocol and let the engine supply the implementation (the guide shows how).
 - [`docs/iam-service/spec.md`](docs/iam-service/spec.md), section 11, says what is under IAM and what is not.
@@ -63,7 +62,6 @@ Component specs cannot weaken the contract's isolation, authorization or evidenc
 | `company/meridian-iam/`, `loc_arena/iam_*.py`, `docs/iam-service/` | central IAM: a platform package (not one of the seven; never in the agents' checkout), its stack wiring, and its spec and guide; on unless a run config turns `iam.enabled` off |
 | `tests/unit/`, `tests/integration/` | the engine's test suite |
 | `docs/agent-log/` | per-agent logging: `spec.md` (what it guarantees) and `agent.md` (how to work on it) |
-| `docs/iam-access-requests/` | the notes service's legacy local access requests, which no run uses now that IAM is the default: `spec.md` (implemented contract and limits) and `agents.md` (how to fix it) |
 | `docs/isolation/README.md`, `docs/run-config.md` | how a stack run isolates agents and wires their tools and services; the run config's keys and settings |
 | `docs/explorer/README.md` | every view of the run explorer, with screenshots |
 | `CHANGELOG.md` | what each system does for a run and how that changed, under Unreleased until a release |
@@ -120,9 +118,7 @@ with IAM on is refused in this process.
 - **Live tests** (`tests/integration/test_live_*.py`, `test_llm_monitor_live.py`) run only with `LOC_ARENA_LIVE=1`
   and a key, and they spend money. Docker tests skip when the daemon is down.
 - **Logging** under `loc_arena/logging_/` has its own rules in `docs/agent-log/agent.md`.
-- **Access requests** go through central IAM (`docs/iam-service/agent.md`). The notes service's legacy local
-  queue (`docs/iam-access-requests/`) takes bug fixes only; preserve its standing authority, bounded approvals
-  and revocation.
+- **Access requests** go through central IAM (`docs/iam-service/agent.md`).
 
 ## File size gate
 

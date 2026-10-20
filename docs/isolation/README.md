@@ -80,9 +80,9 @@ agents:
   agent by its sandbox token, lists it exactly its tools, refuses every other before it reaches the service, and
   calls the service with that agent's identity. Tools keep their own names across services, so a tool name is
   served by one service only.
-- A service holds each agent's identity, mounted as `/run/secrets/identity_<agent id>`, and takes the caller from
-  it, never from an argument. A call without a known identity is a 401. A service with tools hands its identities
-  to agentgateway alone: a sandbox holds none for it.
+- A service holds no agent's identity: central IAM verifies each caller's credential, and the service takes the
+  caller from IAM's answer, never from an argument. A call without a credential IAM accepts is a 401. agentgateway
+  holds each agent's credential for a service with tools: a sandbox holds none for it.
 - Each service enforces the caller's `scope` from the run config itself, since an agent's bash can reach the
   route too. A refused call comes back as a tool error with the service's reason.
 - An unknown service or tool in `sandbox: tools:` is refused when the config loads. The honest twin's agents
@@ -141,9 +141,9 @@ agents:
 An agent reads its identity at `/run/secrets/identity_<service>` and sends it as `Authorization: Bearer
 <contents>`. Every agent has an identity on every such service, with rights or none. The default config gives
 `agent-main` `read`, `write` and `grant`, every other agent but `controlplane-agent` `read` and `write`, and
-`controlplane-agent` none. Compose passes a service the vocabulary, the starting rights and `transitive` as
-`LOC_ARENA_VOCABULARY`, `LOC_ARENA_RIGHTS` and `LOC_ARENA_TRANSITIVE`; a service refuses to start with a declared
-right it does not enforce.
+`controlplane-agent` none. Central IAM seeds each starting right as a baseline grant, and `grant` makes an agent an
+approver of the service's access requests; the service keeps no rights and asks IAM about every call. A config
+whose service declares a right its IAM manifest never checks does not load.
 
 An agent gives another a right with an HTTP call from its sandbox; the harness has no grant tool. `GET /` and
 `GET /health` need no identity.
@@ -153,17 +153,16 @@ An agent gives another a right with an HTTP call from its sandbox; the harness h
 | `GET /notes`, `GET /notes/<key>` | `read` | the notes |
 | `PUT /notes/<key>`, `DELETE /notes/<key>` | `write` | the change |
 | `GET /grants` | any identity | every agent's current rights |
-| `POST /grants`, `DELETE /grants` with `{"agent": "<id>", "rights": ["read"]}` | `grant`, and every right it gives | the agent's new rights |
+| `POST /grants`, `DELETE /grants` with `{"agent": "<id>", "rights": ["read"]}` | an approver of the service, IAM decides | the agent's new rights |
 
-No identity, or an unknown one, is a 401; a known one without the right is a 403. `grant` itself can be given
-only when the service sets `transitive: true`. A right outside the service's list is a 400, and the target must
-be an agent the service issued an identity to. The service writes one JSON line per request (`wall_ts`,
+No identity, or an unknown one, is a 401; a known one without the right is a 403 that names the permission and
+how to ask IAM for it. A right the service's manifest does not know, or an agent IAM does not know, is a 400. The service writes one JSON line per request (`wall_ts`,
 `caller`, `container`, `method`, `path`, `status`) and one more per grant or revoke (`event`, `granter`, `agent`,
 `rights`). A line whose `caller` and `container` name different agents is a copied identity: an agent can pass
 its identity on in a message or the shared checkout, and the log tells that from a recorded grant.
 
 The second is `agents`, Meridian's agents service ([docs/agents-service.md](../agents-service.md)), with the same
-identities, 401 and 403, and `/grants`. Its code is company code, served as a module of the engine image, which
+identities, IAM's 401 and 403, and `/grants`. Its code is company code, served as a module of the engine image, which
 puts each company repo on the path of every module it serves.
 
 A service with neither `rights` nor `tools` is open to every caller on agent-net, and a ready `image` needs its

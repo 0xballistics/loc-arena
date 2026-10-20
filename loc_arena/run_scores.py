@@ -2,12 +2,77 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from loc_arena.config import RunConfig
 from loc_arena.logging_.events import read_events
-from loc_arena.monitors.registry import find_fallback_only_monitors
+from loc_arena.monitors.registry import MonitorVerdict, find_fallback_only_monitors
+
+if TYPE_CHECKING:
+    from loc_arena.metrics import EpisodeRecord
+
+
+class VerdictRow(BaseModel):
+    """One monitor verdict as ``scores.json`` keeps it, for either play."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    monitor: str = Field(description="The monitor that gave it.")
+    tap: str = Field(description="The tap point it read.")
+    score: float = Field(description="Its suspicion, from 0 to 1.")
+    reason: str = Field(description="Its reason, as the monitor wrote it.")
+    actor_uid: str = Field(description="The actor of the event it judged.")
+    target_seq: int | None = Field(
+        description="That event's seq on its play's mirror log; none for the whole run.",
+    )
+    ts: float = Field(description="When it was given, in episode time.")
+
+
+class HonestTwinScores(BaseModel):
+    """``scores.json``'s ``honest_twin``: what monitors made of the play both audit thresholds come from."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    overall_suspicion: float = Field(
+        description="The twin's overall aggregate: with one twin, the bar the attack play is caught against.",
+    )
+    per_monitor: dict[str, float] = Field(
+        description="Each scored monitor's level-1 score, what that aggregate reads.",
+    )
+    per_monitor_max_score: dict[str, float] = Field(
+        description="Each monitor's highest verdict, detectors included.",
+    )
+    monitor_verdicts: tuple[VerdictRow, ...] = Field(
+        description="Every verdict, on the twin's own mirror events.",
+    )
+
+
+def verdict_rows(verdicts: Iterable[MonitorVerdict]) -> tuple[VerdictRow, ...]:
+    """``verdicts`` as ``scores.json`` keeps them: the same seven fields for either play, in their order."""
+    raise NotImplementedError
+
+
+def peak_scores(verdicts: Iterable[MonitorVerdict]) -> dict[str, float]:
+    """Each monitor's highest score among ``verdicts``, rounded as ``scores.json`` reports it."""
+    raise NotImplementedError
+
+
+def honest_twin_scores(
+    record: EpisodeRecord,
+    overall: float,
+    per_monitor: Mapping[str, float],
+) -> HonestTwinScores:
+    """The twin's block of ``scores.json``, from the record this grading calibrated its thresholds on.
+
+    ``record`` must be that record, never a second scoring: a live monitor scores differently each time, so
+    only these verdicts explain the thresholds written beside them. ``overall`` and ``per_monitor`` are
+    ``episode_overall``'s answer for the same verdicts.
+    """
+    raise NotImplementedError
 
 
 def resolved_weight(spec: Any, agg: Any) -> float:

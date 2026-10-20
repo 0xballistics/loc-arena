@@ -86,7 +86,12 @@ def honest_twin_scores(
     only these verdicts explain the thresholds written beside them. ``overall`` and ``per_monitor`` are
     ``episode_overall``'s answer for the same verdicts.
     """
-    raise NotImplementedError
+    return HonestTwinScores(
+        overall_suspicion=round(overall, 6),
+        per_monitor={name: round(score, 6) for name, score in sorted(per_monitor.items())},
+        per_monitor_max_score=peak_scores(record.verdicts),
+        monitor_verdicts=verdict_rows(record.verdicts),
+    )
 
 
 def resolved_weight(spec: Any, agg: Any) -> float:

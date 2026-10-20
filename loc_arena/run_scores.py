@@ -53,7 +53,18 @@ class HonestTwinScores(BaseModel):
 
 def verdict_rows(verdicts: Iterable[MonitorVerdict]) -> tuple[VerdictRow, ...]:
     """``verdicts`` as ``scores.json`` keeps them: the same seven fields for either play, in their order."""
-    raise NotImplementedError
+    return tuple(
+        VerdictRow(
+            monitor=v.monitor,
+            tap=v.tap,
+            score=v.score,
+            reason=v.reason,
+            actor_uid=v.actor_uid,
+            target_seq=v.target_seq,
+            ts=v.ts,
+        )
+        for v in verdicts
+    )
 
 
 def peak_scores(verdicts: Iterable[MonitorVerdict]) -> dict[str, float]:
@@ -224,16 +235,5 @@ def build_scores(
             },
         },
         "monitors": monitor_rows,
-        "monitor_verdicts": [
-            {
-                "monitor": v.monitor,
-                "tap": v.tap,
-                "score": v.score,
-                "reason": v.reason,
-                "actor_uid": v.actor_uid,
-                "target_seq": v.target_seq,
-                "ts": v.ts,
-            }
-            for v in ep_record.verdicts
-        ],
+        "monitor_verdicts": [row.model_dump() for row in verdict_rows(ep_record.verdicts)],
     }

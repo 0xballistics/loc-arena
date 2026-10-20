@@ -1,11 +1,11 @@
 # Service architecture and central IAM specification
 
 Status: required of every agent-facing service ([agent instructions](../../AGENTS.md)); slices 1-9
-implemented behind an opt-in switch, 13 October 2026. The repository
+implemented, and on by default since October 2026. The repository
 uses a services architecture in a monorepo. Central IAM (`company/meridian-iam/`) and its shared integration
-exist and are tested, and a run config that sets `iam: {enabled: true}` runs the stack under it
-(`configs/aurora-efficiency.iam.yaml`). Every run config without it is unchanged: the services keep their own
-rights and queues, and no service is compliant merely because this document or the package exists. See
+exist and are tested, and a run is under it unless its config turns `iam.enabled` off, which only the in-process
+deterministic fixture does; the legacy local rights remain in the code until they are deleted. No service is compliant merely because this document or
+the package exists. See
 [section 11](#11-migration-status) for exactly which surfaces are under IAM, which remain legacy, and what is
 not done.
 
@@ -276,15 +276,16 @@ local public-seam tests and Docker checks; they spend money and must show genuin
 ## 11. Migration status
 
 Updated with the implementation of slices 1-9. "IAM mode" means the service is started with
-`iam.enabled` in the run config; the legacy mode is the default and is unchanged.
+`iam.enabled` in the run config, which is the default; a config whose scenario lets agents reach a service
+outside its `iam:` block does not load. The legacy mode remains in the code, reached only by forcing an IAM-off config into a stack.
 
 | Surface | State |
 |---|---|
 | `meridian-iam` contracts, core, requests (slices 1-3) | Implemented and tested: strict manifests, SQLite store, online decisions, request/approval/grant/revoke, idempotency, audit |
 | IAM HTTP service, stdlib client, guard and HTTP/ASGI/MCP adapters (slice 4) | Implemented; tested against a real server and real SQLite, including IAM outage and decision mismatch |
-| Notes (slice 5) | IAM mode (`python -m notes_iam`): rights and requests live in IAM, `/grants` and `/requests` forward as the caller. Legacy local queue (`docs/iam-access-requests/`) remains the default |
-| Agents registry (slice 6) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.agents_iam`; registry business logic unchanged. Legacy `AccessControl` remains the default |
-| Forge, board, jobs, scratch, coverage MCP (slice 7) | IAM mode through `loc_arena.iam_wiring`; scope and recipient checks still apply on top. Legacy identities remain the default |
+| Notes (slice 5) | IAM mode (`python -m notes_iam`): rights and requests live in IAM, `/grants` and `/requests` forward as the caller. Legacy local queue (`docs/iam-access-requests/`) remains, reached only by forcing an IAM-off config into a stack |
+| Agents registry (slice 6) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.agents_iam`; registry business logic unchanged. Legacy `AccessControl` remains, reached only by forcing an IAM-off config into a stack |
+| Forge, board, jobs, scratch, coverage MCP (slice 7) | IAM mode through `loc_arena.iam_wiring`; scope and recipient checks still apply on top. Legacy identities remain, reached only by forcing an IAM-off config into a stack |
 | Sandbox command server, tools gateway exposure, inference gateway | Unchanged boundaries: the gateway's static tool list is an upper bound, IAM is the dynamic check |
 | Stack wiring (slice 8) | `iam` live service, anonymous store volume, per-play bootstrap, per-play identities and credentials, honest-twin recreation. Verified in Docker (`tests/integration/test_iam_docker.py`) |
 | Audit and evidence (slice 9) | Resource records carry the IAM `decision` ID; IAM's own log is correlation-only, so no action is counted twice. A scripted stack run's events match the legacy run's |
@@ -327,11 +328,9 @@ Not done, and not claimed:
   renews keeps its replacement itself, and nothing rewrites a mounted file.
 - **Independent IAM scenario grading.** No scenario yet grades IAM workflows (requests, join/leave, rotation)
   against independently authored expectations; the existing unauthorized-deployment verifier is unchanged.
-- **Flipping the default.** Only `aurora-efficiency.iam.yaml` (the scripted fixture) and
-  `aurora-efficiency.iam-live.yaml` (live models) enable IAM, and no legacy rights table has been deleted. A paid
-  honest and attack run under the live config (October 2026) went through the gateway to the provider and filed,
-  delivered, decided and retried access requests from the inbox; switching the default and deleting the legacy
-  rights are changes still to make.
+- **Deleting the legacy rights.** IAM is on by default and `make run` plays in a stack, but no legacy rights
+  table has been deleted yet. A paid honest and attack run under IAM (October 2026) went through the gateway to
+  the provider and filed, delivered, decided and retried access requests from the inbox.
 - **Requests on tool services.** The tools gateway offers each agent exactly its `sandbox: tools:`, each
   already a baseline grant, so an approval on an MCP tool service makes nothing new callable; only an approval
   on notes or agents changes what an agent can do.

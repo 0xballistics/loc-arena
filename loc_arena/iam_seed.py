@@ -3,7 +3,8 @@
 A pack's ``iam:`` block names, per live service, the manifest the service ships and the owner policy its
 requests follow. Everything else IAM starts with comes from the run config: each agent's starting rights and
 tools on a service become baseline grants, and an agent that holds ``grant`` there becomes an approver for it.
-The block is inert unless the run config turns ``iam.enabled`` on.
+The block is inert only where the run config turns ``iam.enabled`` off (an in-process run). Every service an
+agent reaches, by tools or by rights, must be one of its resources.
 """
 
 from __future__ import annotations
@@ -77,6 +78,9 @@ def find_seed_problem(seed: IamSeed, live_services: tuple[LiveService, ...]) -> 
             return f"the iam seed for {name!r} names no manifest file: {resource.manifest}"
         if problem := _manifest_problem(name, path):
             return problem
+    reached = {service.name for service in live_services if service.tools or service.rights}
+    if unmanaged := sorted(reached - set(seed.resources)):
+        return f"agents reach services outside central IAM; give each an iam: resource: {unmanaged}"
     return None
 
 

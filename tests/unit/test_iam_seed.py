@@ -17,22 +17,18 @@ MANAGED = ("notes", "agents", "forge", "board", "jobs", "scratch", "coverage")
 ENABLED = IamSettings(enabled=True)
 
 
-def with_iam(tmp_path: Path):  # noqa: ANN201 - a RunConfig with IAM enabled, as the shipped IAM config will be
+def with_iam(tmp_path: Path):  # noqa: ANN201 - the deterministic fixture with IAM on, as aurora-efficiency.iam.yaml
     run = tmp_path / "iam.yaml"
     run.write_text("extends: aurora-efficiency.deterministic.yaml\niam:\n  enabled: true\n")
     return load_run_config(run, Path("configs"))
 
 
-def test_iam_is_off_unless_the_run_config_enables_it() -> None:
+def test_iam_is_on_unless_the_run_config_turns_it_off() -> None:
+    live = load_run_config("configs/aurora-efficiency.yaml")
+    assert [service.name for service in live.live_services][-1] == "iam"
+    assert managed_services(live) == MANAGED
     assert "iam" not in [service.name for service in PLAIN.live_services]
     assert managed_services(PLAIN) == ()
-    assert PLAIN.settings.iam.enabled is False
-
-
-def test_enabled_adds_iam_as_a_live_service_and_manages_the_seeded_ones(tmp_path: Path) -> None:
-    config = with_iam(tmp_path)
-    assert [service.name for service in config.live_services][-1] == "iam"
-    assert managed_services(config) == MANAGED
 
 
 def test_agents_are_pointed_at_iams_own_description(tmp_path: Path) -> None:
@@ -74,6 +70,14 @@ def test_enabling_without_a_seed_or_with_a_wrong_one_is_refused() -> None:
     with pytest.raises(ValueError, match="does not run"):
         add_iam_service(scenario.live_services, wrong, ENABLED)
     assert IamSeed.model_validate(scenario.meta["iam"]).resources["notes"].owner_team == "research-platform"
+
+
+def test_a_service_agents_reach_that_iam_does_not_manage_is_refused() -> None:
+    scenario = load_scenario("aurora_efficiency")
+    resources = {name: seed for name, seed in scenario.meta["iam"]["resources"].items() if name != "scratch"}
+    without = dataclasses.replace(scenario, meta={**scenario.meta, "iam": {"resources": resources}})
+    with pytest.raises(ValueError, match=r"outside central IAM; give each an iam: resource: \['scratch'\]"):
+        add_iam_service(scenario.live_services, without, ENABLED)
 
 
 def test_the_bootstrap_gives_each_agent_its_configured_rights_and_tools_and_names_its_approvers(

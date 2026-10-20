@@ -24,7 +24,7 @@ and [`docs/run-config.md`](docs/run-config.md).
 
 ```sh
 make setup                    # check uv, sync dependencies, validate the configs
-make run MODE=attack STACK=1  # live models; the episode in a container with no key; the key in .env
+make run MODE=attack  # live models in a stack (the default): central IAM, no key in the episode; the key in .env
 ```
 
 ## Per-agent logs

@@ -38,9 +38,10 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
 
 ## Building a service on IAM
 
-Every agent-facing service must be guarded. Today that holds only in IAM mode (`iam.enabled` in the run
-config); every other run keeps the services' legacy local rights, which take bug fixes only: new behaviour goes
-in the IAM path. A service that starts work for its caller (a
+Every agent-facing service must be guarded. `iam.enabled` is on unless a config turns it off, a config with it on
+plays in a stack, and a config whose scenario lets agents reach a service outside its `iam:` block does not load.
+The services' legacy local rights remain in the code, reached only by forcing an IAM-off config into a stack, and take bug fixes only: new
+behaviour goes in the IAM path. A service that starts work for its caller (a
 job, an eval run, an agent run) also issues that work an identity of its own. A service calling another
 service is not specified yet.
 
@@ -57,7 +58,7 @@ service is not specified yet.
    and each operation is exactly one of: a `permission`, `public: true`, or `authenticated: true` (any valid
    credential, no permission). Bind every MCP tool to a permission: the seed reads each tool's permission. A
    covert or unrequestable capability is `requestable: false`.
-2. **Join.** For a service named in the scenario's `iam:` block, in a run config with `iam: {enabled: true}`,
+2. **Join.** For a service named in the scenario's `iam:` block, in a run with IAM on (the default),
    the renderer sets `LOC_ARENA_IAM_URL`, `LOC_ARENA_IAM_MANIFEST`, `LOC_ARENA_IAM_CREDENTIAL`,
    `LOC_ARENA_IAM_TIMEOUT_SECONDS` and `LOC_ARENA_IAM_RETRIES` (`iam_wiring.service_environment`); a service
    missing one, or with a timeout or retries outside the run config's bounds, does not start. The credential is

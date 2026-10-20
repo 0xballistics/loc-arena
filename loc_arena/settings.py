@@ -247,14 +247,15 @@ class StackSettings(SettingsGroup):
 
 
 class IamSettings(SettingsGroup):
-    """Central IAM for a stack run's services (the run config's ``iam:`` block); off unless enabled.
+    """Central IAM for a stack run's services (the run config's ``iam:`` block); on unless turned off.
 
     The scalars are strict: a quoted ``"true"`` or ``"8000"`` in the YAML is an error, not a conversion.
     """
 
     enabled: StrictBool = Field(
-        default=False,
-        description="Run central IAM as a live service and put the scenario's ``iam:`` services under it.",
+        default=True,
+        description="Run central IAM as a live service and put the scenario's ``iam:`` services under it. "
+        "Only a stack run starts IAM, so an in-process run (the deterministic fixture) turns it off.",
     )
     service: Annotated[str, Field(strict=True, pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")] = Field(
         default="iam",

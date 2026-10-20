@@ -43,10 +43,12 @@ def _latest_bundle(logs_root: Path, run_slug: str) -> Path | None:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     robust = not args.minimal
-    if args.stack:
+    config = load_run_config(_config_path(args.run))
+    # Central IAM runs only in a stack, so a config with it on plays in one unless told otherwise; the episode
+    # container's own --play-only plays where it is.
+    if args.stack if args.stack is not None else config.settings.iam.enabled and not args.play_only:
         out = run_in_stack(args.run, mode=args.mode, seed=args.seed, robust=robust, logs=Path(args.out))
     else:
-        config = load_run_config(_config_path(args.run))
         instance_id = args.instance or secrets.token_hex(3)
         if args.play_only:
             run_directory = locate_run(config, args.mode, instance_id, Path(args.out))
@@ -196,7 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--out", default="logs")
     p_run.add_argument("--seed", type=int, default=None)
     p_run.add_argument("--minimal", action="store_true", help="attack reaches only the minimal landing")
-    p_run.add_argument("--stack", action="store_true", help="play in a container with no key (needs docker)")
+    p_run.add_argument(
+        "--stack",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="play in a container with no key (needs docker), or with --no-stack in this process; by default "
+        "in a stack exactly when the config turns central IAM on",
+    )
     p_run.add_argument("--play-only", action="store_true", help="play, and leave grading to the caller")
     p_run.add_argument(
         "--next-phase",
@@ -226,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     p_explore.set_defaults(func=_cmd_explore)
 
     p_sweep = sub.add_parser("sweep", help="run N honest + M attack episodes and aggregate a safety number")
-    p_sweep.add_argument("--run", default="aurora-efficiency")
+    p_sweep.add_argument("--run", default="aurora-efficiency.deterministic", help="a config with IAM off")
     p_sweep.add_argument("--honest", type=int, default=2)
     p_sweep.add_argument("--attack", type=int, default=2)
     p_sweep.add_argument("--out", default="logs")

@@ -1,6 +1,6 @@
 # Running episodes on Docker Compose
 
-`make run STACK=1` runs one episode as a Docker Compose project. Agent code never holds the OpenRouter key and
+`make run` runs one episode as a Docker Compose project, under central IAM. Agent code never holds the OpenRouter key and
 cannot touch the record the run is scored from. Each agent has its own sandbox and its own tools, and the
 scenario brings its own services.
 
@@ -89,8 +89,9 @@ agents:
   are offered no attack tool.
 - `run_tests` and `run_benchmark` are skills, not tools: scripts with a `SKILL.md` in the pack's `skills:`
   folder, which every sandbox mounts read-only at `/skills` and agents run with bash on their own checkout.
-- An in-process run (`make run` without `STACK=1`) serves each agent its own in-memory server over the same
-  services and offers no bash, so its agents run no code.
+- An in-process run (a config with `iam.enabled` off, such as the deterministic fixture) serves each agent its
+  own in-memory server over the same services and offers no bash, so its agents run no code. No IAM runs there,
+  so a config with IAM on is refused in process before anything is written.
 
 ## Records and events
 

@@ -24,7 +24,7 @@ from scenarios.loader import LiveService
 from loc_arena.board import SERVICE as BOARD_SERVICE
 from loc_arena.board import Board
 from loc_arena.board import build_server as build_board_server
-from loc_arena.config import RunConfig
+from loc_arena.config import ConfigError, RunConfig
 from loc_arena.forge.forge import Forge
 from loc_arena.forge.reviewer import Reviewer
 from loc_arena.forge.service import SERVICE as FORGE_SERVICE
@@ -68,6 +68,7 @@ from loc_arena.task import (
     _MutableClock,
     record_snapshot,
     resolve_scenario,
+    sandbox_url_template,
     seed_episode_checkout,
 )
 from loc_arena.tasks.main_task_grader import COMPANY_REPOS
@@ -174,6 +175,16 @@ def describe_live_services(
     return "\n".join([*lines, _CALL_A_SERVICE_DOC])
 
 
+def refuse_central_iam_in_process(config: RunConfig, remedy: str) -> None:
+    """Refuse ``config`` if it turns central IAM on and this process is not a stack's episode container.
+
+    IAM runs only in a stack run, so a run here would play on services nobody authorizes. ``remedy`` says what
+    to do instead; call this before anything is written.
+    """
+    if config.settings.iam.enabled and sandbox_url_template() is None:
+        raise ConfigError(f"central IAM runs only in a stack run, and this plays in this process: {remedy}")
+
+
 def connect_agent_tools(
     forge: Forge,
     board: Board,
@@ -202,14 +213,10 @@ def connect_agent_tools(
         FORGE_SERVICE: functools.partial(build_forge_server, forge),
         BOARD_SERVICE: functools.partial(build_board_server, board),
     }
-    # IAM runs only in a stack run, so in memory its inbox has no server.
-    iam = config.settings.iam
-    served = [
-        service
-        for service in config.live_services
-        if service.tools and not (iam.enabled and service.name == iam.service)
-    ]
+    if config.settings.iam.enabled:  # no IAM runs in memory, so no service here could be under it
+        raise ConfigError("central IAM runs only in a stack run: in memory no service would be under it")
     # Every other live service with tools is a recording service, from its name and tools.
+    served = [service for service in config.live_services if service.tools]
     for service in served:
         if service.name not in builders:
             builders[service.name] = functools.partial(

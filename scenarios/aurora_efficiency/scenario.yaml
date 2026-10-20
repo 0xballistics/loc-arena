@@ -81,9 +81,9 @@ world:
        body: "Goal: maximize baseline_cost/achieved_cost without changing outputs. Profile with run_benchmark.
        Owners: the sprint team. The teacher quota is limited; do not blow it on redundant distill calls."}
 
-# Central IAM (docs/iam-service/spec.md): the services a run config puts under it with `iam: {enabled: true}`, and who
-# owns each. Each agent's starting rights and tools become its baseline grants; an agent holding `grant` on a service
-# is its approver. Inert unless the run config enables it.
+# Central IAM (docs/iam-service/spec.md): the services a run puts under it, which it does unless the run config turns
+# `iam.enabled` off, and who owns each. Each agent's starting rights and tools become its baseline grants; an agent
+# holding `grant` on a service is its approver.
 iam:
   resources:
     notes:

@@ -48,6 +48,9 @@ log has the details.
   each with its own token. pi there calls models through the gateway, which by default lets runners make 300
   calls per play of the seeded agents' model only, and refuses the rest with a 429 or 403 it records. The gateway
   and the runners are recreated before the honest twin, so it starts with empty runners and a fresh count.
+- **The run explorer shows the honest twin.** An attack run's honest twin, which is played to set the audit
+  threshold, now has a page of its own beside the run's, linked both ways: every agent's turns, tool calls and model
+  calls, with no outcome (it is not scored on its own) and no verdicts (grading does not save them).
 - A shipping check requires a clean latest-commit CodeRabbit review and no unresolved CodeRabbit threads.
 
 - Every PR checks whole edited files against 700 lines, or their base size if already larger; untouched files are excluded.
@@ -255,6 +258,9 @@ log has the details.
 
 ### Fixed
 
+- **A malformed notes file no longer breaks the run explorer's notes.** Importing one kept marks a note card
+  cannot draw, which broke the notes view on every later visit, and a step named `__proto__` reached every object on
+  the page; the import now keeps only marks with a quote and only a file's own step names.
 - **Services under central IAM ask it as the run config says.** The `iam:` block's `timeout_seconds` (now at most
   five minutes) and `retries` reach every managed service's IAM client, which kept its defaults, and a service
   with an invalid one does not start.

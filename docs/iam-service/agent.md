@@ -58,17 +58,21 @@ service is not specified yet.
    credential, no permission). Bind every MCP tool to a permission: the seed reads each tool's permission. A
    covert or unrequestable capability is `requestable: false`.
 2. **Join.** For a service named in the scenario's `iam:` block, in a run config with `iam: {enabled: true}`,
-   the renderer sets `LOC_ARENA_IAM_URL`, `LOC_ARENA_IAM_MANIFEST` and `LOC_ARENA_IAM_CREDENTIAL`. The last is
-   the service's own credential: it carries the `iam` audience that `authorize` and `issue_workload` need, and
+   the renderer sets `LOC_ARENA_IAM_URL`, `LOC_ARENA_IAM_MANIFEST`, `LOC_ARENA_IAM_CREDENTIAL`,
+   `LOC_ARENA_IAM_TIMEOUT_SECONDS` and `LOC_ARENA_IAM_RETRIES` (`iam_wiring.service_environment`); a service
+   missing one, or with a timeout or retries outside the run config's bounds, does not start. The credential is
+   the service's own: it carries the `iam` audience that `authorize` and `issue_workload` need, and
    its principal is bound to the service's resource, so it decides for that resource only. An engine-module
-   service builds its `Guard` with `iam_wiring.guard_from_environment`; a service built from a scenario
+   service builds its `Guard` once with `iam_wiring.guard_from_environment` and hands it to both
+   `serving_options` and `build_service_app`; a service built from a scenario
    directory has no `loc_arena` and needs a `Dockerfile.iam` that copies in `meridian_iam`, as notes does.
 3. **Check at startup.** FastAPI: `integration.asgi.verify_app(guard, app)`, which also refuses a route
-   without the guard's dependency. MCP: `iam_wiring.check_served_tools`. Stdlib: `Guard.verify_routes(routes)`.
+   without the guard's dependency. MCP: `iam_wiring.build_service_app`. Stdlib: `Guard.verify_routes(routes)`.
    A route you forgot, or one you removed, stops the service.
 4. **Enforce before work.** FastAPI: `integration.asgi.dependency(guard)` on every route; it answers each
-   refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: `iam_wiring.serving_options`, whose
-   middleware turns a refusal or an IAM outage into a tool-error result, with no tool run. Stdlib:
+   refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: IAM verifies the credential of
+   every request, so an outage is a 503 with a JSON-RPC error saying so (`build_service_app`), and a refusal of
+   the tool is a tool-error result (`serving_options`); no tool runs either way. Stdlib:
    `Guard.check_http` raises, so the server maps `Unauthenticated` to 401, `AccessDenied` to 403 with its
    `guidance`, and `Unavailable` to 503 with nothing run. Handlers take the principal from the decision, never
    from the body, and record its `decision_id` beside the outcome.

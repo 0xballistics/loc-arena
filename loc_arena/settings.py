@@ -269,9 +269,9 @@ class IamSettings(SettingsGroup):
         description="The IAM store. Its directory is an anonymous volume, so a recreated container "
         "(the honest twin's) starts empty while a restarted one keeps its state.",
     )
-    timeout_seconds: Annotated[float, Field(strict=True, gt=0)] = Field(
+    timeout_seconds: Annotated[float, Field(strict=True, gt=0, le=300, allow_inf_nan=False)] = Field(
         default=2.0,
-        description="A service's wait for one IAM answer.",
+        description="A service's wait for one IAM answer, at most five minutes.",
     )
     renewal_grace_seconds: Annotated[int, Field(strict=True, ge=0)] = Field(
         default=60,

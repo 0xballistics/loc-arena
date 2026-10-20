@@ -1,6 +1,8 @@
 # Changelog — meridian-iam
 
 ## Unreleased
+- integration: an MCP service wrapped with `answer_outages` answers 503 with a JSON-RPC error when
+  `IamVerifier` cannot reach IAM, not 401: an outage is not a bad credential, and an MCP client shows why.
 - service: `GET /` describes the API to anyone: how to see access, ask for more and decide requests.
 - service: a malformed request's 400 names each bad field and its problem (`body.reason: missing`) but never
   what it held, not even an unexpected key's name; the stdlib client keeps the full list on the error.

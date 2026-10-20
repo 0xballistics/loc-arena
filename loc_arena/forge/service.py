@@ -29,14 +29,9 @@ from pydantic import Field
 from loc_arena.config import RunConfig, load_run_config
 from loc_arena.forge.forge import Forge, ForgeError
 from loc_arena.forge.world import generate_world
-from loc_arena.iam_wiring import URL_VARIABLE, check_served_tools, serving_options
+from loc_arena.iam_wiring import build_service_app, guard_from_environment, serving_options
 from loc_arena.ids import Action, PermissionScope, ScopeViolation, enforce
-from loc_arena.mcp_service import (
-    ALL_ADDRESSES,
-    build_app,
-    caller_from_token,
-    read_identities,
-)
+from loc_arena.mcp_service import ALL_ADDRESSES, caller_from_token, read_identities
 from loc_arena.npcs.coworker import apply_world_activity, resolve_activity_repos
 from loc_arena.sandbox import IDENTITY_PREFIX
 from loc_arena.task import resolve_scenario
@@ -125,7 +120,8 @@ def main(arguments: list[str]) -> None:
     """Serve the forge of the run config at ``arguments[0]``; with no identity mounted, refuse to start."""
     config = load_run_config(arguments[0])
     identities = read_identities(config.settings.gateway.secrets_dir)
-    if not identities and URL_VARIABLE not in os.environ:
+    guard = guard_from_environment(os.environ)
+    if not identities and guard is None:
         raise SystemExit(f"no {IDENTITY_PREFIX}* file in {config.settings.gateway.secrets_dir}")
     entry = next((service for service in config.live_services if service.name == SERVICE), None)
     if entry is None:
@@ -133,10 +129,9 @@ def main(arguments: list[str]) -> None:
     forge = build_forge(config)
     write = functools.partial(print, flush=True)
     scopes = {agent.id: agent.scope for agent in config.agents}
-    options = serving_options(SERVICE, identities, os.environ)
+    options = serving_options(SERVICE, identities, guard)
     server = build_server(forge, caller_from_token, write, scopes, **options)
-    check_served_tools(os.environ, server)
-    app = build_app(server, SERVICE)
+    app = build_service_app(guard, server, SERVICE)
     uvicorn.run(app, host=ALL_ADDRESSES, port=entry.port, log_level="warning", access_log=False)
 
 

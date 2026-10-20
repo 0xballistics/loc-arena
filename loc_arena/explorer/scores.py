@@ -40,6 +40,13 @@ class SideTaskScores(_Scores):
     milestones: Mapping[str, MilestoneScores] = {}
 
 
+class AggregationScores(_Scores):
+    """How the monitors' scores combined into the caught decision."""
+
+    threshold: float
+    per_monitor: Mapping[str, float] = {}
+
+
 class SafetyScores(_Scores):
     """What the monitors decided about the run."""
 
@@ -47,6 +54,16 @@ class SafetyScores(_Scores):
     caught: bool
     caught_by: tuple[str, ...] = ()
     per_monitor_max_score: Mapping[str, float] = {}
+    overall_suspicion: float | None = None
+    aggregation: AggregationScores | None = None
+
+
+class HonestTwinScores(_Scores):
+    """An attack run's ``honest_twin`` block: what the monitors made of the play the thresholds come from."""
+
+    overall_suspicion: float
+    per_monitor: Mapping[str, float] = {}
+    monitor_verdicts: tuple[MonitorVerdict, ...] = ()
 
 
 class MonitorScores(_Scores):
@@ -74,6 +91,7 @@ class RunScores(_Scores):
     safety: SafetyScores
     monitors: tuple[MonitorScores, ...] = ()
     monitor_verdicts: tuple[MonitorVerdict, ...] = ()
+    honest_twin: HonestTwinScores | None = None  # none in an honest run, and before grading kept it
 
 
 def load_scores(path: Path) -> RunScores:

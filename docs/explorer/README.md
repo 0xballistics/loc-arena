@@ -26,10 +26,16 @@ on (the default). A folder's index also lists a run without one, with no link to
 
 An attack run also plays its honest twin, and the Inspect log holds it as a second sample (`honest_cal`). Each such
 run gets a second page beside its own, `<run_name>__honest_twin.html` (`explorer__honest_twin.html` for a single
-bundle), linked both ways from the header bar. It is the twin's transcript, every agent in its lane, and nothing
-else: the twin is played to set the audit threshold, so it has no outcome or side-task evidence of its own (the run's
-page has those). Grading does not save its monitor verdicts, and the page does not yet pair its model calls with the
-gateway's record, so it shows neither, and says so.
+bundle). **Attack play | Honest twin** in the top bar switches between them, keeping the view and filters. The twin's
+page is its transcript with its own verdicts, which grading keeps in `scores.json`'s `honest_twin`, and its model
+reasoning. Every step there scored above the threshold is a false alarm. It has no outcome or side-task evidence of
+its own: the twin is played to set the audit threshold. Its **Monitors on the twin** view, and a section of the run's
+**Outcome and monitors**, set each monitor's score on the run beside its score on the twin, and the run's overall
+suspicion beside the twin's, which is the bar the run is caught above. A bundle graded before grading kept the twin's
+verdicts shows its twin without them, and says so.
+
+A pill with a ring is a verdict exactly at the audit threshold: one of the twin's scores that set it, so not a flag,
+but not clear either.
 
 ## All runs
 

@@ -28,7 +28,7 @@ LIVE_TRACED = dataclasses.replace(
 PAGE_DATA = re.compile(r'<script id="data" type="application/json">(.*?)</script>', re.S)
 # The replies a stack run's gateway recorded, as OpenRouter returned them, each with the model's reasoning:
 # agent-main's first turn, serving-agent's first turn without reasoning, a reply no call of the run received,
-# and the coworker's "ok" twice, the second time to a later call outside the run, with different reasoning.
+# and the coworker's "ok" twice, the second time to the honest twin's same call (it played after the run).
 RECORDED_REPLIES = (
     (
         {
@@ -61,7 +61,7 @@ RECORDED_REPLIES = (
         None,
     ),
     ({"content": "a reply no call of this run received"}, "reasoning of another run"),
-    ({"content": "ok"}, "reasoning of the later call"),
+    ({"content": "ok"}, "the twin's reasoning"),
 )
 
 
@@ -235,7 +235,7 @@ def test_a_folder_pages_the_honest_twin_beside_the_run_and_links_them_both_ways(
     assert (run["run"]["play"], twin["run"]["play"]) == ("episode", TWIN_PLAY)
     assert run["run"]["peer"] == twin_path.name and twin["run"]["peer"] == run_path.name
     assert twin["outcome"] is None and run["outcome"] is not None
-    assert twin["verdicts"] == [] and twin["monitors"] == []
+    assert twin["monitors"] == []  # the monitor rows describe the run's play
     assert twin["steps"] and twin["lanes"]
     assert twin["run"]["audit_threshold"] == run["run"]["audit_threshold"]
 
@@ -248,14 +248,56 @@ def test_the_twins_page_is_the_twins_own_play_not_the_runs(traced_bundle: Path) 
     assert (twin.run.name, twin.run.mode) == (run.run.name + "__honest_twin", "honest")
 
 
-def test_the_twin_borrows_no_reasoning_from_the_runs_call_log(traced_bundle: Path, tmp_path: Path) -> None:
+def test_the_twins_calls_pair_after_the_runs_so_a_reply_both_share_goes_to_the_run_first(
+    traced_bundle: Path,
+    tmp_path: Path,
+) -> None:
     bundle = _stack_bundle(traced_bundle, tmp_path)
 
-    run = build_run_page(bundle, ExplorerSettings())
     twin = build_run_page(bundle, ExplorerSettings(), play=TWIN_PLAY)
 
-    assert _reasoning_by_step(run)  # the recorded replies pair to the run's own events...
-    assert _reasoning_by_step(twin) == {}  # ...and the call log's seqs are the run's, so the twin takes none
+    assert _reasoning_by_step(twin) == {f"{WORLD}/-1": "the twin's reasoning"}
+
+
+def test_the_twins_page_shows_the_twins_own_verdicts_not_the_runs(traced_bundle: Path) -> None:
+    scores = json.loads((traced_bundle / "scores.json").read_text())
+
+    twin = build_run_page(traced_bundle, ExplorerSettings(), play=TWIN_PLAY)
+
+    shown = sorted((v.monitor, v.score, v.reason) for v in twin.verdicts)
+    assert shown == sorted(
+        (v["monitor"], v["score"], v["reason"]) for v in scores["honest_twin"]["monitor_verdicts"]
+    )
+    assert shown != sorted((v["monitor"], v["score"], v["reason"]) for v in scores["monitor_verdicts"])
+
+
+def test_both_pages_hold_the_run_to_the_bar_its_honest_twin_set(traced_bundle: Path) -> None:
+    safety = json.loads((traced_bundle / "scores.json").read_text())["safety"]
+
+    run = build_run_page(traced_bundle, ExplorerSettings())
+    twin = build_run_page(traced_bundle, ExplorerSettings(), play=TWIN_PLAY)
+
+    assert run.calibration is not None and run.calibration == twin.calibration
+    assert (run.calibration.run_overall, run.calibration.bar) == (
+        safety["overall_suspicion"],
+        safety["aggregation"]["threshold"],
+    )
+    assert run.calibration.twin_overall == run.calibration.bar  # one twin: its own overall is the bar
+
+
+def test_a_bundle_graded_before_the_twins_scores_were_kept_shows_the_twin_without_them(
+    traced_bundle: Path,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle"
+    shutil.copytree(traced_bundle, bundle)
+    scores = json.loads((bundle / "scores.json").read_text())
+    del scores["honest_twin"]
+    (bundle / "scores.json").write_text(json.dumps(scores))
+
+    twin = build_run_page(bundle, ExplorerSettings(), play=TWIN_PLAY)
+
+    assert (twin.verdicts, twin.calibration) == ((), None)
 
 
 def test_a_single_bundle_writes_the_twins_page_beside_its_own(traced_bundle: Path, tmp_path: Path) -> None:

@@ -260,8 +260,8 @@
     if (!incoming || !incoming.steps || typeof incoming.steps !== 'object') throw new Error('no `steps` object in that file');
     let added = 0, merged = 0;
     for (const [id, n] of Object.entries(incoming.steps)) {
-      if (!n || typeof n !== 'object') continue;
-      const mine = NOTES.steps[id];
+      if (!n || typeof n !== 'object' || id === '__proto__') continue;
+      const mine = Object.hasOwn(NOTES.steps, id) ? NOTES.steps[id] : null;  // never an inherited property
       if (!mine) { NOTES.steps[id] = { text: String(n.text || ''), marks: drawableMarks(n.marks), at: n.at || new Date().toISOString(), ...(n.read ? { read: true } : {}) }; added++; continue; }
       if (n.read) mine.read = true;
       const seen = new Set((mine.marks || []).map(m => m.id));

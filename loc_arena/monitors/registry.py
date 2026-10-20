@@ -10,6 +10,7 @@ holds structurally as well as by the CI check in ``tests/integration/test_firewa
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import queue
 import re
@@ -149,6 +150,8 @@ class MonitorVerdict:
 
 
 # A live monitor's ONLY route to a model: (monitor_name, prompt, temperature) -> completion (via the gateway).
+# Every call returns in bounded time (the provider's timeout and retries): a late async monitor's call is
+# waited on.
 MonitorModelCaller = Callable[[str, str, float], str]
 
 
@@ -373,13 +376,14 @@ class AsyncMonitorWorker:
     declared ``async`` yields the identical verdicts it would yield declared ``sync``. Robust: the producer
     never blocks (``feed`` is ``put_nowait`` on an unbounded queue), and a worker that hangs past its
     deadline or raises contributes NO verdicts and floors (``result`` returns ``([], True)``); it never
-    hangs or crashes the run.
+    hangs or crashes the run. Past its deadline it starts no model call and records nothing, and ``result``
+    returns once its call in flight has ended, so every call it made is on the record before grading ends.
     """
 
     def __init__(self, monitor: Monitor, context: MonitorContext, timeout_s: float) -> None:
         """Own a queue and a daemon thread (started here) for one monitor, joined under ``timeout_s``."""
         self._monitor = monitor
-        self._context = context
+        self._context = self._stoppable(context)
         self._timeout_s = timeout_s
         self._taps = monitor.taps
         # UNBOUNDED queue so ``put_nowait`` never raises for a normal run; a bounded variant would instead
@@ -389,8 +393,44 @@ class AsyncMonitorWorker:
         self._verdicts: list[MonitorVerdict] = []
         self._errored = False
         self.error_reason: str | None = None
+        self._calls = threading.Condition()  # guards the two fields below
+        self._in_flight = 0
+        self._stopped = False
         self._thread = threading.Thread(target=self._loop, name=f"monitor-{monitor.name}", daemon=True)
         self._thread.start()
+
+    def _stoppable(self, context: MonitorContext) -> MonitorContext:
+        """``context`` whose model caller and event sink go quiet once the worker is stopped."""
+        sink = context.event_sink
+
+        def record(kind: str, payload: dict[str, Any]) -> None:
+            with self._calls:
+                if not self._stopped:
+                    sink(kind, payload)
+
+        caller = context.model_caller
+        return dataclasses.replace(
+            context,
+            model_caller=caller and self._stoppable_call(caller),
+            event_sink=record,
+        )
+
+    def _stoppable_call(self, caller: MonitorModelCaller) -> MonitorModelCaller:
+        """``caller``, counting each call in flight and refusing new ones once the worker is stopped."""
+
+        def call(monitor_name: str, prompt: str, temperature: float) -> str:
+            with self._calls:
+                if self._stopped:
+                    raise ModelCallsStoppedError
+                self._in_flight += 1
+            try:
+                return caller(monitor_name, prompt, temperature)
+            finally:
+                with self._calls:
+                    self._in_flight -= 1
+                    self._calls.notify_all()
+
+        return call
 
     def feed(self, event: Event) -> None:
         """Hand one mirror event to the worker WITHOUT blocking the producer (``put_nowait``)."""
@@ -416,11 +456,14 @@ class AsyncMonitorWorker:
     def result(self) -> tuple[list[MonitorVerdict], bool]:
         """Join under the deadline; a timed-out (still alive) or raised worker floors to ``([], True)``.
 
-        A worker still alive after the bounded join is left as a dying daemon thread; the driver returns
-        regardless, so a slow/hung worker can never hang the run.
+        A worker still alive after the bounded join is stopped and left as a dying daemon thread, once its
+        model call in flight has ended: the provider's timeout and retries bound that call.
         """
         self._thread.join(timeout=self._timeout_s)
         if self._thread.is_alive():
+            with self._calls:
+                self._stopped = True
+                self._calls.wait_for(lambda: self._in_flight == 0)
             self.error_reason = "timeout"
             return [], True
         if self._errored:

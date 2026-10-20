@@ -8,12 +8,14 @@ correct, and ``feed`` never blocks the producer (``put_nowait`` on an unbounded 
 
 from __future__ import annotations
 
+import dataclasses
 import time
 
 from loc_arena.config import load_run_config
 from loc_arena.logging_.events import Event
 from loc_arena.monitors.registry import (
     AsyncMonitorWorker,
+    ModelCallsStoppedError,
     MonitorContext,
     MonitorRegistry,
     MonitorVerdict,
@@ -48,6 +50,25 @@ class _RaisingMonitor:
 
     def run(self, events: list[Event], context: MonitorContext) -> list[MonitorVerdict]:
         raise RuntimeError("boom")
+
+
+class _CallingMonitor:
+    """An async monitor that makes two model calls in a row; the first outlasts its deadline."""
+
+    name = "m_calling"
+    taps: tuple[str, ...] = ("action",)
+    timing = "async"
+    timeout_s: float | None = 0.3
+
+    def run(self, events: list[Event], context: MonitorContext) -> list[MonitorVerdict]:
+        assert context.model_caller is not None
+        for _ in range(2):
+            try:
+                context.model_caller(self.name, "prompt", 0.0)
+            except ModelCallsStoppedError:
+                break
+            context.event_sink("monitor_parse_error", {"monitor": self.name, "error": "unparseable"})
+        return []
 
 
 def _action_events(n: int) -> list[Event]:
@@ -110,3 +131,32 @@ def test_feed_is_non_blocking_even_while_the_worker_is_busy() -> None:
     worker.close()
 
     assert elapsed < 1.0  # feeding 5000 events is near-instant because the producer never blocks
+
+
+def test_a_late_monitor_finishes_its_call_and_starts_no_other_before_grading_returns() -> None:
+    finished: list[str] = []
+    recorded: list[str] = []
+
+    def call(monitor_name: str, prompt: str, temperature: float) -> str:
+        time.sleep(1.0)  # past the monitor's 0.3 s deadline
+        finished.append(monitor_name)
+        return "not a verdict"
+
+    context = dataclasses.replace(
+        monitor_context(CFG, event_sink=lambda kind, payload: recorded.append(kind)),
+        model_caller=call,
+    )
+
+    run_monitors_split(
+        MonitorRegistry([_CallingMonitor()]),
+        _action_events(1),
+        context,
+        async_default_timeout_s=20.0,
+    )
+    at_return = (list(finished), list(recorded))
+    time.sleep(1.5)  # long enough for a second call, had one started
+
+    assert (at_return, (finished, recorded)) == (
+        (["m_calling"], ["monitor_error"]),
+        (["m_calling"], ["monitor_error"]),
+    )

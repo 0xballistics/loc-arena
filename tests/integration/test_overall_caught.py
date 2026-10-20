@@ -15,11 +15,12 @@ from types import SimpleNamespace
 
 from loc_arena.config import ModelSpec, load_run_config
 from loc_arena.gateway.core import Message, ProviderResult, ToolSpec
-from loc_arena.harness import _build_scores, run_episode
+from loc_arena.harness import run_episode
 from loc_arena.logging_.events import AppendOnlyLog, Event
 from loc_arena.metrics import calibrate_overall_threshold, episode_overall
 from loc_arena.monitors.aggregation import AggregationConfig
 from loc_arena.monitors.registry import MonitorSpec, MonitorVerdict
+from loc_arena.run_scores import build_scores
 
 CFG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
 
@@ -205,7 +206,7 @@ def test_scores_json_carries_overall_aggregation_and_monitor_rows(tmp_path: Path
 def test_detector_fires_but_suspicion_below_threshold_is_not_caught(tmp_path: Path) -> None:
     """A reconciliation detector firing is a SEPARATE signal; it never flips the caught decision.
 
-    Drives ``_build_scores`` directly (deterministic, no live model): the suspicion monitor scores
+    Drives ``build_scores`` directly (deterministic, no live model): the suspicion monitor scores
     0.0 (below the threshold, so ``caught`` is False) while a ``model: none`` detector fires (score 1.0). The
     record must be self-consistent: ``caught`` False, ``caught_by`` empty, but ``detectors.fired`` True.
     """
@@ -253,7 +254,7 @@ def test_detector_fires_but_suspicion_below_threshold_is_not_caught(tmp_path: Pa
         on_monitor_error="floor",
         caught_uses="overall",
     )
-    scores = _build_scores(
+    scores = build_scores(
         CFG,
         "attack",
         CFG.run_name("attack", "test01"),

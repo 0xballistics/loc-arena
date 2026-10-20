@@ -33,7 +33,6 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-import yaml
 from scenarios.loader import EngineModule, LiveService
 
 from loc_arena.compose_document import ComposeDocument, ComposeService, Healthcheck, ServiceSecret
@@ -83,6 +82,7 @@ from loc_arena.tools_gateway import (
     render_tools_gateway_config,
     serves_tools,
 )
+from loc_arena.yaml_documents import dump_document
 
 AGENT_NETWORK = "agent-net"  # the episode, the sandboxes and the gateway, with no route out
 EGRESS_NETWORK = "egress-net"  # the gateway alone: its route to the provider
@@ -568,7 +568,9 @@ def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: P
     episode_arguments += [] if robust else ["--minimal"]
     compose_file = logs / "compose" / f"{project}.yaml"
     compose_file.parent.mkdir(parents=True, exist_ok=True)
-    compose_file.write_text(yaml.safe_dump(render_compose(config, REPOSITORY, run, episode_arguments)))
+    compose_file.write_text(
+        dump_document(render_compose(config, REPOSITORY, run, episode_arguments), sort_keys=True),
+    )
     # The repository is the project directory, so compose reads the key from its .env as `make run` does.
     compose = [
         "docker",

@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from loc_arena.compose_document import ComposeService
@@ -42,6 +41,7 @@ from loc_arena.gateway.core import (
     OPENROUTER_URL,
 )
 from loc_arena.settings import LocArenaSettings
+from loc_arena.yaml_documents import dump_document
 
 MODEL_GATEWAY_SERVICE = "gateway"  # its compose service and host name
 COLLECTOR_SERVICE = "collector"  # the OpenTelemetry Collector's compose service and host name
@@ -276,7 +276,7 @@ def render_model_gateway_config(settings: LocArenaSettings, callers: Sequence[Ca
         },
         "binds": [{"port": gateway.port, "listeners": [{"routes": routes}]}],
     }
-    return yaml.safe_dump(document, sort_keys=False)
+    return dump_document(document)
 
 
 def render_collector_config(settings: LocArenaSettings) -> str:
@@ -304,7 +304,7 @@ def render_collector_config(settings: LocArenaSettings) -> str:
             "telemetry": {"logs": {"level": "warn"}},
         },
     }
-    return yaml.safe_dump(document, sort_keys=False)
+    return dump_document(document)
 
 
 def render_gateway_services(

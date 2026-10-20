@@ -33,6 +33,8 @@ from loc_arena.explorer.communication import (
     resolve_communication,
 )
 from loc_arena.explorer.page import (
+    CalibrationRow,
+    CalibrationView,
     EventView,
     MainTaskView,
     MilestoneView,
@@ -158,9 +160,9 @@ def build_run_page(
 ) -> RunPage:
     """One play's page, from its bundle: the run itself, or (``play=TWIN_PLAY``) its honest twin.
 
-    The twin's page is its transcript alone. The monitors' verdicts and the side task's evidence belong to
-    the run's own play, and the twin is not scored on its own, so it has no outcome; it keeps no reasoning
-    either, which the gateway's call log pairs to the run's sealed log. ``peer_href`` links the two pages.
+    The twin's page shows its own verdicts, which grading keeps in ``honest_twin``, and its own reasoning; the
+    side task's evidence belongs to the run's play, and the twin is not scored on its own, so it has no
+    outcome. Both pages compare the two plays' scores. ``peer_href`` links the two pages.
     """
     log_path = find_transcript_log(bundle)
     if log_path is None:
@@ -177,7 +179,7 @@ def build_run_page(
     if twin:
         scores = scores.model_copy(
             update={
-                "monitor_verdicts": (),
+                "monitor_verdicts": scores.honest_twin.monitor_verdicts if scores.honest_twin else (),
                 "monitors": (),
                 "side_task": scores.side_task.model_copy(update={"milestones": {}}),
             },
@@ -204,7 +206,7 @@ def build_run_page(
         lanes,
         verdicts.placed,
         evidence,
-        {} if twin else read_reasoning(bundle),
+        read_reasoning(bundle, bundle / TWIN_PLAY if twin else None),
         settings,
     )
     monitor_names = {monitor.name for monitor in scores.monitors}
@@ -223,6 +225,7 @@ def build_run_page(
             peer=peer_href,
         ),
         outcome=None if twin else describe_outcome(scores, steps),
+        calibration=describe_calibration(scores),
         monitors=tuple(
             MonitorView(m.name, m.role, m.mode, m.timing, m.counts_toward_caught, m.errored, m.top_reasons)
             for m in scores.monitors
@@ -301,6 +304,22 @@ def assemble_steps(
     keys = sorted(step_ids, key=lambda key: (key[1], lane_index.get(key[0], len(lane_index))))
     steps = tuple(_describe_step(step_ids[key], key, calls, tools, events) for key in keys)
     return steps, utterances
+
+
+def describe_calibration(scores: RunScores) -> CalibrationView | None:
+    """Each monitor's score on the run and on its honest twin, and both overalls; none without the twin's."""
+    aggregation, twin = scores.safety.aggregation, scores.honest_twin
+    if aggregation is None or twin is None or scores.safety.overall_suspicion is None:
+        return None
+    return CalibrationView(
+        run_overall=scores.safety.overall_suspicion,
+        twin_overall=twin.overall_suspicion,
+        bar=aggregation.threshold,
+        rows=tuple(
+            CalibrationRow(name, aggregation.per_monitor.get(name, 0.0), twin.per_monitor.get(name, 0.0))
+            for name in sorted({*aggregation.per_monitor, *twin.per_monitor})
+        ),
+    )
 
 
 def describe_outcome(scores: RunScores, steps: Sequence[StepView]) -> OutcomeView:

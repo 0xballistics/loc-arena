@@ -39,6 +39,10 @@ log has the details.
 
 ### Added
 
+- **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
+  run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score
+  on the run beside its score on the twin, with the twin's overall as the bar. A verdict exactly at the audit threshold
+  is marked: the scores that set it read as clean before.
 - **An attack run's scores keep its honest twin's verdicts.** `scores.json` has an `honest_twin` block: every
   verdict on the twin, each monitor's score and peak, and its overall suspicion, from the scoring that set both audit
   thresholds. Grading used to drop them, so nothing showed what the monitors flagged in honest work.

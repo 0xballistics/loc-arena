@@ -190,11 +190,31 @@ class PageSettings:
 
 
 @dataclass(frozen=True)
+class CalibrationRow:
+    """One monitor's score on each play: its highest verdict, what the overall suspicion averages."""
+
+    monitor: str
+    run_score: float
+    twin_score: float
+
+
+@dataclass(frozen=True)
+class CalibrationView:
+    """The run's play against its honest twin, whose overall suspicion is the bar the run's is held to."""
+
+    run_overall: float
+    twin_overall: float
+    bar: float
+    rows: tuple[CalibrationRow, ...]
+
+
+@dataclass(frozen=True)
 class RunPage:
     """Everything one run's page shows."""
 
     run: RunView
     outcome: OutcomeView | None  # none for the honest twin: it is not scored, it sets the audit threshold
+    calibration: CalibrationView | None  # on both plays' pages when grading kept the twin's scores
     monitors: tuple[MonitorView, ...]
     lanes: tuple[str, ...]
     steps: tuple[StepView, ...]

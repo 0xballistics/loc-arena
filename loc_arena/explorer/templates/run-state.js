@@ -1,6 +1,8 @@
   const DATA = JSON.parse(document.getElementById('data').textContent);
   const RUN = DATA.run, OUT = DATA.outcome, STEPS = DATA.steps, VERDICTS = DATA.verdicts, MONITORS = DATA.monitors, LANES = DATA.lanes;
-  const IS_TWIN = RUN.play === 'honest_cal';  // the honest twin's page: its verdicts and reasoning are not on it
+  const IS_TWIN = RUN.play === 'honest_cal';  // the honest twin's page: it is not scored on its own
+  const CAL = DATA.calibration;  // the run against its honest twin, when grading kept the twin's scores
+  document.body.classList.toggle('twin', IS_TWIN);
   const THR = RUN.audit_threshold;  // the honest twin's page has no outcome of its own, but the same threshold
   const WORLD = 'World';
   const byId = new Map(STEPS.map(s => [s.id, s]));
@@ -83,7 +85,8 @@
   const flagged = s => s.peak != null && s.peak > THR;
   const levelOf = score => score == null ? 'none' : score > THR ? 'flag' : 'clean';
   const scoreText = v => v == null ? '·' : String(Math.round(v * 100) / 100);
-  const pill = score => `<span class="pill ${levelOf(score)}">${scoreText(score)}</span>`;
+  // A score equal to the threshold is one of the honest twin's that set it: not a flag, but not clear either.
+  const pill = score => `<span class="pill ${levelOf(score)}${score === THR ? ' at" title="at the audit threshold: one of the scores that set it' : ''}">${scoreText(score)}</span>`;
   const covertTags = tags => [...new Set(tags || [])].map(t => `<span class="tag covert">${esc(t)}</span>`).join('');
   const oneLine = t => String(t || '').replace(/\s+/g, ' ').trim();
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -319,10 +322,10 @@
     { id: 'transcript', label: 'Transcript', icon: 'grid' },
     { id: 'comms', label: 'Communication', icon: 'talk' },
     { id: 'steps', label: 'Search steps', icon: 'list' },
-    { id: 'monitors', label: 'Outcome and monitors', icon: 'shield' },
+    { id: 'monitors', label: IS_TWIN ? 'Monitors on the twin' : 'Outcome and monitors', icon: 'shield' },
     { id: 'notes', label: 'Your notes', icon: 'pencil', dialog: true },
     { id: 'method', label: 'How this was read', icon: 'help' },
-  ].filter(v => DATA.outcome || v.id !== 'monitors');  // the honest twin has no verdicts or outcome to show
+  ].filter(v => DATA.outcome || CAL || v.id !== 'monitors');  // a twin page without its saved scores has none to show
   function buildRail() {
     els.rail = el('railnav');
     // A page built from a folder of runs links back to the index of them all.
@@ -439,20 +442,23 @@
   function monitorCell(vs) {
     if (!vs.length) return '';
     const high = vs.filter(v => v.score > THR).sort((a, b) => b.score - a.score), low = vs.filter(v => v.score <= THR);
-    const max = low.length ? Math.max(...low.map(v => v.score)) : null;
-    return high.map(v => verdictCard(v, true)).join('') + (low.length ? `<div class="tmore">${low.length}${high.length ? ' more' : ''} at or below ${THR}${max ? `, highest ${scoreText(max)}` : ''}</div>` : '');
+    const max = low.length ? Math.max(...low.map(v => v.score)) : null, at = low.filter(v => v.score === THR).length;
+    return high.map(v => verdictCard(v, true)).join('') + (low.length ? `<div class="tmore">${low.length}${high.length ? ' more' : ''} at or below ${THR}${at ? `, ${at} at it` : max ? `, highest ${scoreText(max)}` : ''}</div>` : '');
   }
   function renderTbar() {
     const { main_task: mt, side_task: st, safety: sf, milestones = [] } = OUT || {};
     el('t-outcome').innerHTML = (!OUT ? [
-      `<span><b>honest twin</b>: played to set the audit threshold (<b>${esc(THR)}</b>); grading did not save its verdicts, and it has no score of its own &middot; <b>${STEPS.length}</b> steps</span>`,
+      `<span><b>honest twin</b>: played to set the audit threshold (<b>${esc(THR)}</b>)${VERDICTS.length ? '' : '; grading did not save its verdicts'}</span>`,
+      ...(VERDICTS.length ? [`<span><b class="flag">${plural(STEPS.filter(flagged).length, 'step')}</b> above it, each a false alarm; <b>${plural(VERDICTS.filter(v => v.score === THR).length, 'verdict')}</b> at it</span>`] : []),
+      ...(CAL ? [`<span>overall suspicion <b>${scoreText(CAL.twin_overall)}</b>, the bar the run&rsquo;s <b>${scoreText(CAL.run_overall)}</b> was held to</span>`, `<button class="linkish" data-to-view="monitors">monitors on the twin &rarr;</button>`] : []),
+      `<span><b>${STEPS.length}</b> steps</span>`,
     ] : [
       `<span>main task <b>${esc(mt.final_score)}</b>${mt.gate_passed ? '' : ` (gate failed: ${esc(mt.gate_reason || '?')})`}</span>`,
       `<span>side task <b class="covert">${st.landing_robust ? 'landed, robust' : st.landing_minimal ? 'landed, minimal' : 'not landed'}</b> (${milestones.filter(m => m.reached).length} of ${milestones.length} milestones)</span>`,
       `<span><b class="${sf.caught ? 'flag' : ''}">${sf.caught ? 'caught' : 'not caught'}</b>${sf.caught ? ` by ${esc(sf.caught_by.join(', '))}` : ''}</span>`,
       `<span>audit threshold <b>${esc(THR)}</b></span>`, `<span><b class="flag">${STEPS.filter(flagged).length}</b> steps flagged, <b class="covert">${STEPS.filter(s => s.covert.length).length}</b> covert</span>`,
       `<button class="linkish" data-to-view="monitors">outcome and monitors &rarr;</button>`,
-    ]).concat(RUN.peer ? `<a class="linkish" href="${esc(RUN.peer)}">${RUN.play === 'episode' ? 'honest twin' : 'the run'} &rarr;</a>` : []).join('');
+    ]).join('');
     el('t-outcome').querySelector('[data-to-view]')?.addEventListener('click', () => showView('monitors', { record: true }));
     const hidden = hiddenLanes();
     el('t-lanes').innerHTML = '<span class="help" style="margin-right:2px">lanes</span>' + LANES.map(l => `<button class="chip quiet" data-lane="${esc(l)}" aria-pressed="${!hidden.has(l)}" title="show or hide this lane">${esc(l)}</button>`).join('');

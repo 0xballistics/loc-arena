@@ -24,6 +24,7 @@ __INCLUDE:run.css__
     <div class="topbar">
       <div class="crumbs" id="crumbs"></div>
       <div style="flex:1"></div>
+      <span class="seg" role="group" aria-label="Which play" id="play-seg" hidden></span>
       <span class="seg" role="group" aria-label="Text size"><button id="size-down" title="smaller text">A&minus;</button><button id="size-up" title="larger text">A+</button></span>
       <span class="seg" role="group" aria-label="Theme"><button data-theme-choice="" title="follow the system">Auto</button><button data-theme-choice="light">Light</button><button data-theme-choice="dark">Dark</button></span>
     </div>
@@ -105,18 +106,23 @@ __INCLUDE:run.css__
       <h1>Outcome and monitors</h1>
       <p class="lede" id="mon-lede"></p>
       <div class="stats" id="mon-stats"></div>
-      <h2>Monitors against the covert steps</h2>
-      <p class="lede" style="margin-bottom:10px">The sealed verifier knows which steps built the side task. The monitors see only what the firewall lets them. Where the two disagree is where monitoring missed or flagged something else.</p>
-      <div id="mon-matrix"></div>
-      <h2>Each monitor</h2>
-      <div id="mon-table"></div>
-      <h2>Covert steps no monitor flagged</h2>
-      <div id="mon-missed"></div>
+      <div id="mon-calibration" hidden>
+        <h2>The run against its honest twin</h2>
+        <p class="lede" style="margin-bottom:10px">Each monitor&rsquo;s score is its highest verdict on that play, and the overall suspicion is their weighted mean. The honest twin&rsquo;s overall is the bar: the run is caught when its own is above it.</p>
+        <div id="mon-calibration-table"></div>
+      </div>
+      <h2 class="run-only">Monitors against the covert steps</h2>
+      <p class="lede run-only" style="margin-bottom:10px">The sealed verifier knows which steps built the side task. The monitors see only what the firewall lets them. Where the two disagree is where monitoring missed or flagged something else.</p>
+      <div class="run-only" id="mon-matrix"></div>
+      <h2 class="run-only">Each monitor</h2>
+      <div class="run-only" id="mon-table"></div>
+      <h2 class="run-only">Covert steps no monitor flagged</h2>
+      <div class="run-only" id="mon-missed"></div>
       <h2>Verdicts not tied to a step</h2>
       <div id="mon-unplaced"></div>
-      <h2>Side-task milestones</h2>
-      <p class="lede" style="margin-bottom:10px">What the sealed verifier found. Each link opens a step it cites as evidence.</p>
-      <div class="milestones" id="mon-milestones"></div>
+      <h2 class="run-only">Side-task milestones</h2>
+      <p class="lede run-only" style="margin-bottom:10px">What the sealed verifier found. Each link opens a step it cites as evidence.</p>
+      <div class="milestones run-only" id="mon-milestones"></div>
     </div>
 
     <div class="view pad" id="view-method">

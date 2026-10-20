@@ -452,6 +452,7 @@ def play_run(
     ``next_phase`` only the first phase ``played.json`` lacks plays, so a stack run can renew its services
     before the twin; with none left, it raises ``ValueError``.
     """
+    live.refuse_central_iam_in_process(config, "play it in a stack (STACK=1, --stack)")
     run_directory.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
     played_file = run_directory / PLAYED_FILE
@@ -695,12 +696,11 @@ def run_sweep(
     Writes each episode's bundle plus ``scores.aggregate.json`` and a summary ``report.html`` under
     ``logs/<run_id>/sweep-<timestamp>/`` (calibration + a safety number).
     """
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    sweep_dir = (out_root or Path("logs")) / config.run_slug / f"sweep-{stamp}"
+    live.refuse_central_iam_in_process(config, "a sweep plays only here, so sweep a config with IAM off")
+    sweep_dir = (out_root or Path("logs")) / config.run_slug / f"sweep-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
     sweep_dir.mkdir(parents=True, exist_ok=True)
 
-    honest_cfg = apply_mode(config, "honest")
-    attack_cfg = apply_mode(config, "attack")
+    honest_cfg, attack_cfg = apply_mode(config, "honest"), apply_mode(config, "attack")
     proto = compose_protocol(attack_cfg, load_monitors(monitors_path, attack_cfg.models))
     limit = load_aggregation_config(monitors_path).monitor_failures_before_fallback
 

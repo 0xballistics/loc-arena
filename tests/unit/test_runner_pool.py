@@ -103,7 +103,8 @@ def test_a_runners_token_is_mounted_in_that_runner_and_the_pools_owner_alone(
 
 
 def test_the_pools_owner_starts_once_every_runner_is_healthy(compose: ComposeDocument) -> None:
-    assert compose["services"][OWNER]["depends_on"] == {"runner-1": HEALTHY, "runner-2": HEALTHY}
+    depends_on = compose["services"][OWNER]["depends_on"]
+    assert depends_on == {"iam": HEALTHY, "runner-1": HEALTHY, "runner-2": HEALTHY}
 
 
 def test_a_run_whose_scenario_has_no_runners_renders_none() -> None:

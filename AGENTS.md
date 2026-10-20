@@ -17,9 +17,11 @@ requests from central IAM; they do not keep their own.
   shared IAM integration ([how to](docs/iam-service/agent.md)). Do not add a per-service identity store, a
   bearer-token comparison for agents, a rights table, a grant endpoint that keeps state, or an access-request
   queue.
-- The notes service, the agents service and the forge, board, jobs, scratch and coverage services still run
-  on their own rights by default, and have an IAM mode that `iam.enabled` in a run config switches on. Put new
-  behaviour in the IAM path; do not extend the local one.
+- The notes service, the agents service and the forge, board, jobs, scratch and coverage services run under
+  IAM in every stack run: `iam.enabled` is on unless a run config turns it off, which only the in-process
+  deterministic fixture does. Their legacy local rights remain in the code until they are deleted. Put new
+  behaviour in the IAM path; do not extend the local one. A config whose scenario lets agents reach a service
+  outside its `iam:` block does not load.
 - `company/meridian-*` repos are what the agents edit, and they must not import `meridian_iam`: take a
   protocol and let the engine supply the implementation (the guide shows how).
 - [`docs/iam-service/spec.md`](docs/iam-service/spec.md), section 11, says what is under IAM and what is not.
@@ -50,7 +52,7 @@ Component specs cannot weaken the contract's isolation, authorization or evidenc
 | `loc_arena/recorded_events.py` | after play, before grading: the events monitors read, built from the services' records |
 | `loc_arena/logging_/` | the sealed and mirror event logs, the per-agent Inspect export, `transcript.html`, `report.html` |
 | `loc_arena/explorer/` | the run explorer behind `make explore` |
-| `loc_arena/episode_stack.py`, `Dockerfile` | `STACK=1`: the episode in a container with no key or internet, beside the gateway and its Collector, a sandbox per agent and the scenario's live services; its compose file is rendered from the `gateway:` and `stack:` settings |
+| `loc_arena/episode_stack.py`, `Dockerfile` | `make run`'s default stack: the episode in a container with no key or internet, beside the gateway and its Collector, a sandbox per agent and the scenario's live services; its compose file is rendered from the `gateway:` and `stack:` settings |
 | `loc_arena/stack_play.py` | a stack run's two plays in one container, the services renewed between them, and each log copied out once |
 | `loc_arena/tools_gateway.py` | the config of agentgateway, which puts every live service with tools on one MCP route and offers each agent the tools its `sandbox: tools:` lists |
 | `sandbox_server/`, `loc_arena/sandbox.py` | each sandbox container's command server, where an agent's code runs in a stack run, a package that imports nothing of the harness; the episode's clients of them |
@@ -58,10 +60,10 @@ Component specs cannot weaken the contract's isolation, authorization or evidenc
 | `configs/` | the run config (`aurora-efficiency.yaml`), model routing, monitors and their prompts |
 | `scenarios/aurora_efficiency/` | the scenario pack: `scenario.yaml`, main-task scorer (`main.py`), side-task verifier (`side.py`), the scripted policy's moves (`scripted/`), sealed grader fixture (`reference/`), live services (`services/`), the skills every sandbox mounts (`skills/`) |
 | `company/meridian-*/` | the seven company repos the agents under test work on, each with its own tests |
-| `company/meridian-iam/`, `loc_arena/iam_*.py`, `docs/iam-service/` | central IAM: a platform package (not one of the seven; never in the agents' checkout), its stack wiring, and its spec and guide; off unless a run config sets `iam.enabled` |
+| `company/meridian-iam/`, `loc_arena/iam_*.py`, `docs/iam-service/` | central IAM: a platform package (not one of the seven; never in the agents' checkout), its stack wiring, and its spec and guide; on unless a run config turns `iam.enabled` off |
 | `tests/unit/`, `tests/integration/` | the engine's test suite |
 | `docs/agent-log/` | per-agent logging: `spec.md` (what it guarantees) and `agent.md` (how to work on it) |
-| `docs/iam-access-requests/` | the notes service's legacy local access requests, the default until a run config sets `iam.enabled`: `spec.md` (implemented contract and limits) and `agents.md` (how to fix it) |
+| `docs/iam-access-requests/` | the notes service's legacy local access requests, which no run uses now that IAM is the default: `spec.md` (implemented contract and limits) and `agents.md` (how to fix it) |
 | `docs/isolation/README.md`, `docs/run-config.md` | how a stack run isolates agents and wires their tools and services; the run config's keys and settings |
 | `docs/explorer/README.md` | every view of the run explorer, with screenshots |
 | `CHANGELOG.md` | what each system does for a run and how that changed, under Unreleased until a release |
@@ -76,11 +78,13 @@ make setup        # check uv (Python 3.12), sync dependencies, validate the conf
 make gates        # ruff, ruff format --check, ty, pytest: run before every push (CI runs it too)
 uv run python -m loc_arena.cli run --run aurora-efficiency.deterministic --out /tmp/runs   # offline, ~10 s, no spend
 uv run python -m loc_arena.cli grade --run aurora-efficiency "$EPISODE_DIR"   # grade a played episode again from its snapshot.json
-make run MODE=attack STACK=1   # live models: the episode in a container with no key; the key in .env
+make run MODE=attack           # live models in a stack (the default): no key in the episode; the key in .env
 ```
 
-The deterministic config is a test fixture for the engine; its scores are not results. `make run` without
-`STACK=1` runs in this process, where the agents' code can read local files.
+The deterministic config is a test fixture for the engine; its scores are not results. A run plays where its config
+needs: in a stack when central IAM is on, and in this process when it is off (the deterministic fixture), where the
+agents' code can read local files and no IAM runs. `STACK=1|0` (`--stack`, `--no-stack`) forces either; a config
+with IAM on is refused in this process.
 
 ## Rules
 

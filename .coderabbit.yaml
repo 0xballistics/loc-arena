@@ -292,7 +292,10 @@ reviews:
           agent secrets, a table of rights or grants, a grant or revoke endpoint that keeps local state, or a
           queue of access requests. Also fail if it adds behaviour to a service's legacy local rights or
           access requests (the notes queue in docs/iam-access-requests/, the agents service's AccessControl)
-          instead of its IAM mode. Judge each mechanism on its own: going through IAM for one operation does
+          instead of its IAM mode. Fail if it adds an agent-facing service (a scenario service with rights or
+          tools) without, in the same diff, the manifest it ships and its resource in the scenario's iam: block,
+          or turns iam.enabled off in a run config that plays in a stack (only the in-process deterministic
+          fixture turns it off). Judge each mechanism on its own: going through IAM for one operation does
           not excuse a local mechanism added for another. The one exception is a pull request that says why
           that service cannot use IAM. Pass if the diff adds none of these: it goes through the IAM
           integration (docs/iam-service/agent.md), or only fixes a bug in the existing local path without

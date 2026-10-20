@@ -31,7 +31,7 @@ from loc_arena.episode_stack import (
 from loc_arena.gateway import core
 from loc_arena.harness import apply_mode
 from loc_arena.recording_service import COVERT_TOOL_NAMES
-from loc_arena.settings import GatewaySettings, LocArenaSettings, StackSettings
+from loc_arena.settings import GatewaySettings, IamSettings, LocArenaSettings, StackSettings
 from loc_arena.stack_play import renew_services
 from loc_arena.task import SANDBOX_URL_VARIABLE, TOOLS_URL_VARIABLE
 from loc_arena.tools_gateway import TOOLS_GATEWAY_CONFIG_VARIABLE, render_tools_gateway_config
@@ -94,7 +94,7 @@ services:
 def render(settings: LocArenaSettings | None = None, *, policy: str = "scripted") -> ComposeDocument:
     config = dataclasses.replace(
         SCRIPTED_CONFIG,
-        settings=settings or LocArenaSettings(),
+        settings=(settings or LocArenaSettings()).model_copy(update={"iam": IamSettings(enabled=False)}),
         policy=policy,
         agents=TWO_AGENTS,
         live_services=(),
@@ -123,7 +123,7 @@ def render_live(
 ) -> ComposeDocument:
     config = dataclasses.replace(
         SCRIPTED_CONFIG,
-        settings=settings or LocArenaSettings(),
+        settings=(settings or LocArenaSettings()).model_copy(update={"iam": IamSettings(enabled=False)}),
         agents=WITH_RIGHTS_AND_WITHOUT,
         live_services=services,
     )
@@ -131,7 +131,8 @@ def render_live(
 
 
 def render_tools(settings: LocArenaSettings | None = None) -> ComposeDocument:
-    config = dataclasses.replace(TOOLS_CONFIG, settings=settings or LocArenaSettings())
+    legacy = (settings or LocArenaSettings()).model_copy(update={"iam": IamSettings(enabled=False)})
+    config = dataclasses.replace(TOOLS_CONFIG, settings=legacy)
     return render_compose(config, REPOSITORY, "a-run", ["--mode", "honest"])
 
 
@@ -876,13 +877,11 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         [v for v in identities.values() if v in written],
     ) == (
         [
-            *(
-                f"LOC_ARENA_IDENTITY_{service}_{agent}"
-                for service in ("AGENTS", "BOARD", "COVERAGE", "FORGE", "JOBS", "NOTES", "SCRATCH")
-                for agent in AURORA_AGENTS
-            ),
+            f"LOC_ARENA_IDENTITY_{service}_{agent}"
+            for service in ("AGENTS", "BOARD", "COVERAGE", "FORGE", "IAM", "JOBS", "NOTES", "SCRATCH")
+            for agent in AURORA_AGENTS
         ],
-        49,
+        56,
         [],
     )
 
@@ -1026,6 +1025,7 @@ def test_a_stack_run_copies_each_live_services_log_into_its_run_directory_before
                 "board.log",
                 "coverage.log",
                 "forge.log",
+                "iam.log",
                 "jobs.log",
                 "notes.log",
                 "scratch.log",
@@ -1061,7 +1061,7 @@ def test_an_attack_stack_run_drains_the_record_then_renews_every_container_but_t
 
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
-    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "agentgateway")
+    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "iam", "agentgateway")
     between = [
         command[:2] if command[0] == "cp" else command for command in commands[plays[0] + 1 : plays[1]]
     ]

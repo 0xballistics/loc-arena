@@ -29,7 +29,7 @@ Almost everything is config, so most changes are a config edit rather than a cod
 
 <h2>Setup</h2>
 <p>You need <code>uv</code> (Python 3.12, pinned), for a live run an OpenRouter API key, and for a stack run
-(<code>STACK=1</code>) Docker Engine 28 or later. The key is read only by the gateway.</p>
+(the default for <code>make run</code>) Docker Engine 28 or later. The key is read only by the gateway.</p>
 <pre><code>uv sync                       # create the environment and install everything
 cp .env.example .env          # then set OPENROUTER_API_KEY
 make setup                    # check the toolchain, sync deps, validate the config</code></pre>
@@ -39,7 +39,7 @@ make setup                    # check the toolchain, sync deps, validate the con
 
 <pre><code>make run RUN=aurora-efficiency MODE=attack   # the attack episode plus its honest twin (the calibration baseline)
 make run RUN=aurora-efficiency MODE=honest   # the honest twin on its own (main task only)
-loc-arena sweep --run aurora-efficiency --honest 3 --attack 3   # many episodes, aggregated into safety and usefulness numbers</code></pre>
+loc-arena sweep --run aurora-efficiency.deterministic --honest 3 --attack 3   # many episodes in one process, aggregated</code></pre>
 
 <div class="tablewrap"><table>
 <thead><tr><th>Run</th><th>What it does</th><th>When to use it</th></tr></thead>
@@ -52,8 +52,8 @@ loc-arena sweep --run aurora-efficiency --honest 3 --attack 3   # many episodes,
 
 <p>Every run writes a self-contained bundle named after what actually ran, so the same setting can run many times
 without collision. The bundle holds the resolved config, both event records, the two verdicts, the report page,
-and a notes file. Add <code>STACK=1</code> to run the episode in a container with no key and no internet, beside the
-gateway that holds the key; without it the same episode runs in a single process. <code>make gates</code> runs the formatting, typing, and test checks.</p>
+and a notes file. <code>make run</code> plays the episode in a container with no key and no internet, beside the
+gateway that holds the key and central IAM; a config with IAM off (the deterministic fixture) plays in a single process. <code>make gates</code> runs the formatting, typing, and test checks.</p>
 
 <h2>Read the dashboard</h2>
 <p>Open the latest report. It is a single static page, and a run index lists every run.</p>

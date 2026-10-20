@@ -557,7 +557,8 @@ def load_run_config(run_path: str | Path, configs_dir: str | Path | None = None)
         policy=document.policy,
         agent_transcript=document.logging.agent_transcript,
         agent_loop=document.agent_loop,
-        raw=source.yaml_data,
+        # Whether IAM is on is written out even as the default, so a changed default cannot change a replay.
+        raw={**source.yaml_data, "iam": {**source.yaml_data.get("iam", {}), "enabled": settings.iam.enabled}},
         model_providers=models_file.providers,
         live_services=live_services,
     )

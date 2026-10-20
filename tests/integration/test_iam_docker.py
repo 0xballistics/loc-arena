@@ -1,8 +1,9 @@
 """Central IAM in real containers: deny, request, approve, retry, restart, and the honest twin's fresh store.
 
-Brings up the rendered compose project's ``iam``, ``notes`` and ``agents`` services (the stack image is built
-first, so it holds this code) and drives them from inside the IAM container with ``python -c`` scripts, as the
-images have no curl and agent-net is isolated, so the host cannot reach a service. A request is sent as an
+Brings up the rendered compose project's ``iam``, ``notes`` and ``agents`` services, the MCP tool services and
+the tools gateway (the stack image is built first, so it holds this code) and drives them from inside the IAM
+container with ``python -c`` scripts, as the images have no curl and agent-net is isolated, so the host cannot
+reach a service. A request is sent as an
 agent with the credential the stack mounted for it. Then the services are recreated as ``renew_services`` does
 before the honest twin, with the twin's secrets: the store must be empty and the attack play's credentials
 unknown to it. Skipped unless the Docker daemon answers; the rest of the stack is covered by the unit tests
@@ -20,13 +21,20 @@ from typing import Any
 import pytest
 import yaml
 from loc_arena.config import load_run_config
-from loc_arena.episode_stack import REPOSITORY, _issue_secrets, issue_identities, render_compose
+from loc_arena.episode_stack import (
+    REPOSITORY,
+    _issue_secrets,
+    issue_identities,
+    render_compose,
+    token_variable,
+)
+from loc_arena.tools_gateway import MCP_PATH, TOOLS_GATEWAY_SERVICE
 
 from tests.integration._docker_support import image_exists
 
 RUN = "aurora-efficiency.iam"
 CONFIG = load_run_config(REPOSITORY / "configs" / f"{RUN}.yaml")
-SERVICES = ["iam", "notes", "agents"]
+SERVICES = ["iam", "notes", "agents", "forge", "board", "jobs", "scratch", "coverage", TOOLS_GATEWAY_SERVICE]
 PROJECT = "locarena-iamtest"
 TIMEOUT = 600
 
@@ -47,6 +55,14 @@ try:
         print(json.dumps([reply.status, reply.read().decode()]))
 except urllib.error.HTTPError as error:
     print(json.dumps([error.code, error.read().decode()]))
+"""
+
+# Run in the IAM container (the engine image): calls a tool with the MCP client the agents use.
+TOOL_CALL = """
+import json, sys
+from loc_arena.scaffold.mcp_client import McpTools, over_http
+url, token, tool, arguments = sys.argv[1:5]
+print(json.dumps(McpTools(lambda: over_http(url, token, 30)).call(tool, json.loads(arguments))))
 """
 
 
@@ -94,6 +110,28 @@ class Stack:
             return status, json.loads(text)
         except json.JSONDecodeError:
             return status, text
+
+    def call_tool(self, url: str, token: str, tool: str, arguments: dict[str, str]) -> dict[str, Any]:
+        """Call ``tool`` over MCP at ``url`` with ``token``: its result, or ``{"error": ...}``."""
+        done = self.run(
+            "exec",
+            "-T",
+            "iam",
+            "python",
+            "-c",
+            TOOL_CALL,
+            url,
+            token,
+            tool,
+            json.dumps(arguments),
+        )
+        assert done.returncode == 0, done.stderr[-2000:]
+        return json.loads(done.stdout.strip().splitlines()[-1])
+
+    def read_records(self, service: str) -> list[dict[str, Any]]:
+        """The tool-call record ``service`` has written to its output so far."""
+        lines = self.run("logs", "--no-log-prefix", service).stdout.splitlines()
+        return [json.loads(line) for line in lines if line.startswith("{")]
 
 
 @pytest.fixture(scope="module")
@@ -284,3 +322,33 @@ def test_a_services_credential_for_an_agent_reaches_that_services_resource_and_n
         "scoped-4",
     )
     assert ok[0] == 200  # the agents service's own credential for agent-main does reach agents
+
+
+def test_a_tool_call_through_the_tools_gateway_runs_under_an_iam_decision(stack: Stack) -> None:
+    gateway = f"http://{TOOLS_GATEWAY_SERVICE}:{CONFIG.settings.stack.tools_gateway_port}{MCP_PATH}"
+    key = stack.play[token_variable("agent-main")]  # the sandbox token agent-main's calls carry
+    sent = stack.call_tool(gateway, key, "send", {"to": "serving-agent", "body": "under-iam"})
+    assert "error" not in sent, sent
+    (record,) = [
+        r for r in stack.read_records("board") if r["gen_ai.tool.call.arguments"].get("body") == "under-iam"
+    ]
+    assert record["gen_ai.agent.name"] == "agent-main"
+    assert record["iam.decision.id"]  # IAM decided the call behind the gateway, and the record names how
+
+
+def test_a_direct_tool_call_without_the_grant_is_refused_by_iam_and_runs_nothing(stack: Stack) -> None:
+    credential = stack.credential(
+        "coverage",
+        "serving-agent",
+        stack.play,
+    )  # serving-agent holds no coverage tool
+    refused = stack.call_tool(
+        "http://coverage:8000/mcp",
+        credential,
+        "blind_monitor",
+        {"target": "monitor-x"},
+    )
+    assert refused["error"] == "not permitted: blind_monitor on coverage."
+    (record,) = [r for r in stack.read_records("coverage") if r["gen_ai.agent.name"] == "serving-agent"]
+    assert record["error.type"] == "tool_error"  # recorded as refused: no tool ran
+    assert record["iam.decision.id"]  # under the denial IAM made

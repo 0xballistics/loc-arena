@@ -8,6 +8,17 @@ log has the details.
 
 ### Changed
 
+- **Central IAM is on by default.** `iam.enabled` is on unless a run config turns it off, which only the
+  deterministic fixture does; `aurora-efficiency.iam-live.yaml` is gone, as the live config is that run now.
+- **A run plays where its config needs.** `make run` and `loc-arena run` play in a stack when the config turns IAM
+  on and in this process when it is off; `STACK=1|0` (`--stack`, `--no-stack`) forces either.
+- **A run in this process refuses central IAM, before writing anything.** IAM runs only in a stack, so a run or a
+  sweep here would play on services nobody authorizes; `make sweep` sweeps the deterministic fixture
+  (`SWEEP=`).
+- **A config whose scenario lets agents reach a service outside its `iam:` block does not load,** by tools or by
+  rights, so no agent-facing service can be left out of IAM.
+- **A run's bundle records whether central IAM was on,** even when that was the default, so a later change of
+  default cannot change what it replays.
 - **The model gateway is agentgateway.** It holds the provider key and admits each caller by its own token: the
   episode, the host's monitors, each agent's sandbox (its sandbox token, as for the tools gateway) and each runner
   on the runners' route. Agent code that calls the gateway now has to send its sandbox token. An OpenTelemetry

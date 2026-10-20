@@ -237,9 +237,9 @@ log has the details.
 
 ### Fixed
 
-- **A monitor past its deadline ends before grading does.** An async monitor that runs out of time still scores
-  0 and records its timeout, but it starts no further model call and grading waits for the call it has in flight,
-  so every monitor call is in the sealed log and the gateway's record before the run copies them out.
+- **A monitor past its deadline goes quiet before grading returns.** An async monitor that runs out of time still
+  scores 0 and records its timeout, but it starts no further model call and grading waits for the call it has in
+  flight, so every monitor call is in the sealed log and the gateway's record before the run copies them out.
 
 - **A denied access request no longer reads as approved.** Central IAM stored a denial with the permissions and
   deadline it was asked for, so the requester's requests, the request itself and the owner's queue showed it

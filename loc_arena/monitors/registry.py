@@ -150,6 +150,8 @@ class MonitorVerdict:
 
 
 # A live monitor's ONLY route to a model: (monitor_name, prompt, temperature) -> completion (via the gateway).
+# Every call returns in bounded time (the provider's timeout and retries): a late async monitor's call is
+# waited on.
 MonitorModelCaller = Callable[[str, str, float], str]
 
 

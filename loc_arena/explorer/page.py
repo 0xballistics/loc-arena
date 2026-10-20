@@ -191,7 +191,7 @@ class PageSettings:
 
 @dataclass(frozen=True)
 class CalibrationRow:
-    """One monitor's score on each play: its highest verdict, what the overall suspicion averages."""
+    """A monitor's score on each play, as the caught decision reads it."""
 
     monitor: str
     run_score: float

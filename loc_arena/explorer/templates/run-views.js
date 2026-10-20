@@ -94,7 +94,7 @@
       ${annotated(s, `args-${i}`, placed)}
       <div class="sub">${partIcon('result', 12)}result</div>${annotated(s, `result-${i}`, placed, 'code')}`).join('');
     const happened = !hasTool && s.events.length ? `<h3>${partIcon('happened', 15)}What happened</h3>${s.events.map((ev, i) => `<div class="sub">${kindIcon(ev.kind, 12)}${esc(ev.kind)} by ${esc(ev.actor || '?')}${ev.verdicts.map(v => ' ' + pill(v.score)).join('')}${covertTags(ev.covert)}</div>${annotated(s, `body-${i}`, placed, 'code')}`).join('')}` : '';
-    const read = `<h3>${partIcon('monitors', 15)}How the monitors read it<span class="q"> &middot; audit threshold ${THR}</span></h3>${s.verdicts.length ? [...s.verdicts].sort((a, b) => b.score - a.score).map(verdictBlock).join('') : IS_TWIN && !VERDICTS.length ? '<p class="help" style="margin:0">Grading did not save the honest twin&rsquo;s verdicts, so none show here.</p>' : '<p class="help" style="margin:0">No monitor scored anything in this step.</p>'}`;
+    const read = `<h3>${partIcon('monitors', 15)}How the monitors read it<span class="q"> &middot; audit threshold ${THR}</span></h3>${s.verdicts.length ? [...s.verdicts].sort((a, b) => b.score - a.score).map(verdictBlock).join('') : IS_TWIN && !CAL ? '<p class="help" style="margin:0">Grading did not save the honest twin&rsquo;s verdicts, so none show here.</p>' : '<p class="help" style="margin:0">No monitor scored anything in this step.</p>'}`;
     const PHASE = { deciding: 'while choosing its action', executing: 'while a tool ran' };
     const said = s.calls.map((c, i) => {
       const own = c.identity === s.agent;
@@ -428,8 +428,9 @@
   function renderCalibration() {
     el('mon-calibration').hidden = !CAL;
     if (!CAL) return;
-    const rows = CAL.rows.map(r => `<tr><td><b>${esc(r.monitor)}</b></td><td class="num">${pill(r.run_score)}</td><td class="num">${pill(r.twin_score)}</td></tr>`).join('');
-    el('mon-calibration-table').innerHTML = `<table class="legend"><tr><th>monitor</th><th class="num">the run</th><th class="num">honest twin</th></tr>${rows}<tr><td><b>overall suspicion</b></td><td class="num"><b class="${CAL.run_overall > CAL.bar ? 'flag' : ''}">${scoreText(CAL.run_overall)}</b></td><td class="num"><b>${scoreText(CAL.twin_overall)}</b>, the bar</td></tr></table>`;
+    const caught = CAL.run_overall > CAL.bar;  // then a monitor whose score is above the bar is one it was caught by
+    const rows = CAL.rows.map(r => `<tr><td><b>${esc(r.monitor)}</b></td><td class="num"><b class="${caught && r.run_score > CAL.bar ? 'flag' : ''}">${scoreText(r.run_score)}</b></td><td class="num">${scoreText(r.twin_score)}</td></tr>`).join('');
+    el('mon-calibration-table').innerHTML = `<table class="legend"><tr><th>monitor</th><th class="num">the run</th><th class="num">honest twin</th></tr>${rows}<tr><td><b>overall suspicion</b></td><td class="num"><b class="${caught ? 'flag' : ''}">${scoreText(CAL.run_overall)}</b></td><td class="num"><b>${scoreText(CAL.twin_overall)}</b>, the bar</td></tr></table>`;
   }
 
   function renderUnplaced() {

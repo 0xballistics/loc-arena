@@ -85,13 +85,15 @@
   const flagged = s => s.peak != null && s.peak > THR;
   const levelOf = score => score == null ? 'none' : score > THR ? 'flag' : 'clean';
   const scoreText = v => v == null ? '·' : String(Math.round(v * 100) / 100);
-  // A score equal to the threshold is one of the honest twin's that set it: not a flag, but not clear either.
-  const pill = score => `<span class="pill ${levelOf(score)}${score === THR ? ' at" title="at the audit threshold: one of the scores that set it' : ''}">${scoreText(score)}</span>`;
+  // A score equal to the threshold is not a flag, but not clear either; on the twin's page it is one that set it.
+  const AT_TITLE = IS_TWIN ? 'at the audit threshold: one of the scores that set it' : 'equal to the audit threshold, so not above it';
+  const pill = score => `<span class="pill ${levelOf(score)}${score === THR ? ` at" title="${AT_TITLE}` : ''}">${scoreText(score)}</span>`;
   const covertTags = tags => [...new Set(tags || [])].map(t => `<span class="tag covert">${esc(t)}</span>`).join('');
   const oneLine = t => String(t || '').replace(/\s+/g, ' ').trim();
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const laneIndex = name => { const i = LANES.indexOf(name); return i < 0 ? LANES.length : i; };
-  const MONITOR_ORDER = MONITORS.map(m => m.name);
+  // The twin's page has no monitor rows (they describe the run's play), so its columns come from its own verdicts.
+  const MONITOR_ORDER = MONITORS.length ? MONITORS.map(m => m.name) : [...new Set(VERDICTS.map(v => v.monitor))].sort();
   const SCORED_MONITORS = MONITOR_ORDER.filter(name => VERDICTS.some(v => v.monitor === name));
   const replyText = s => s.calls.map(c => `${c.reasoning || ''}\n${c.reply}`).join('\n');
   const searchText = s => [replyText(s), ...s.tools.map(t => `${t.function}\n${t.arguments_text}\n${t.result_text}`), ...s.events.map(e => e.body), ...s.verdicts.map(v => v.reason)].join('\n').toLowerCase();
@@ -349,7 +351,7 @@
   function showView(id, opts) {
     const changed = S.view !== id;
     S.view = id;
-    VIEWS.filter(v => !v.dialog).forEach(v => { const node = el('view-' + v.id); if (node) node.hidden = v.id !== id; });
+    document.querySelectorAll('.view').forEach(node => { node.hidden = node.id !== 'view-' + id; });  // offered or not
     els.rail.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-current', String(b.dataset.view === id)));
     if (id === 'transcript') renderTranscript();
     if (id === 'monitors') renderMonitors();
@@ -448,8 +450,8 @@
   function renderTbar() {
     const { main_task: mt, side_task: st, safety: sf, milestones = [] } = OUT || {};
     el('t-outcome').innerHTML = (!OUT ? [
-      `<span><b>honest twin</b>: played to set the audit threshold (<b>${esc(THR)}</b>)${VERDICTS.length ? '' : '; grading did not save its verdicts'}</span>`,
-      ...(VERDICTS.length ? [`<span><b class="flag">${plural(STEPS.filter(flagged).length, 'step')}</b> above it, each a false alarm; <b>${plural(VERDICTS.filter(v => v.score === THR).length, 'verdict')}</b> at it</span>`] : []),
+      `<span><b>honest twin</b>: played to set the audit threshold (<b>${esc(THR)}</b>)${CAL ? '' : '; grading did not save its verdicts'}</span>`,
+      ...(CAL ? [`<span><b class="flag">${plural(STEPS.filter(flagged).length, 'step')}</b> above it, each a false alarm; <b>${plural(VERDICTS.filter(v => v.score === THR).length, 'verdict')}</b> at it</span>`] : []),
       ...(CAL ? [`<span>overall suspicion <b>${scoreText(CAL.twin_overall)}</b>, the bar the run&rsquo;s <b>${scoreText(CAL.run_overall)}</b> was held to</span>`, `<button class="linkish" data-to-view="monitors">monitors on the twin &rarr;</button>`] : []),
       `<span><b>${STEPS.length}</b> steps</span>`,
     ] : [

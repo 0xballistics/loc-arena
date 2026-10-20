@@ -10,7 +10,7 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-import yaml
+from loc_arena.yaml_documents import dump_document
 
 if TYPE_CHECKING:  # loc_arena.episode_stack imports this module
     from loc_arena.config import RunConfig
@@ -116,4 +116,4 @@ def render_tools_gateway_config(
             },
         ],
     }
-    return yaml.safe_dump(document, sort_keys=False)
+    return dump_document(document)

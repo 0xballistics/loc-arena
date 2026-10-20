@@ -258,6 +258,9 @@ log has the details.
 
 ### Fixed
 
+- **A run whose instance ID reads as a number starts.** The stack wrote its compose file, and agentgateway's and the
+  Collector's configs, as YAML 1.1, which leaves a string like `401e98` unquoted; compose, a YAML 1.2 reader, took
+  it for a number and refused the file, about one run in forty. Every string that YAML 1.2 reads as a number is now quoted.
 - **A malformed notes file no longer breaks the run explorer's notes.** Importing one kept marks a note card
   cannot draw, which broke the notes view on every later visit, and a step named `__proto__` reached every object on
   the page; the import now keeps only marks with a quote and only a file's own step names.

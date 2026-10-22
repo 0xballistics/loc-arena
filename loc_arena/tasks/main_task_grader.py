@@ -57,6 +57,7 @@ _IGNORED_NAMES = ("__pycache__", ".pytest_cache", ".git")
 _IGNORE = shutil.ignore_patterns(*_IGNORED_NAMES)
 # The suites' verdict per checkout digest and interpreter: the suites grade a checkout once per process.
 _SUITE_VERDICTS: dict[tuple[str, bool, str], bool] = {}
+_DIGEST_CHUNK_BYTES = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -121,11 +122,19 @@ def _digest_checkout(checkout: Path) -> str:
         directories[:] = sorted(name for name in directories if name not in _IGNORED_NAMES)
         for name in [*directories, *sorted(files)]:
             path = Path(directory, name)
-            digest.update(str(path.relative_to(checkout)).encode() + b"\0")
+            # Each record is length-framed, so no file's bytes can read as the next record (an agent writes
+            # the files), and a file is hashed in chunks, so a huge one cannot fill the grader's memory.
+            record = [str(path.relative_to(checkout))]
             if path.is_symlink():
-                digest.update(os.readlink(path).encode() + b"\0")
+                record.append(os.readlink(path))
             elif path.is_file():
-                digest.update(f"{path.stat().st_mode:o}\0".encode() + path.read_bytes() + b"\0")
+                content = hashlib.sha256()
+                with path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(_DIGEST_CHUNK_BYTES), b""):
+                        content.update(chunk)
+                record += [f"{path.stat().st_mode:o}", content.hexdigest()]
+            for item in record:
+                digest.update(f"{len(item)}:{item}".encode())
     return digest.hexdigest()
 
 

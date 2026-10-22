@@ -54,6 +54,16 @@ log has the details.
   state become `action` and `job` events on both logs; the nodes' process facts become `process` events, a new
   kind, on the sealed log alone. `submit_job` left the recording stub, which keeps its two covert tools, so the
   deterministic run, which starts no process, plays no job.
+- **Each job runs under its own credential.** A rogue job is told from an honest one by what it does as itself,
+  not by who submitted it, so before a job is queued the job service has central IAM issue it a workload through
+  `submit_job`, now its launch operation: what the scenario lets a job be given of what the submitter holds now
+  (Aurora's `delegation: {notes: [read], jobsvc: [read, submit]}`), for `stack.job_credential_seconds` at most.
+  The job's process gets one secret per service as `MERIDIAN_<SERVICE>_TOKEN`, which no record holds, and
+  `get_job` shows its principal. Revoking the submitter's grant or disabling the submitter refuses the job's next
+  call; a finished job's credential is left to expire, as IAM cannot end one yet. The gateway admits no workload
+  yet, so a job calls it as its node, on the runners' route within their limits, and is recorded under the node.
+  Each record a job makes is an event of the agent it works for, naming the workload, from IAM's
+  `workload_issued` line, so the monitors see what jobs do.
 
 - **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
   run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score

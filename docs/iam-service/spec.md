@@ -185,6 +185,9 @@ issued by the launching service (`POST /workloads`). It never gets the caller's 
   credential authenticating. A workload that launches work is checked the same way up the chain.
 - **Retries.** Issuance is idempotent per service and key; a retry repeats the caller's credential and the
   secrets, so a reused key cannot hand one caller's workload to another.
+- **Asking first.** A service reads what the caller's work could get now (`GET /workloads/delegable`): each
+  permission it may delegate that the caller holds, behind issuance's gate. It changes nothing, and the service
+  then asks for exactly that.
 
 An executable agent definition from #120 is not a principal. Binding a workload to an authorized
 definition/version, and letting a caller discover the permissions a definition needs before launch (declaring them
@@ -286,7 +289,7 @@ requests from the inbox.
 | Notes (slice 5) | Under IAM only (`python -m notes_service`): rights and requests live in IAM, `/grants` and `/requests` forward as the caller; the local queue is deleted |
 | Agents registry (slice 6) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.agents_iam`; registry business logic unchanged. The company `AccessControl` is deleted: the service takes an authority and keeps no rights |
 | Forge, board, jobs, scratch, coverage MCP (slice 7) | IAM mode through `loc_arena.iam_wiring`; scope and recipient checks still apply on top. A service started outside IAM does not start |
-| Job service (`meridian_jobsvc`, HTTP and MCP) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.jobsvc_service`: one guard decides its routes and its tools, and it starts only if together they are exactly its manifest's operations. `cancel_job` is `authenticated`, with the service's own ownership check. It issues no workload yet |
+| Job service (`meridian_jobsvc`, HTTP and MCP) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.jobsvc_service`: one guard decides its routes and its tools, and it starts only if together they are exactly its manifest's operations. `cancel_job` is `authenticated`, with the service's own ownership check. `submit_job` is its launch operation: each job runs under a workload (section 6) issued before it is queued, through the company package's `WorkloadIssuer` protocol |
 | Sandbox command server, tools gateway exposure, inference gateway | Unchanged boundaries: the gateway's static tool list is an upper bound, IAM is the dynamic check |
 | Stack wiring (slice 8) | `iam` live service, anonymous store volume, per-play bootstrap, per-play identities and credentials, honest-twin recreation. Verified in Docker (`tests/integration/test_iam_docker.py`) |
 | Audit and evidence (slice 9) | Resource records carry the IAM `decision` ID; IAM's own log is correlation-only, so no action is counted twice |
@@ -317,9 +320,12 @@ Credential and lifecycle administration (section 6) is partly done:
   runs in the IAM service (`loc_arena.iam_approvers`), reads its inbox every `iam.approver_poll_seconds`, and
   decides each pending request on its service through IAM's ordinary decision: it approves what it lists and
   denies the rest, saying what it approves. A config that names a service without an approver does not load.
-- **Workload identities.** Section 6's workload rules are implemented in the core, `POST /workloads` and
-  `IamClient.issue_workload`, and `GET /grants` lists only a workload's grants that still count. No service
-  issues workloads yet. A store from before workloads is upgraded in place on open.
+- **Workload identities.** Section 6's workload rules are implemented in the core, `POST /workloads`,
+  `GET /workloads/delegable`, `IamClient.issue_workload` and `IamClient.delegable`, and `GET /grants` lists only
+  a workload's grants that still count. The job service issues one per job ([job service](../jobsvc-service.md)),
+  within the delegation the scenario's `iam:` block lists for it, which `render_bootstrap` carries and
+  `iam_service.seed_iam` seeds. The events monitors read attribute each record a workload made to its sponsor,
+  from IAM's `workload_issued` audit line. A store from before workloads is upgraded in place on open.
 - **Seeding.** A seed runs in one transaction and writes an explicit completion marker; a seed that fails
   halfway leaves nothing, and only a completed seed counts as bootstrapped on restart.
 - **Startup coverage.** A service starts only if its routes or tools match its manifest exactly: a guarded app
@@ -341,10 +347,10 @@ Not done, and not claimed:
   on notes or agents changes what an agent can do.
 - **Stop-on-revoke, job autorenewal and checkpoints** (section 6), which need real runner and job lifecycle
   support.
-- **The rest of the workload lifecycle.** Nothing ends a workload when its job finishes, a workload cannot renew,
-  issuance is not tied to the decision that allowed the launch, and neither the inference gateway nor the tools
-  gateway accepts workload secrets yet. There is no quota on issuance, no limit on how deep workloads may launch
-  workloads, and no cleanup of expired ones. A workload's own calls are not attributed to its sponsor in the events
-  monitors read, which drop any caller that is not an agent of the run. A core caller that passes a secret of the
+- **The rest of the workload lifecycle.** Nothing ends a workload when its job finishes, so a finished job's
+  credential works until it expires; a workload cannot renew; issuance is not tied to the decision that allowed
+  the launch; and neither the inference gateway nor the tools gateway accepts workload secrets yet, so a job calls
+  the gateway as its node and each service directly. There is no quota on issuance, no limit on how deep
+  workloads may launch workloads, and no cleanup of expired ones. A core caller that passes a secret of the
   wrong type, or an injected ID generator that repeats itself, gets an unaudited error rather than an audited
   refusal; the HTTP route validates types first.

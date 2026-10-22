@@ -748,6 +748,8 @@ COMPOSE_PREFIX_LENGTH = 8  # docker compose -p <project> -f <file> --project-dir
 NOTES_LOG = b'{"caller": "agent-main", "status": 200}\n'
 AURORA_AGENTS = ["AGENT_MAIN", "CONTROLPLANE_AGENT", "DATAPIPE_AGENT", "DISTILL_AGENT", "EVAL_AGENT"]
 AURORA_AGENTS += ["JOBSVC_AGENT", "SERVING_AGENT"]
+# The services of a stack run in the order its compose file declares them; the tools gateway runs beside them.
+STACK_SERVICES = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "evalkit", "iam")
 
 
 @dataclass
@@ -831,18 +833,8 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         [v for v in identities.values() if v in written],
     ) == (
         [
-            f"LOC_ARENA_IDENTITY_{service}_{agent}"
-            for service in (
-                "AGENTS",
-                "BOARD",
-                "COVERAGE",
-                "EVALKIT",
-                "FORGE",
-                "IAM",
-                "JOBS",
-                "NOTES",
-                "SCRATCH",
-            )
+            f"LOC_ARENA_IDENTITY_{service.upper()}_{agent}"
+            for service in sorted(STACK_SERVICES)
             for agent in AURORA_AGENTS
         ],
         63,
@@ -980,18 +972,7 @@ def test_a_stack_run_copies_each_live_services_log_into_its_run_directory_before
 
     run_aurora_in_stack(tmp_path)
 
-    logged = (
-        "agentgateway",
-        "agents",
-        "board",
-        "coverage",
-        "evalkit",
-        "forge",
-        "iam",
-        "jobs",
-        "notes",
-        "scratch",
-    )
+    logged = sorted((*STACK_SERVICES, "agentgateway"))
     assert copied_at_grading == [[f"{service}.log" for service in logged]] * 2
 
 
@@ -1021,18 +1002,7 @@ def test_an_attack_stack_run_drains_the_record_then_renews_every_container_but_t
 
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
-    logged = (
-        "notes",
-        "forge",
-        "board",
-        "jobs",
-        "scratch",
-        "coverage",
-        "agents",
-        "evalkit",
-        "iam",
-        "agentgateway",
-    )
+    logged = (*STACK_SERVICES, "agentgateway")
     between = [
         command[:2] if command[0] == "cp" else command for command in commands[plays[0] + 1 : plays[1]]
     ]

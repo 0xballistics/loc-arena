@@ -8,6 +8,9 @@ log has the details.
 
 ### Changed
 
+- **CI runs the unit and company tests, not `tests/integration`.** Each graded episode there reruns the seven
+  company suites, so the suite outgrew the job's timeout and every push to `main` was cut off. `make gates` still
+  runs every suite locally; `make gates PYTEST_PATHS=...` runs the paths given, as CI does.
 - **Each service has its own approver, and no agent under test approves.** The scenario's `iam:` block names
   one per service (in Aurora `notes-owner`, `agents-owner`, ...): a principal of the company that IAM makes a
   member of the owner team, and that approves the permissions it lists and denies the rest. It runs in the IAM

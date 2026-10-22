@@ -1,5 +1,5 @@
-# The gates on Linux, Docker tests included. No secrets: the Docker tests bring the stack up with a random
-# placeholder key, and the live tests skip without LOC_ARENA_LIVE.
+# The gates on Linux over the unit and company suites. tests/integration stays local (`make gates`): each of its
+# graded episodes reruns the seven company suites, which took the job past its timeout. No secrets.
 name: gates
 
 on:
@@ -32,7 +32,7 @@ jobs:
   gates:
     name: ruff, ty, pytest
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,8 +46,8 @@ jobs:
 
       - run: uv sync --locked
 
-      # The Docker tests skip unless these images exist; the names are settings.stack.sandbox_image and .image.
+      # The unit tests of the images skip unless these exist; the names are settings.stack.sandbox_image and .image.
       - run: docker build --target sandbox -t loc-arena-sandbox:latest .
       - run: docker build -t loc-arena:latest .
 
-      - run: make gates
+      - run: make gates PYTEST_PATHS="tests/unit company"

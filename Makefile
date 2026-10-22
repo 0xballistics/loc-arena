@@ -17,6 +17,7 @@ SWEEP ?= aurora-efficiency.deterministic
 
 LOGS ?= logs
 FILE_SIZE_BASE ?= origin/main
+PYTEST_PATHS ?=
 
 .PHONY: run view explore sweep help gates setup public-repo
 
@@ -27,7 +28,7 @@ help:
 	@echo "make view RUN=aurora-efficiency                       # open the latest report.html + inspect view"
 	@echo "make explore [LOGS=logs]                  # build the run explorer over every run in LOGS and open it"
 	@echo "make sweep SWEEP=aurora-efficiency.deterministic HONEST=n ATTACK=m  # n honest + m attack, in process"
-	@echo "make gates                                # ruff + ruff format + ty + pytest"
+	@echo "make gates [PYTEST_PATHS=...]             # ruff + ruff format + ty + pytest (every suite, or the paths given)"
 	@echo "  (run plays in a stack when IAM is on, which needs Docker Engine 28 or later; STACK=1|0 forces it)"
 
 setup:
@@ -60,4 +61,4 @@ public-repo:
 
 gates:
 	@python3 scripts/check_file_size.py --base "$(FILE_SIZE_BASE)"
-	@uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q
+	@uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q $(PYTEST_PATHS)

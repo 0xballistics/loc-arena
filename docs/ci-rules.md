@@ -1,9 +1,10 @@
 # Pull request and shipping checks
 
-Every pull request runs the existing Ruff/format/typing/test gates and a separate fast file-size job. Only
-added, modified and renamed text files are checked, using their entire contents including comments and blank
-lines. Compare with the merge ancestor of the PR base: a file at or below 700 lines must remain at or below
-700; a file already larger may shrink or stay the same but cannot grow. New files have a 700-line cap.
+Every pull request runs the existing Ruff/format/typing gates, the unit and company tests (not `tests/integration`,
+which runs locally in `make gates`), and a separate fast file-size job. Only added, modified and renamed text files
+are checked, using their entire contents including comments and blank lines. Compare with the merge ancestor of
+the PR base: a file at or below 700 lines must remain at or below 700; a file already larger may shrink or stay the
+same but cannot grow. New files have a 700-line cap.
 Untouched files are excluded. Renames retain the old path's baseline; copies are new files. Binary files,
 symlinks and generated `uv.lock` are excluded. Private untracked files are never scanned. There is no list
 of legacy filename exceptions; a file that shrinks to 700 automatically loses its larger allowance next PR.

@@ -748,6 +748,8 @@ COMPOSE_PREFIX_LENGTH = 8  # docker compose -p <project> -f <file> --project-dir
 NOTES_LOG = b'{"caller": "agent-main", "status": 200}\n'
 AURORA_AGENTS = ["AGENT_MAIN", "CONTROLPLANE_AGENT", "DATAPIPE_AGENT", "DISTILL_AGENT", "EVAL_AGENT"]
 AURORA_AGENTS += ["JOBSVC_AGENT", "SERVING_AGENT"]
+# A stack run's services in the order its compose file declares them; the fleet and the tools gateway follow.
+SERVICES = ("notes", "forge", "board", "jobsvc", "jobs", "scratch", "coverage", "agents", "evalkit", "iam")
 
 
 @dataclass
@@ -824,15 +826,14 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         run_aurora_in_stack(tmp_path)
 
     identities = {name: value for name, value in docker.environment.items() if "_IDENTITY_" in name}
-    services = ("AGENTS", "BOARD", "COVERAGE", "FORGE", "IAM", "JOBSVC", "JOBS", "NOTES", "SCRATCH")
     written = "".join(path.read_text() for path in (tmp_path / "compose").iterdir()) + str(docker.calls)
     assert (
         sorted(identities),
         len(set(identities.values())),
         [v for v in identities.values() if v in written],
     ) == (
-        [f"LOC_ARENA_IDENTITY_{service}_{agent}" for service in services for agent in AURORA_AGENTS],
-        63,
+        sorted(f"LOC_ARENA_IDENTITY_{s.upper()}_{a}" for s in SERVICES for a in AURORA_AGENTS),
+        70,
         [],
     )
 
@@ -967,8 +968,8 @@ def test_a_stack_run_copies_each_live_services_log_into_its_run_directory_before
 
     run_aurora_in_stack(tmp_path)
 
-    logs = ["agentgateway", "agents", "board", "coverage", "forge", "iam", "jobs", "jobsvc", "node-1"]
-    assert copied_at_grading == [[f"{name}.log" for name in [*logs, "node-2", "notes", "scratch"]]] * 2
+    logged = sorted((*SERVICES, "node-1", "node-2", "agentgateway"))
+    assert copied_at_grading == [[f"{service}.log" for service in logged]] * 2
 
 
 def test_a_graded_stack_run_copies_its_run_directory_out_once(
@@ -997,8 +998,7 @@ def test_an_attack_stack_run_drains_the_record_then_renews_every_container_but_t
 
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
-    logged = ("notes", "forge", "board", "jobsvc", "jobs", "scratch", "coverage", "agents", "iam")
-    logged += ("node-1", "node-2", "agentgateway")  # the fleet's logs are its process facts
+    logged = (*SERVICES, "node-1", "node-2", "agentgateway")  # the fleet's logs are its process facts
     between = [
         command[:2] if command[0] == "cp" else command for command in commands[plays[0] + 1 : plays[1]]
     ]

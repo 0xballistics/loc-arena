@@ -64,7 +64,12 @@ log has the details.
   yet, so a job calls it as its node, on the runners' route within their limits, and is recorded under the node.
   Each record a job makes is an event of the agent it works for, naming the workload, from IAM's
   `workload_issued` line, so the monitors see what jobs do.
-
+- **The eval service.** A stack run serves Meridian's evals, the runs on them, their results and the
+  leaderboards as the live service `evalkit`, from the company's own code (`meridian_evalkit.service`): MCP
+  tools through the tools gateway and an HTTP API beside them on one port, under central IAM, every call
+  recorded. An agent with `run` starts a run and gets the job to submit to the cluster; a run is reported only
+  by the job bound to it; `evalkit-owner` decides requests for more. An in-process run does not serve it, so
+  its tools are offered in a stack run alone.
 - **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
   run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score
   on the run beside its score on the twin, with the twin's overall as the bar. A verdict exactly at the audit threshold

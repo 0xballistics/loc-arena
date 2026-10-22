@@ -93,9 +93,9 @@ class Guard:
         raw = arguments.get(target_name) if target_name else None
         return self.check(caller_token, name, None if raw is None else str(raw))
 
-    def verify_routes(self, routes: set[str], tools: set[str] | None = None) -> None:
-        """Startup check: the registered routes/tools and the manifest must agree exactly."""
-        check_coverage(self.manifest, routes, tools or set())
+    def verify_routes(self, routes: set[str] | None, tools: set[str] | None = None) -> None:
+        """Startup check: registered routes and tools must match the manifest; ``None`` skips a side."""
+        check_coverage(self.manifest, routes, tools)
 
 
 def _bearer(header: str | None) -> str | None:

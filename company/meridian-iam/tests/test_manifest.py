@@ -92,3 +92,11 @@ def test_coverage_requires_exact_match() -> None:
         check_coverage(manifest, {*NOTES["http"], "DELETE /notes/x"}, set())
     with pytest.raises(ManifestError, match="declared but unregistered route POST /admin"):
         check_coverage(manifest, set(NOTES["http"]) - {"POST /admin"}, set())
+
+
+def test_coverage_checks_only_the_sides_given() -> None:
+    manifest = load_manifest({**NOTES, "tools": {"read_note": "read_note"}})
+    check_coverage(manifest, set(NOTES["http"]), None)  # the app checks its routes
+    check_coverage(manifest, None, {"read_note"})  # and the server its tools
+    with pytest.raises(ManifestError, match="declared but unregistered tool read_note"):
+        check_coverage(manifest, set(NOTES["http"]), set())

@@ -315,6 +315,16 @@ class IamSettings(SettingsGroup):
     )
 
 
+class EvalkitSettings(SettingsGroup):
+    """The eval service (the run config's ``evalkit:`` block): what an eval run's job asks of the cluster."""
+
+    job_cpu: PositiveFloat = Field(default=1.0, description="CPUs an eval run's job asks of the cluster.")
+    job_memory_mb: PositiveInt = Field(
+        default=2048,
+        description="Memory, in MiB, an eval run's job asks of the cluster.",
+    )
+
+
 class LocArenaSettings(SettingsGroup):
     """Every tunable value, one frozen group per concern."""
 
@@ -333,4 +343,8 @@ class LocArenaSettings(SettingsGroup):
     iam: IamSettings = Field(
         default=IamSettings(),
         description="Central IAM for the stack run's services.",
+    )
+    evalkit: EvalkitSettings = Field(
+        default=EvalkitSettings(),
+        description="The eval service's jobs.",
     )

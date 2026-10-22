@@ -1,273 +1,303 @@
-"""The job service: a :class:`~meridian_common.jobclient.models.JobTransport` over the cluster.
+"""The job service: Meridian's cluster, which keeps track of every job and gets it run on a node of its fleet.
 
-``JobService`` is the public face of the cluster. It implements the transport protocol a
-:class:`~meridian_common.jobclient.client.JobClient` calls — ``submit`` / ``status`` / ``logs`` / ``cancel``,
-each returning the mapping shapes the client expects — and backs it with the queue (dependency-aware
-admission), the scheduler (capacity placement), and the worker runtime (long-lived stepping). The world
-advances one deterministic step per ``status`` poll, so a client that submits a job and waits on it drives the
-job to a terminal state without threads or a wall clock. distill and evalkit submit
-their eval and distillation jobs through common's ``JobClient`` against this service.
+``JobService`` admits each job to the dependency-aware priority queue. Each ``reconcile`` pass starts the
+ready ones, in the queue's order, on the first free node whose cpu and memory fit; a node holds one job at a
+time. The service runs nothing itself: a daemon on each node runs the job's command as a process
+(``meridian_jobsvc.fleet``), and each pass reads the daemons, so a job's state follows its process, never a
+poll of the service. A job runs until its process exits, then has ``succeeded`` on exit code 0 and
+``failed`` otherwise; a cancelled job is ``cancelling`` until its process is gone, then ``cancelled``; a job
+waiting on one that did not succeed fails. Only a job's owner may cancel it. Each change of a job's state is
+one JSON line of the service's record, holding the job as it is then.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any
+import contextlib
+import json
+import threading
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from meridian_common.jobclient.models import JobSpec, JobState
-from meridian_jobsvc.accountant.ledger import Ledger
-from meridian_jobsvc.errors import DrainError, JobNotFound, QuotaExceeded, SchedulingError
-from meridian_jobsvc.lifecycle.nodes import NodeLifecycle
+from meridian_jobsvc.errors import JobNotFound, JobStateConflict, NotJobOwner, SchedulingError
+from meridian_jobsvc.fleet import NodeDaemon, NodeUnavailable, ProcessOutput, ProcessState
 from meridian_jobsvc.queue.jobqueue import JobQueue
-from meridian_jobsvc.scheduler.placement import Scheduler
-from meridian_jobsvc.types import Checkpoint, Node
-from meridian_jobsvc.worker.runtime import WorkerRuntime
+from meridian_jobsvc.types import Node
 
-_TERMINAL = (JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED)
+MAX_COMMAND_CHARACTERS = 32_000  # every argument of a command together
+_PLACED = (JobState.RUNNING, JobState.CANCELLING)
 
 
-@dataclass
-class _JobEntry:
-    job_id: str
-    spec: JobSpec
-    total_steps: int
-    identity: str
-    state: JobState = JobState.PENDING
-    exit_code: int | None = None
+def _limit_command(command: list[str]) -> list[str]:
+    if sum(map(len, command)) > MAX_COMMAND_CHARACTERS:
+        raise ValueError(f"the command's arguments hold more than {MAX_COMMAND_CHARACTERS} characters")
+    return command
+
+
+JobName = Annotated[str, Field(min_length=1, max_length=200, description="what the job does, for people")]
+Command = Annotated[
+    list[str],
+    Field(min_length=1, description="the program and its arguments, run in the job's own empty workspace"),
+    AfterValidator(_limit_command),
+]
+Cpu = Annotated[float, Field(gt=0, description="the cpus it needs: its node gives it at least that many")]
+MemoryMb = Annotated[int, Field(gt=0, description="the memory it needs, in MB")]
+Priority = Annotated[int, Field(description="among jobs ready to start, a higher one starts first")]
+DependsOn = Annotated[list[str], Field(description="ids of jobs that must succeed before this one starts")]
+Labels = Annotated[dict[str, str], Field(max_length=32, description="labels for people and tools")]
+
+
+class JobRequest(BaseModel):
+    """A job to run: its command, the cpu and memory it needs, its priority, what it waits for, its labels."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: JobName
+    command: Command
+    cpu: Cpu = 1.0
+    memory_mb: MemoryMb = 512
+    priority: Priority = 0
+    depends_on: DependsOn = Field(default_factory=list)
+    labels: Labels = Field(default_factory=dict)
+
+
+class Job(BaseModel):
+    """One job: what it asked for, whose it is, the node it was placed on, and how it went."""
+
+    id: str
+    name: str
+    command: list[str]
+    cpu: float
+    memory_mb: int
+    priority: int
+    depends_on: list[str]
+    labels: dict[str, str]
+    owner: str
+    state: JobState
+    node: str | None = None
+    submitted_at: datetime
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    exit_code: int | None = None  # negative for the signal that ended its process
     message: str = ""
-    progress: float = 0.0
-    logs: list[str] = field(default_factory=list)
 
 
-def _default_nodes(count: int, per_node_cpu: float, per_node_mem: int) -> list[Node]:
-    return [
-        Node(node_id=f"node-{i}", cpu_capacity=per_node_cpu, memory_mb=per_node_mem) for i in range(count)
-    ]
+class Jobs(BaseModel):
+    """Every job, oldest first."""
+
+    jobs: list[Job]
+
+
+class JobLogs(BaseModel):
+    """The tails of a job's stdout and stderr: empty for a job that never ran."""
+
+    job_id: str
+    stdout: str
+    stderr: str
 
 
 class JobService:
-    """A cluster-backed job transport: submit, poll, and cancel jobs; drain and rebalance nodes."""
+    """Every job by id, the queue of those waiting to start, and the fleet that runs them."""
 
-    def __init__(
-        self,
-        nodes: list[Node] | None = None,
-        *,
-        clock: Callable[[], int] | None = None,
-        default_steps: int = 3,
-        node_count: int = 4,
-        per_node_cpu: float = 4.0,
-        per_node_mem: int = 4096,
-    ) -> None:
-        """Wire the queue, scheduler, worker, lifecycle, and ledger over a node pool."""
-        pool = nodes if nodes is not None else _default_nodes(node_count, per_node_cpu, per_node_mem)
+    def __init__(self, daemons: Sequence[NodeDaemon], write_record: Callable[[str], None]) -> None:
+        """Run jobs on the nodes of ``daemons``, first free one first, and record each change of state."""
+        self._daemons = {daemon.node.node_id: daemon for daemon in daemons}
+        self._write_record = write_record
         self._queue = JobQueue()
-        self._scheduler = Scheduler(pool)
-        self._worker = WorkerRuntime(clock=clock)
-        self._lifecycle = NodeLifecycle(self._scheduler, self._worker)
-        self._ledger = Ledger()
-        self._default_steps = default_steps
-        self._entries: dict[str, _JobEntry] = {}
+        self._jobs: dict[str, Job] = {}
+        self._placed: dict[str, str] = {}  # the id of the job on each node that holds one
+        self._outputs: dict[str, ProcessOutput] = {}  # each ended job's output, kept once its node is reset
+        self._lock = threading.Lock()  # never held while a node's daemon is called
+        self._changed = threading.Event()  # a job was submitted or cancelled: the next pass comes at once
 
-    # -- transport protocol ------------------------------------------------
+    def submit(self, request: JobRequest, owner: str) -> Job:
+        """Queue ``request`` as ``owner``'s job: it starts once its dependencies succeed and a node is free.
 
-    def submit(self, spec: dict[str, Any]) -> dict[str, Any]:
-        """Admit a job spec mapping and return ``{"job_id": ...}`` (the job starts pending)."""
-        job_spec = _spec_from_mapping(spec)
-        job_id = self._queue.submit(job_spec)
-        self._entries[job_id] = _JobEntry(
-            job_id=job_id,
-            spec=job_spec,
-            total_steps=_steps_of(job_spec, self._default_steps),
-            identity=str(job_spec.labels.get("identity", "anonymous")),
-        )
-        return {"job_id": job_id}
-
-    def status(self, job_id: str) -> dict[str, Any]:
-        """Advance the cluster one step, then return ``job_id``'s status mapping."""
-        self.tick()
-        return self._status_of(job_id)
-
-    def logs(self, job_id: str) -> list[str]:
-        """Return ``job_id``'s log lines."""
-        return list(self._entry(job_id).logs)
-
-    def cancel(self, job_id: str) -> dict[str, Any]:
-        """Cancel ``job_id`` if it is not already terminal and return the resulting status mapping."""
-        entry = self._entry(job_id)
-        if entry.state not in _TERMINAL:
-            if self._worker.is_running(job_id):
-                self._worker.release(job_id)
-            self._scheduler.release(job_id)
-            if self._queue.is_pending(job_id):
-                self._queue.dispatch(job_id)
-            self._queue.notify_failed(job_id)
-            entry.state = JobState.CANCELLED
-            entry.message = "cancelled"
-            entry.logs.append(f"{job_id} cancelled")
-        return self._status_of(job_id)
-
-    # -- cluster operations ------------------------------------------------
-
-    def tick(self) -> None:
-        """Advance the cluster one deterministic step: place ready jobs, fail blocked jobs, step running."""
-        self._place_ready()
-        self._fail_blocked()
-        self._step_running()
-
-    def run_to_idle(self, *, max_ticks: int = 1000) -> None:
-        """Tick until no job is pending or running, or ``max_ticks`` is reached."""
-        for _ in range(max_ticks):
-            if self._queue.pending_count == 0 and not self._any_running():
-                return
-            self.tick()
-
-    def drain_node(self, node_id: str) -> list[str]:
-        """Drain ``node_id`` and re-place each evicted job on another node, resuming from its checkpoint.
-
-        Returns the ids of the jobs that were moved.
-
-        Raises:
-            DrainError: if no node has room to resume an evicted job.
+        Raises ``SchedulingError`` for a job larger than every node, and ``DependencyError`` for a dependency
+        that is no job.
         """
-        moved: list[str] = []
-        for drained in self._lifecycle.drain(node_id):
-            entry = self._entry(drained.job_id)
-            target = self._scheduler.assign(drained.job_id, entry.spec)
-            if target is None:
-                raise DrainError(
-                    f"no capacity to resume {drained.job_id!r} after draining {node_id!r}",
-                    path=node_id,
-                )
-            self._worker.resume(drained.job_id, target, entry.total_steps, drained.checkpoint)
-            entry.logs.append(f"{drained.job_id} resumed on {target} from step {drained.checkpoint.step}")
-            moved.append(drained.job_id)
-        return moved
-
-    def job_checkpoint(self, job_id: str) -> Checkpoint:
-        """The current checkpoint for ``job_id`` (raises if it is not running or finished)."""
-        return self._worker.checkpoint(job_id)
-
-    @property
-    def queue(self) -> JobQueue:
-        """The admission queue."""
-        return self._queue
-
-    @property
-    def scheduler(self) -> Scheduler:
-        """The placement scheduler."""
-        return self._scheduler
-
-    @property
-    def worker(self) -> WorkerRuntime:
-        """The worker runtime."""
-        return self._worker
-
-    @property
-    def lifecycle(self) -> NodeLifecycle:
-        """The node lifecycle controller."""
-        return self._lifecycle
-
-    @property
-    def ledger(self) -> Ledger:
-        """The spend/quota ledger."""
-        return self._ledger
-
-    # -- internals ---------------------------------------------------------
-
-    def _entry(self, job_id: str) -> _JobEntry:
-        entry = self._entries.get(job_id)
-        if entry is None:
-            raise JobNotFound(f"unknown job {job_id!r}", path=job_id)
-        return entry
-
-    def _status_of(self, job_id: str) -> dict[str, Any]:
-        entry = self._entry(job_id)
-        return {
-            "job_id": job_id,
-            "state": entry.state.value,
-            "exit_code": entry.exit_code,
-            "progress": entry.progress,
-            "message": entry.message,
-        }
-
-    def _any_running(self) -> bool:
-        return any(entry.state is JobState.RUNNING for entry in self._entries.values())
-
-    def _place_ready(self) -> None:
-        for queued in self._queue.ready():
-            entry = self._entries[queued.job_id]
-            try:
-                node_id = self._scheduler.assign(queued.job_id, queued.spec)
-            except SchedulingError as exc:
-                self._queue.dispatch(queued.job_id)
-                self._queue.notify_failed(queued.job_id)
-                entry.state = JobState.FAILED
-                entry.exit_code = 2
-                entry.message = str(exc)
-                entry.logs.append(f"{queued.job_id} failed to schedule: {exc.message}")
-                continue
-            if node_id is None:
-                continue
-            self._queue.dispatch(queued.job_id)
-            self._worker.start(queued.job_id, node_id, entry.total_steps)
-            entry.state = JobState.RUNNING
-            entry.logs.append(f"{queued.job_id} started on {node_id}")
-
-    def _fail_blocked(self) -> None:
-        for queued in self._queue.blocked():
-            entry = self._entries[queued.job_id]
-            self._queue.dispatch(queued.job_id)
-            self._queue.notify_failed(queued.job_id)
-            entry.state = JobState.FAILED
-            entry.exit_code = 1
-            entry.message = "dependency failed"
-            entry.logs.append(f"{queued.job_id} blocked by a failed dependency")
-
-    def _step_running(self) -> None:
-        for job_id in sorted(self._entries):
-            entry = self._entries[job_id]
-            if entry.state is not JobState.RUNNING or not self._worker.is_running(job_id):
-                continue
-            self._worker.step(job_id)
-            entry.progress = self._worker.progress(job_id)
-            if self._worker.is_finished(job_id):
-                self._finish(entry)
-
-    def _finish(self, entry: _JobEntry) -> None:
-        self._scheduler.release(entry.job_id)
-        self._queue.notify_succeeded(entry.job_id)
-        entry.state = JobState.SUCCEEDED
-        entry.exit_code = 0
-        entry.progress = 1.0
-        entry.logs.append(f"{entry.job_id} succeeded")
-        try:
-            self._ledger.charge(
-                entry.identity,
-                compute=entry.spec.cpu * entry.total_steps,
-                inference=float(entry.spec.labels.get("inference", 0.0)),
+        spec = JobSpec(
+            name=request.name,
+            command=request.command,
+            cpu=request.cpu,
+            memory_mb=request.memory_mb,
+            priority=request.priority,
+            depends_on=tuple(request.depends_on),
+            labels=request.labels,
+        )
+        if not any(_fits(spec, daemon.node) for daemon in self._daemons.values()):
+            raise SchedulingError(
+                f"job {request.name!r} asks for {request.cpu:g} cpus and {request.memory_mb} MB, more than "
+                "any node of the cluster has",
+                path=request.name,
             )
-        except QuotaExceeded as exc:
-            entry.message = str(exc)
+        with self._lock:
+            job_id = self._queue.submit(spec)
+            job = Job(
+                id=job_id,
+                **request.model_dump(),
+                owner=owner,
+                state=JobState.PENDING,
+                submitted_at=datetime.now(UTC),
+            )
+            job = self._record(job)
+        self._changed.set()
+        return job
+
+    def list_jobs(self) -> list[Job]:
+        """Every job, oldest first."""
+        with self._lock:
+            return list(self._jobs.values())
+
+    def get_job(self, job_id: str) -> Job:
+        """The job ``job_id``; raises ``JobNotFound`` if there is none."""
+        with self._lock:
+            return self._find(job_id)
+
+    def logs(self, job_id: str) -> JobLogs:
+        """The tails of the job's output: read from its node while it runs, else as it was when it ended.
+
+        Raises ``NodeUnavailable`` when the node of a running job does not answer.
+        """
+        with self._lock:
+            job = self._find(job_id)
+            output = self._outputs.get(job_id)
+        if output is None and job.node is not None and job.state in _PLACED:
+            live = self._daemons[job.node].output()
+            with self._lock:  # the job may have ended meanwhile, and its node taken the next one
+                output = self._outputs.get(job_id, live if live.job_id == job_id else None)
+        output = output or ProcessOutput(job_id=job_id, stdout="", stderr="")
+        return JobLogs(job_id=job_id, stdout=output.stdout, stderr=output.stderr)
+
+    def cancel(self, job_id: str, caller: str) -> Job:
+        """Cancel ``caller``'s job: one waiting to start at once, a running one once its process is gone.
+
+        Raises ``NotJobOwner`` for another's job and ``JobStateConflict`` for one that has ended; cancelling a
+        job again while its process is ending changes nothing.
+        """
+        with self._lock:
+            job = self._find(job_id)
+            if job.owner != caller:
+                raise NotJobOwner(f"job {job_id!r} is {job.owner}'s, not yours", path=job_id)
+            if job.state is JobState.PENDING:
+                self._queue.dispatch(job_id)
+                self._queue.notify_failed(job_id)
+                job = self._record(job, state=JobState.CANCELLED, ended_at=datetime.now(UTC))
+            elif job.state is JobState.RUNNING:
+                job = self._record(job, state=JobState.CANCELLING)
+            elif job.state is not JobState.CANCELLING:
+                raise JobStateConflict(f"job {job_id!r} has ended: it is {job.state.value}", path=job_id)
+        self._changed.set()
+        return job
+
+    def reconcile(self) -> None:
+        """One pass over the fleet: end each job whose process ended, stop cancelled ones, start ready ones.
+
+        A node whose daemon does not answer is passed over until the next pass.
+        """
+        for node_id, daemon in self._daemons.items():
+            with self._lock:
+                job = self._jobs.get(self._placed.get(node_id, ""))
+            if job is not None:
+                with contextlib.suppress(NodeUnavailable):
+                    self._follow(daemon, job)
+        for daemon, job in self._place_ready_jobs():
+            try:
+                daemon.start(job.id, job.command, job.owner)
+            except NodeUnavailable as error:
+                with contextlib.suppress(NodeUnavailable):
+                    daemon.reset()  # in case it started the job but the answer was lost
+                self._end(job.id, JobState.FAILED, None, f"its node did not start it: {error}")
+
+    def run(self, poll_seconds: float) -> None:
+        """Reconcile forever: every ``poll_seconds``, and at once after a job is submitted or cancelled."""
+        while True:
+            self._changed.clear()
+            self.reconcile()
+            self._changed.wait(poll_seconds)
+
+    def _follow(self, daemon: NodeDaemon, job: Job) -> None:
+        """Stop a cancelled job's process; once it is gone, keep the job's output, end it, free its node."""
+        status = daemon.status()
+        if status.job_id == job.id and status.state is ProcessState.RUNNING:
+            if job.state is JobState.CANCELLING:
+                daemon.stop()
+            return
+        lost = status.job_id != job.id  # its daemon holds no such job: it restarted, and the process is gone
+        output = ProcessOutput(job_id=job.id, stdout="", stderr="") if lost else daemon.output()
+        daemon.reset()
+        with self._lock:
+            self._outputs[job.id] = output
+        if lost:
+            self._end(job.id, JobState.FAILED, None, "its node lost it")
+        else:
+            state = JobState.SUCCEEDED if status.exit_code == 0 else JobState.FAILED
+            self._end(job.id, state, status.exit_code, "")
+
+    def _place_ready_jobs(self) -> list[tuple[NodeDaemon, Job]]:
+        """Fail the jobs waiting on one that failed; place each ready job on the first free node it fits."""
+        with self._lock:
+            for blocked in self._queue.blocked():
+                self._queue.dispatch(blocked.job_id)
+                self._queue.notify_failed(blocked.job_id)
+                self._record(
+                    self._jobs[blocked.job_id],
+                    state=JobState.FAILED,
+                    ended_at=datetime.now(UTC),
+                    message="a job it depends on did not succeed",
+                )
+            free = [node_id for node_id in self._daemons if node_id not in self._placed]
+            placed = []
+            for ready in self._queue.ready():
+                fitting = (node_id for node_id in free if _fits(ready.spec, self._daemons[node_id].node))
+                node_id = next(fitting, None)
+                if node_id is None:
+                    continue
+                free.remove(node_id)
+                self._queue.dispatch(ready.job_id)
+                self._placed[node_id] = ready.job_id
+                job = self._record(
+                    self._jobs[ready.job_id],
+                    state=JobState.RUNNING,
+                    node=node_id,
+                    started_at=datetime.now(UTC),
+                )
+                placed.append((self._daemons[node_id], job))
+        return placed
+
+    def _end(self, job_id: str, state: JobState, exit_code: int | None, message: str) -> None:
+        """Record that a placed job ended in ``state``, release the jobs waiting on it, and free its node.
+
+        A job being cancelled ends ``cancelled``, however its process ended.
+        """
+        with self._lock:
+            job = self._jobs[job_id]
+            state = JobState.CANCELLED if job.state is JobState.CANCELLING else state
+            if state is JobState.SUCCEEDED:
+                self._queue.notify_succeeded(job_id)
+            else:
+                self._queue.notify_failed(job_id)
+            if job.node is not None:
+                self._placed.pop(job.node, None)
+            self._record(job, state=state, ended_at=datetime.now(UTC), exit_code=exit_code, message=message)
+
+    def _find(self, job_id: str) -> Job:
+        if job_id not in self._jobs:
+            raise JobNotFound(f"no job {job_id!r}", path=job_id)
+        return self._jobs[job_id]
+
+    def _record(self, job: Job, **changes: object) -> Job:
+        """Keep ``job`` with ``changes``, and write it on the record; called with the lock held."""
+        job = job.model_copy(update=changes)
+        self._jobs[job.id] = job
+        line = {"wall_ts": datetime.now(UTC).isoformat(), "job": job.model_dump(mode="json")}
+        self._write_record(json.dumps(line))
+        return job
 
 
-def _spec_from_mapping(spec: dict[str, Any]) -> JobSpec:
-    return JobSpec(
-        name=str(spec["name"]),
-        command=[str(arg) for arg in spec.get("command", [])],
-        cpu=float(spec.get("cpu", 1.0)),
-        memory_mb=int(spec.get("memory_mb", 512)),
-        priority=int(spec.get("priority", 0)),
-        depends_on=tuple(str(dep) for dep in spec.get("depends_on", ())),
-        labels={str(k): str(v) for k, v in dict(spec.get("labels", {})).items()},
-    )
-
-
-def _steps_of(spec: JobSpec, default_steps: int) -> int:
-    raw = spec.labels.get("steps")
-    if raw is None:
-        return max(default_steps, 1)
-    try:
-        return max(int(raw), 1)
-    except ValueError:
-        return max(default_steps, 1)
+def _fits(spec: JobSpec, node: Node) -> bool:
+    """Whether ``node`` has the cpus and memory ``spec`` asks for."""
+    return spec.cpu <= node.cpu_capacity and spec.memory_mb <= node.memory_mb

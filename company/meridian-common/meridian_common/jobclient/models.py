@@ -13,10 +13,11 @@ from typing import Any, Protocol
 
 
 class JobState(Enum):
-    """The lifecycle states a job moves through."""
+    """The lifecycle states a job moves through; a cancelled job is ``cancelling`` until its process ends."""
 
     PENDING = "pending"
     RUNNING = "running"
+    CANCELLING = "cancelling"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"

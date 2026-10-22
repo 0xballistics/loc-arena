@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "resource": "jobsvc",
+  "operations": {
+    "describe_api": {
+      "public": true
+    },
+    "health": {
+      "public": true
+    },
+    "openapi_schema": {
+      "public": true
+    },
+    "submit_job": {
+      "permission": "submit",
+      "requestable": true
+    },
+    "list_jobs": {
+      "permission": "read",
+      "requestable": true
+    },
+    "get_job": {
+      "permission": "read",
+      "requestable": true,
+      "target": "job_id"
+    },
+    "job_logs": {
+      "permission": "read",
+      "requestable": true,
+      "target": "job_id"
+    },
+    "cancel_job": {
+      "authenticated": true,
+      "target": "job_id"
+    }
+  },
+  "http": {
+    "GET /": "describe_api",
+    "GET /health": "health",
+    "GET /openapi.json": "openapi_schema",
+    "POST /jobs": "submit_job",
+    "GET /jobs": "list_jobs",
+    "GET /jobs/{job_id}": "get_job",
+    "GET /jobs/{job_id}/logs": "job_logs",
+    "DELETE /jobs/{job_id}": "cancel_job"
+  },
+  "tools": {
+    "submit_job": "submit_job",
+    "list_jobs": "list_jobs",
+    "get_job": "get_job",
+    "job_logs": "job_logs",
+    "cancel_job": "cancel_job"
+  }
+}

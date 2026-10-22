@@ -10,14 +10,14 @@ nowhere else; the fleet is recreated before the honest twin, as the runners are.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
+from sandbox_server.node import NodeServerSettings
 from scenarios.loader import NODE_PREFIX, LiveService
 
 from loc_arena.compose_document import ComposeService, Healthcheck
 from loc_arena.config import RunConfig
-from loc_arena.sandbox import TOKEN_FILE, build_server_settings
+from loc_arena.sandbox import TOKEN_FILE
 
 NODE_TARGET = "worker"  # the Dockerfile's stage of the nodes
 NODE_WORKSPACE = Path("/workspace")  # where a node runs a job: empty in its image and after each job
@@ -51,20 +51,15 @@ def node_token_variable(node: str) -> str:
 
 def node_server_settings_json(config: RunConfig, node: str, owner: str) -> str:
     """The node daemon's settings for ``node``, serving the fleet's ``owner``, as JSON for its command."""
-    # The command server's settings carry the shared fields (port, secrets, output limit, trusted caller); the
-    # node daemon reads only those it declares, so its settings are built from the same source with its own
-    # workspace and node id.
-    shared = build_server_settings(config.settings, trusted_caller=owner)
-    return json.dumps(
-        {
-            "port": shared.port,
-            "node_id": node,
-            "workspace_directory": str(NODE_WORKSPACE),
-            "output_limit_bytes": shared.output_limit_bytes,
-            "secrets_dir": str(shared.secrets_dir),
-            "trusted_caller": owner,
-        },
-    )
+    stack = config.settings.stack
+    return NodeServerSettings(
+        port=stack.sandbox_port,
+        node_id=node,
+        workspace_directory=NODE_WORKSPACE,
+        output_limit_bytes=stack.command_output_limit_bytes,
+        secrets_dir=config.settings.gateway.secrets_dir,
+        trusted_caller=owner,
+    ).model_dump_json()
 
 
 def render_nodes(

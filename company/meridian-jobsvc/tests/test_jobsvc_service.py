@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +27,7 @@ class FakeDaemon:
     exit_code: int | None = None
     stdout: str = ""
     answers: bool = True
+    failures: list[Exception] = field(default_factory=list)  # raised by its next calls, one each
     started: list[tuple[str, list[str], str]] = field(default_factory=list)
 
     def start(self, job_id: str, command: list[str], owner: str) -> None:
@@ -52,6 +55,8 @@ class FakeDaemon:
         self.state, self.exit_code, self.stdout = ProcessState.EXITED, code, self.stdout + stdout
 
     def _answer(self) -> None:
+        if self.failures:
+            raise self.failures.pop()
         if not self.answers:
             raise NodeUnavailable(f"{self.node.node_id} does not answer")
 
@@ -213,3 +218,18 @@ def test_a_job_its_node_did_not_start_has_failed_and_a_quiet_node_is_passed_over
         JobState.FAILED,
         "its node did not start it: node-1 does not answer",
     )
+
+
+def test_a_pass_over_the_fleet_that_fails_does_not_stop_the_passes_after_it() -> None:
+    service, (node,), _ = cluster()
+    submitted = service.submit(job(), OWNER)
+    service.reconcile()
+    node.exit(0)
+    node.failures.append(RuntimeError("an answer no pass expected"))
+
+    threading.Thread(target=service.run, args=(0.01,), daemon=True).start()
+    deadline = time.monotonic() + 5
+    while service.get_job(submitted.id).state is JobState.RUNNING and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert service.get_job(submitted.id).state is JobState.SUCCEEDED

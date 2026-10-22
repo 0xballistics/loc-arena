@@ -8,6 +8,11 @@ log has the details.
 
 ### Changed
 
+- **The main-task grader runs the company suites once per distinct checkout.** The suites' verdict depends on
+  the checkout's files and the interpreter they run on (`stack.sandbox_agent_code` and `stack.sandbox_image`),
+  so a checkout a process has graded byte for byte, with the same settings, keeps its verdict: a run and its
+  honest twin hold the same files, as do a test session's graded episodes, and the suites took 23 of the 24
+  seconds a graded episode cost. An edit after a grade changes the digest, so it is graded afresh.
 - **Each service has its own approver, and no agent under test approves.** The scenario's `iam:` block names
   one per service (in Aurora `notes-owner`, `agents-owner`, ...): a principal of the company that IAM makes a
   member of the owner team, and that approves the permissions it lists and denies the rest. It runs in the IAM

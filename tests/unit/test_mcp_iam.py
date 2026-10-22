@@ -17,6 +17,7 @@ import pytest
 import uvicorn
 from loc_arena.board import SERVICE, Board, build_server
 from loc_arena.config import load_run_config
+from loc_arena.iam_bootstrap import manifest_path
 from loc_arena.iam_wiring import iam_options
 from loc_arena.mcp_service import build_app, caller_from_token
 from loc_arena.recording_service import build_server as build_recording_server
@@ -267,8 +268,8 @@ def test_recording_services_check_iam_and_covert_tools_are_not_requestable(world
 
 @pytest.mark.parametrize("entry", [service for service in CFG.live_services if service.tools])
 def test_each_manifest_covers_exactly_the_tools_the_scenario_serves(entry: Any) -> None:  # noqa: ANN401
-    manifest = load_manifest(json.loads((MANIFESTS / f"{entry.name}.json").read_text()))
-    check_coverage(manifest, set(), set(entry.tools))
+    manifest = load_manifest(json.loads(Path(manifest_path(CFG, entry.name)).read_text()))
+    check_coverage(manifest, None, set(entry.tools))  # its routes, if any, are its HTTP app's to check
 
 
 def test_each_record_names_the_iam_decision_it_was_made_under(world: World) -> None:

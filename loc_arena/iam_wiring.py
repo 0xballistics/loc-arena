@@ -54,12 +54,12 @@ def check_served_tools(environ: Mapping[str, str], server: Any) -> None:  # noqa
     """Under IAM, refuse to serve unless the tools ``server`` registered are exactly the manifest's.
 
     A tool added without a declared operation would otherwise be reachable and unchecked by name, and a
-    declared operation with no tool means the manifest describes a service that is not the one running. A
-    service not under IAM is not checked.
+    declared operation with no tool means the manifest describes a service that is not the one running. The
+    manifest's routes, if any, are the HTTP app's to verify. A service not under IAM is not checked.
     """
     guard = guard_from_environment(environ)
     if guard is not None:
-        guard.verify_routes(set(), {tool.name for tool in anyio.run(server.list_tools)})
+        guard.verify_routes(None, {tool.name for tool in anyio.run(server.list_tools)})
 
 
 def load_iam_authority(guard: Any) -> Any:  # noqa: ANN401 - a meridian_iam Guard, and the CentralAuthority over it

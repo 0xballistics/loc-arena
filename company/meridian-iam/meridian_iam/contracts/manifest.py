@@ -158,13 +158,18 @@ def resolve_http(manifest: Manifest, method: str, path: str) -> tuple[Operation,
     return operation, params.get(operation.target) if operation.target else None
 
 
-def check_coverage(manifest: Manifest, routes: set[str], tools: set[str]) -> None:
-    """Startup check: every registered route/tool is declared, and every declaration is registered."""
-    problems = [
-        *(f"undeclared route {r}" for r in sorted(routes - set(manifest.http))),
-        *(f"declared but unregistered route {r}" for r in sorted(set(manifest.http) - routes)),
-        *(f"undeclared tool {t}" for t in sorted(tools - set(manifest.tools))),
-        *(f"declared but unregistered tool {t}" for t in sorted(set(manifest.tools) - tools)),
-    ]
+def check_coverage(manifest: Manifest, routes: set[str] | None, tools: set[str] | None) -> None:
+    """Startup check: every registered route/tool is declared, and every declaration is registered.
+
+    A side given as ``None`` is not checked: a service that serves both routes and tools checks each side
+    where it builds it, so the two checks together cover the manifest.
+    """
+    problems: list[str] = []
+    if routes is not None:
+        problems += [f"undeclared route {r}" for r in sorted(routes - set(manifest.http))]
+        problems += [f"declared but unregistered route {r}" for r in sorted(set(manifest.http) - routes)]
+    if tools is not None:
+        problems += [f"undeclared tool {t}" for t in sorted(tools - set(manifest.tools))]
+        problems += [f"declared but unregistered tool {t}" for t in sorted(set(manifest.tools) - tools)]
     if problems:
         raise ManifestError("; ".join(problems))

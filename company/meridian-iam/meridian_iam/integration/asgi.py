@@ -14,10 +14,11 @@ GUARD_MARK = "__iam_guard__"  # set on the dependency a guard builds: whose it i
 
 
 def verify_app(guard: Guard, app: FastAPI) -> None:
-    """Startup check: every route the app serves is guarded and declared, and every declaration is served.
+    """Startup check: every route the app serves is guarded and declared, and every declared route is served.
 
-    Matching the manifest is not enough: a route runs unchecked unless the guard's own dependency is on it, so
-    every ``APIRoute`` must carry it (an app built without it, or with another guard's, does not start).
+    The manifest's tools, if any, are the MCP server's to verify where it is built. Matching the manifest is
+    not enough: a route runs unchecked unless the guard's own dependency is on it, so every ``APIRoute`` must
+    carry it (an app built without it, or with another guard's, does not start).
 
     The dependency guards ``APIRoute`` handlers and nothing else, so any other kind of route would run
     unchecked. A plain Starlette route is accepted only for operations the manifest declares public (FastAPI's

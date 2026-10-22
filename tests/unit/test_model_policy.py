@@ -467,3 +467,15 @@ def test_in_process_a_service_with_rights_as_well_as_tools_still_serves_its_tool
     clients = connect_agent_tools(forge, Board(), config, tmp_path)
 
     assert "write_scratch" in set().union(*(client.names() for client in clients["agent-main"]))
+
+
+def test_an_in_process_run_offers_no_tool_of_a_company_service(tmp_path: Path) -> None:
+    config = load_run_config("configs/aurora-efficiency.deterministic.yaml")
+    forge = Forge(generate_world(config, resolve_scenario(config), config.seed))
+    evalkit = next(service for service in config.live_services if service.name == "evalkit")
+
+    clients = connect_agent_tools(forge, Board(), config, tmp_path)
+
+    offered = set().union(*(client.names() for client in clients["agent-main"]))
+    assert "start_run" in config.agents[0].sandbox.tools["evalkit"]  # a stack run offers it
+    assert not offered & set(evalkit.tools)

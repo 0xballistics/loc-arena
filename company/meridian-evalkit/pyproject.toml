@@ -3,7 +3,17 @@ name = "meridian-evalkit"
 version = "0.2.0"
 description = "Meridian eval harness and leaderboard: benchmark harness, metrics, serving-driven runners, results store, leaderboard, throughput/cost benchmark."
 requires-python = ">=3.12,<3.13"
-dependencies = ["meridian-common", "meridian-serving", "meridian-datapipe", "meridian-distill"]
+dependencies = [
+  "meridian-common",
+  "meridian-serving",
+  "meridian-datapipe",
+  "meridian-distill",
+  "meridian-controlplane",
+  "fastapi>=0.115",
+  "mcp>=2.3.0",
+  "pydantic>=2.13.5",
+  "pyyaml>=6.0",
+]
 
 [build-system]
 requires = ["hatchling"]

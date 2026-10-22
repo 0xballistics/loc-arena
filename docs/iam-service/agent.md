@@ -62,7 +62,8 @@ service is not specified yet.
    directory has no `loc_arena` and needs a `Dockerfile.iam` that copies in `meridian_iam`, as notes does.
 3. **Check at startup.** FastAPI: `integration.asgi.verify_app(guard, app)`, which also refuses a route
    without the guard's dependency. MCP: `iam_wiring.check_served_tools`. Stdlib: `Guard.verify_routes(routes)`.
-   A route you forgot, or one you removed, stops the service.
+   A route you forgot, or one you removed, stops the service. A service that serves both routes and tools
+   (the eval service) runs both checks, each covering its own side of the manifest.
 4. **Enforce before work.** FastAPI: `integration.asgi.dependency(guard)` on every route; it answers each
    refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: `iam_wiring.serving_options`, whose
    middleware turns a refusal or an IAM outage into a tool-error result, with no tool run. Stdlib:

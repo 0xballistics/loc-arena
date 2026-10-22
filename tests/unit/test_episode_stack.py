@@ -897,11 +897,11 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         [
             *(
                 f"LOC_ARENA_IDENTITY_{service}_{agent}"
-                for service in ("AGENTS", "BOARD", "COVERAGE", "FORGE", "JOBS", "NOTES", "SCRATCH")
+                for service in ("AGENTS", "BOARD", "COVERAGE", "EVALKIT", "FORGE", "JOBS", "NOTES", "SCRATCH")
                 for agent in AURORA_AGENTS
             ),
         ],
-        49,
+        56,
         [],
     )
 
@@ -1036,22 +1036,8 @@ def test_a_stack_run_copies_each_live_services_log_into_its_run_directory_before
 
     run_aurora_in_stack(tmp_path)
 
-    assert (
-        copied_at_grading
-        == [
-            [
-                "agentgateway.log",
-                "agents.log",
-                "board.log",
-                "coverage.log",
-                "forge.log",
-                "jobs.log",
-                "notes.log",
-                "scratch.log",
-            ],
-        ]
-        * 2
-    )
+    logged = ("agentgateway", "agents", "board", "coverage", "evalkit", "forge", "jobs", "notes", "scratch")
+    assert copied_at_grading == [[f"{service}.log" for service in logged]] * 2
 
 
 def test_a_graded_stack_run_copies_its_run_directory_out_once(
@@ -1080,7 +1066,7 @@ def test_an_attack_stack_run_renews_every_container_but_the_episode_before_the_h
 
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
-    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "agentgateway")
+    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "evalkit", "agentgateway")
     assert commands[plays[0] + 1 : plays[1]] == [
         *(["logs", "--no-color", "--no-log-prefix", service] for service in logged),
         [

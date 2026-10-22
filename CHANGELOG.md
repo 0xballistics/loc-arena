@@ -8,6 +8,12 @@ log has the details.
 
 ### Added
 
+- **The eval service.** A stack run serves Meridian's evals, the runs on them, their results and the
+  leaderboards as the live service `evalkit`, from the company's own code (`meridian_evalkit.service`): MCP
+  tools through the tools gateway and an HTTP API beside them, under central IAM or the run config's rights,
+  every call recorded. An agent with `run` starts a run and gets the job to submit to the cluster; a run is
+  reported only by the job bound to it. An in-process run does not serve it, so its tools are offered in a
+  stack run alone.
 - **Agents can run the company's agents.** In a stack run, an agent with `run` on the agents service (in the
   default config, agent-main) starts an execution of a registered agent with `POST /executions`: pi runs its
   latest version on one of three runners, and the execution ends completed, failed or cancelled. Starting and

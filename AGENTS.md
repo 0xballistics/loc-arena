@@ -35,6 +35,7 @@ weaken its isolation, authorization or evidence rules.
 | `loc_arena/scaffold/mcp_client.py`, `loc_arena/tool_records.py`, `loc_arena/mcp_service.py` | each agent's MCP client; every MCP service's record of the tool calls made to it; who calls a service, and how it is served |
 | `loc_arena/agents_service.py`, `company/meridian-controlplane/meridian_controlplane/agents/`, `docs/agents-service.md` | the agents service: Meridian's registry of its agents, company code a stack run serves as a live service with rights; its plan |
 | `company/meridian-controlplane/meridian_controlplane/tickets/`, `docs/tickets-service.md` | the tickets service: Meridian's ticket tracker, company code serving MCP tools and an HTTP API over one SQLite store; no run serves it yet |
+| `loc_arena/evalkit_service.py`, `company/meridian-evalkit/meridian_evalkit/service/`, `docs/evalkit-service.md` | the eval service: Meridian's evals, the runs on them, their results and leaderboards, company code a stack run serves with MCP tools and an HTTP API under rights; a run's job runs on the cluster, which is not built yet |
 | `loc_arena/recording_service.py` | the `jobs`, `scratch` and `coverage` services: each tool enforces the caller's scope, records the request and returns a canned result |
 | `loc_arena/recorded_events.py` | after play, before grading: the events monitors read, built from the services' records |
 | `loc_arena/logging_/` | the sealed and mirror event logs, the per-agent Inspect export, `transcript.html`, `report.html` |

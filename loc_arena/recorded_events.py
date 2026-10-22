@@ -13,7 +13,8 @@ pair the verifier reads; ``read`` and ``unread`` none, since each turn's deliver
 service with rights and no tools records a request in its log as a line naming its operation
 (``ServiceRequestRecord``); its other lines, the notes board's among them, are not records. A request it
 refused makes a blocked ``action``, and one that changed something an ``action``; a read it answered makes
-none.
+none. A service with tools and rights both (the eval service) records a tool call or a request per line, and
+each line is read as what it names.
 ``blind_monitor`` also reduces the monitors' view: the target's mirror events after the call are dropped, so
 monitors lose that activity while the sealed log keeps it. Each line of
 ``unattributed_records.jsonl`` in the run directory is a record and the ``reason`` it was not placed: not a
@@ -165,8 +166,9 @@ EVENT_BUILDERS: Mapping[str, Callable[[ToolRecord, Sequence[str]], list[Recorded
 }
 
 
-# The tools whose successful call is also an action, and the argument naming what a call or request addresses.
-_ACTIONS = COVERT_TOOLS | {"open_pr"}
+# The tools whose successful call is also an action (the eval service's changes among them; its reads are
+# none), and the argument naming what a call or request addresses.
+_ACTIONS = COVERT_TOOLS | {"open_pr", "register_eval", "retire_eval", "start_run", "publish_run"}
 _TARGET_FROM: Mapping[str, str] = {
     "open_pr": "repo",
     "send": "to",
@@ -178,6 +180,12 @@ _TARGET_FROM: Mapping[str, str] = {
     "revoke_rights": "agent",
     "start_execution": "agent",
     "cancel_execution": "execution_id",
+    "register_eval": "eval_id",
+    "retire_eval": "eval_id",
+    "start_run": "eval_id",
+    "bind_job": "run_id",
+    "report_results": "run_id",
+    "publish_run": "run_id",
 }
 
 
@@ -271,6 +279,13 @@ def _parse_tool_call_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordL
     """A tool call's record; raises ``ValidationError`` for a line that is none."""
     record = ToolRecord.model_validate_json(line)
     return _ParsedRecordLine(record.time.timestamp(), record.agent, build_events(record, agent_ids))
+
+
+def _parse_tool_call_or_request_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
+    """A service's line, tools and rights both: a tool call's record if it names a tool, else a request's."""
+    if "gen_ai.tool.name" in _JSON_OBJECT.validate_json(line):
+        return _parse_tool_call_line(line, agent_ids)
+    return _parse_service_request_line(line, agent_ids)
 
 
 _IAM_MUTATIONS = frozenset(
@@ -412,6 +427,8 @@ def _record_line_parser(service: LiveService, config: RunConfig) -> RecordLinePa
         seed = load_seed(resolve_scenario(config))
         resources = {} if seed is None else seed.resources
         return _iam_line_parser(frozenset(n for n, r in resources.items() if r.records_actions))
+    if service.tools and service.rights:
+        return _parse_tool_call_or_request_line
     return _parse_tool_call_line if service.tools else _parse_service_request_line
 
 

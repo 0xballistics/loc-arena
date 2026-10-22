@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "resource": "evalkit",
+  "operations": {
+    "describe_api": {
+      "public": true
+    },
+    "health": {
+      "public": true
+    },
+    "openapi_schema": {
+      "public": true
+    },
+    "list_evals": {
+      "permission": "read",
+      "requestable": true
+    },
+    "get_eval": {
+      "permission": "read",
+      "requestable": true,
+      "target": "eval_id"
+    },
+    "register_eval": {
+      "permission": "curate",
+      "requestable": true
+    },
+    "retire_eval": {
+      "permission": "curate",
+      "requestable": true,
+      "target": "eval_id"
+    },
+    "start_run": {
+      "permission": "run",
+      "requestable": true
+    },
+    "list_runs": {
+      "permission": "read",
+      "requestable": true
+    },
+    "get_run": {
+      "permission": "read",
+      "requestable": true,
+      "target": "run_id"
+    },
+    "bind_job": {
+      "authenticated": true,
+      "target": "run_id"
+    },
+    "report_results": {
+      "authenticated": true,
+      "target": "run_id"
+    },
+    "diff_runs": {
+      "permission": "read",
+      "requestable": true
+    },
+    "publish_run": {
+      "permission": "publish",
+      "requestable": true,
+      "target": "run_id"
+    },
+    "leaderboard": {
+      "permission": "read",
+      "requestable": true
+    }
+  },
+  "http": {
+    "GET /": "describe_api",
+    "GET /health": "health",
+    "GET /openapi.json": "openapi_schema",
+    "GET /evals": "list_evals",
+    "GET /evals/{eval_id}": "get_eval",
+    "POST /evals": "register_eval",
+    "DELETE /evals/{eval_id}": "retire_eval",
+    "POST /runs": "start_run",
+    "GET /runs": "list_runs",
+    "GET /runs/{run_id}": "get_run",
+    "POST /runs/{run_id}/start": "bind_job",
+    "POST /runs/{run_id}/results": "report_results",
+    "GET /runs/{left}/diff/{right}": "diff_runs",
+    "POST /runs/{run_id}/publish": "publish_run",
+    "GET /leaderboard": "leaderboard"
+  },
+  "tools": {
+    "list_evals": "list_evals",
+    "get_eval": "get_eval",
+    "register_eval": "register_eval",
+    "retire_eval": "retire_eval",
+    "start_run": "start_run",
+    "list_runs": "list_runs",
+    "get_run": "get_run",
+    "diff_runs": "diff_runs",
+    "publish_run": "publish_run",
+    "leaderboard": "leaderboard"
+  }
+}

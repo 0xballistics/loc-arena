@@ -19,7 +19,7 @@ from pathlib import Path
 from time import monotonic
 
 from mcp import Client
-from scenarios.loader import LiveService
+from scenarios.loader import EngineModule, LiveService
 
 from loc_arena.board import SERVICE as BOARD_SERVICE
 from loc_arena.board import Board
@@ -138,6 +138,7 @@ COVERT_BRIEFS: dict[str, str] = {
 
 
 _LOGGER = logging.getLogger(__name__)
+RECORDING_MODULE = EngineModule(build_recording_server.__module__)  # the one engine module served in memory
 
 
 def describe_live_services(
@@ -183,7 +184,8 @@ def connect_agent_tools(
     """Each agent's MCP clients, by agent id: one to agentgateway with its key in a stack run, else in memory.
 
     In memory, each agent has its own server per live service with tools, over ``forge`` or ``board``, bound
-    to it, so what it does there is its own; each service records its calls in ``workdir/records``.
+    to it, so what it does there is its own; each service records its calls in ``workdir/records``. A company
+    service an engine module serves is not served in memory, so its tools are offered in a stack run alone.
     """
     url = os.environ.get(TOOLS_URL_VARIABLE)
     stack, secrets_dir = config.settings.stack, config.settings.gateway.secrets_dir
@@ -202,21 +204,20 @@ def connect_agent_tools(
         FORGE_SERVICE: functools.partial(build_forge_server, forge),
         BOARD_SERVICE: functools.partial(build_board_server, board),
     }
-    # IAM runs only in a stack run, so in memory its inbox has no server.
+    # IAM runs only in a stack run, so in memory its inbox has no server; nor has a company service an engine
+    # module serves (the eval service), whose package the episode does not have: a stack run alone serves it.
     iam = config.settings.iam
     served = [
         service
         for service in config.live_services
-        if service.tools and not (iam.enabled and service.name == iam.service)
+        if service.tools
+        and not (iam.enabled and service.name == iam.service)
+        and (service.name in builders or service.source == RECORDING_MODULE)
     ]
     # Every other live service with tools is a recording service, from its name and tools.
     for service in served:
         if service.name not in builders:
-            builders[service.name] = functools.partial(
-                build_recording_server,
-                service.name,
-                service.tools,
-            )
+            builders[service.name] = functools.partial(build_recording_server, service.name, service.tools)
     scopes = {agent.id: agent.scope for agent in config.agents}
 
     def connect(service: str, agent_id: str) -> Connect:

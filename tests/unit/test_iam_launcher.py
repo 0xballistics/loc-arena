@@ -73,6 +73,17 @@ def test_the_seed_gives_each_agent_exactly_its_configured_rights_and_tools(tmp_p
     assert not iam.authorize(services["jobsvc"], identities["jobsvc", "agent-main"], "submit_job").allow
 
 
+def test_the_seed_lets_the_job_service_hand_a_job_what_its_submitter_holds_of_its_delegation(
+    tmp_path: Path,
+) -> None:
+    iam, identities, services = seeded(tmp_path, config_with_iam(tmp_path))
+
+    delegable = iam.delegable(services["jobsvc"], identities["jobsvc", "serving-agent"], "submit_job")
+
+    # jobsvc may delegate notes read and its own read and submit; serving-agent may also write notes.
+    assert delegable == {"jobsvc": ["read", "submit"], "notes": ["read"]}
+
+
 def issue_seeded_approvers(iam: Iam, config: RunConfig) -> dict[str, Approver]:
     """The approvers the IAM service runs for ``config``, by principal."""
     return {

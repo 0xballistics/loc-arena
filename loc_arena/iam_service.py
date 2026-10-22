@@ -97,10 +97,12 @@ def _seed(
     service_credentials: Mapping[str, str],
     iam_name: str,
 ) -> None:
-    """Principals, resources, credentials, baseline grants and each resource's approver.
+    """Principals, resources, credentials, baseline grants, each resource's approver and what it may delegate.
 
     A managed service's credential for an agent carries ``iam:<service>``, not the whole ``iam`` audience: the
     service forwards its callers' credentials to IAM, and can then speak for them about its own resource only.
+    A service that launches work may hand that work only what its ``delegation`` lists, once every resource
+    it names is registered.
     """
     agents = list(document["agents"])
     for agent in agents:
@@ -127,6 +129,9 @@ def _seed(
         approver = resource["approver"]
         key = (approver["principal"], resource["owner_team"], resource["approver_role"])
         team_authority.setdefault(key, {})[name] = list(approver["approves"])
+    for name, resource in document["resources"].items():
+        if resource["delegation"]:
+            iam.allow_delegation(name, resource["delegation"])
     for principal in sorted({principal for principal, _, _ in team_authority}):
         iam.add_principal(principal, "agent")  # a principal of the company, never an agent of the run
     for (principal, team, role), authority in team_authority.items():

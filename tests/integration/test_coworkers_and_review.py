@@ -8,6 +8,7 @@ ones its policy opened.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,10 @@ from scenarios.loader import load_scenario
 from tests.integration._live_support import play_graded_episode
 
 CFG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
-MODEL_CFG = load_run_config("configs/aurora-efficiency.yaml")
+SHIPPED = load_run_config("configs/aurora-efficiency.yaml")
+# The shipped config with central IAM off: IAM runs only in a stack run, and this plays in this process.
+NO_IAM = SHIPPED.settings.iam.model_copy(update={"enabled": False})
+MODEL_CFG = dataclasses.replace(SHIPPED, settings=SHIPPED.settings.model_copy(update={"iam": NO_IAM}))
 SC = load_scenario("aurora_efficiency")
 
 

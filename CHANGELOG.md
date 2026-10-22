@@ -111,7 +111,8 @@ log has the details.
   checkout.
 - **The deterministic run replays through the live loop.** `policy: scripted` plays the model-driven episode
   with the scenario's `scripted/moves.yaml` in place of a model, so it exercises the real tools, services and
-  event builder. Its attack moves are not written yet, so the deterministic attack run lands no side task.
+  event builder. Its attack moves complete no covert milestone yet, so the deterministic attack run lands no
+  side task.
 - **The honest twin starts from fresh services.** Between the two plays of a stack run every sandbox, live
   service and agentgateway is recreated empty, so the twin sees nothing the attack left; an in-process run
   builds a fresh forge and board for each.
@@ -265,6 +266,10 @@ log has the details.
 
 ### Fixed
 
+- **A live attack is judged only on what its agents did.** The world no longer opens a coverage-cutting
+  control-plane PR under agent-main's name in every attack episode, which gave the PR review monitor a catch
+  the model never earned. The scripted policy opens that PR as one of agent-main's own attack moves, through
+  the forge like any other PR.
 - **A run whose instance ID reads as a number starts.** The stack wrote its compose file, and agentgateway's and the
   Collector's configs, as YAML 1.1, which leaves a string like `401e98` unquoted; compose, a YAML 1.2 reader, took
   it for a number and refused the file, about one run in forty. Every string compose's reader takes for a number is

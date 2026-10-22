@@ -2,9 +2,11 @@
 
 A stack run starts it as the scenario's ``jobsvc`` entry: ``python -m loc_arena.jobsvc_service <run config>
 <entry name>``. It serves ``meridian_jobsvc`` under central IAM, which decides every call over its HTTP API
-and its MCP tools and issues each job a workload of its own, runs each job as a real process on a node of the
-fleet (``loc_arena.node_pool``) through that node's daemon, keeps a pass over the fleet going in the
-background, and writes its record of requests and of each job's state to stdout.
+and its MCP tools and issues each job, and each schedule, a workload of its own, runs each job as a real
+process on a node of the fleet (``loc_arena.node_pool``) through that node's daemon, keeps a pass over the
+fleet going in the background, and writes its record of requests and of each job's state to stdout. The
+cluster's policy is the run config's (``stack``), its teams the company's own seed, and it runs the run
+config's ``scope`` check on each submission, as every service does.
 """
 
 from __future__ import annotations
@@ -25,21 +27,23 @@ from starlette.applications import Starlette
 from loc_arena.config import RunConfig, load_run_config
 from loc_arena.iam_seed import load_seed
 from loc_arena.iam_wiring import build_service_app, guard_from_environment, http_dependency, iam_options
+from loc_arena.ids import Action, PermissionScope, ScopeViolation, enforce
 from loc_arena.mcp_service import ALL_ADDRESSES, caller_from_token
 from loc_arena.node_pool import list_node_services, node_token_secret
+from loc_arena.settings import StackSettings
 from loc_arena.task import resolve_scenario
 from loc_arena.tool_records import tool_call_recorder
 from meridian_iam.client import IamClient
 from meridian_iam.contracts import IamError, Unavailable
 from meridian_jobsvc.api import SERVICE, build_jobsvc_server, create_jobsvc_api
 from meridian_jobsvc.authority import JobIdentity
-from meridian_jobsvc.errors import CredentialRefused, CredentialUnavailable
+from meridian_jobsvc.errors import CredentialRefused, CredentialUnavailable, SubmissionRefused
 from meridian_jobsvc.fleet import NodeUnavailable, ProcessOutput, ProcessStatus
-from meridian_jobsvc.service import JobService
+from meridian_jobsvc.seed import load_teams
+from meridian_jobsvc.service import ClusterPolicy, JobService
 from meridian_jobsvc.types import Node
 
 RECORD_LOCK = threading.Lock()  # request handlers, the MCP recorder and the fleet pass each write whole lines
-LAUNCH_OPERATION = "submit_job"  # the manifest's launch operation: a job's workload is issued through it
 SECRET_BYTES = 32  # the entropy of each secret a job's workload holds
 
 
@@ -56,16 +60,23 @@ class NodeDaemonClient:
     token: str
     timeout_seconds: float
 
-    def start(
+    def start(  # noqa: PLR0913 - what one attempt of a job is
         self,
         job_id: str,
         command: list[str],
         owner: str,
         environment: Mapping[str, SecretStr],
+        attempt: int,
     ) -> None:
-        """Start ``owner``'s job ``job_id`` as the node's process, with ``environment``: its credentials."""
+        """Start attempt ``attempt`` of ``owner``'s job ``job_id`` as the node's one process.
+
+        ``environment`` holds the job's own variables and its credentials, which the daemon never writes down.
+        """
         revealed = {name: secret.get_secret_value() for name, secret in environment.items()}
-        self._post("/jobs", {"job_id": job_id, "argv": command, "owner": owner, "environment": revealed})
+        self._post(
+            "/jobs",
+            {"job_id": job_id, "argv": command, "owner": owner, "environment": revealed, "attempt": attempt},
+        )
 
     def status(self) -> ProcessStatus:
         """The node's job and how its process is."""
@@ -126,43 +137,47 @@ def connect_nodes(run_config: RunConfig) -> list[NodeDaemonClient]:
 
 @dataclass(frozen=True)
 class IamWorkloadIssuer:
-    """``meridian_jobsvc.authority.WorkloadIssuer`` through central IAM: each job's workload.
+    """``meridian_jobsvc.authority.WorkloadIssuer`` through central IAM: each job's and schedule's workload.
 
     IAM says what a job may be given of what its submitter holds now (the scenario's delegation for the job
-    service, as IAM was seeded with it), and issues exactly that, through the launch operation, under the
-    job's id as reference and key and its name as purpose. Its lifetime is ``ttl_seconds``, cut to the
-    shortest ``max_seconds`` of a service it gets a right on, as IAM requires. Each service's audience is its
-    name, so the workload gets one new secret per service, which only the job's process is handed.
+    service, as IAM was seeded with it), and issues exactly that, through the launch operation the call came
+    in by, under the job's or schedule's id as reference and key and its job's name as purpose. Its lifetime
+    is ``ttl_seconds``, cut to the shortest ``max_seconds`` of a service it gets a right on, as IAM requires.
+    Each service's audience is its name, so the workload gets one new secret per service, which only the job's
+    processes are handed.
     """
 
     client: IamClient
     ttl_seconds: int
     max_seconds: Mapping[str, int]  # each managed service's longest grant
 
-    def issue(self, credential: str | None, job_id: str, purpose: str) -> JobIdentity:
-        """Job ``job_id``'s workload, from its submitter's ``credential``; IAM's refusal is the job's."""
+    def issue(self, credential: str | None, operation: str, reference: str, purpose: str) -> JobIdentity:
+        """The workload of ``reference``, launched through ``operation`` with its submitter's ``credential``.
+
+        IAM's refusal is the job's, or the schedule's.
+        """
         try:
-            grants = self.client.delegable(credential, LAUNCH_OPERATION)
+            grants = self.client.delegable(credential, operation)
             if not grants:
-                raise CredentialRefused("nothing you hold may be given to a job", path=job_id)
+                raise CredentialRefused("nothing you hold may be given to a job", path=reference)
             issued = {service: secrets.token_urlsafe(SECRET_BYTES) for service in grants}
             workload = self.client.issue_workload(
                 credential,
-                LAUNCH_OPERATION,
-                reference=job_id,
+                operation,
+                reference=reference,
                 purpose=purpose,
                 grants=grants,
                 ttl=min(self.ttl_seconds, *(self.max_seconds[service] for service in grants)),
                 credentials=issued,
-                key=job_id,
+                key=reference,
             )
         except Unavailable as error:
             raise CredentialUnavailable(
                 f"IAM did not issue the job a credential: {error}",
-                path=job_id,
+                path=reference,
             ) from error
         except IamError as error:
-            raise CredentialRefused(f"IAM refused the job a credential: {error}", path=job_id) from error
+            raise CredentialRefused(f"IAM refused the job a credential: {error}", path=reference) from error
         secrets_by_service = {service: SecretStr(secret) for service, secret in issued.items()}
         return JobIdentity(principal=workload.principal, secrets=secrets_by_service)
 
@@ -176,6 +191,33 @@ def connect_issuer(run_config: RunConfig, client: IamClient) -> IamWorkloadIssue
         run_config.settings.stack.job_credential_seconds,
         {name: resource.max_seconds for name, resource in resources.items()},
     )
+
+
+def cluster_policy(stack: StackSettings) -> ClusterPolicy:
+    """What the cluster allows, from the run config: the highest priority, team caps and the drain grace."""
+    return ClusterPolicy(
+        max_priority=stack.job_max_priority,
+        team_running_jobs=stack.team_max_running_jobs,
+        team_cpu_hours=stack.team_max_cpu_hours,
+        drain_grace_seconds=stack.job_drain_grace_seconds,
+    )
+
+
+def admit_by_scope(run_config: RunConfig) -> Callable[[str], None]:
+    """The run config's ``scope`` check on submitting jobs, as every service runs its own on its callers.
+
+    The job service asks it of the agent a job works for, so a job submits only what its agent's scope allows;
+    a principal the run config does not name may submit nothing, as on every other service.
+    """
+    scopes = {agent.id: agent.scope for agent in run_config.agents}
+
+    def admit(submitter: str) -> None:
+        try:
+            enforce(scopes.get(submitter, PermissionScope()), Action("submit_job"))
+        except ScopeViolation as violation:
+            raise SubmissionRefused(violation.reason, path=submitter) from violation
+
+    return admit
 
 
 def write_record(line: str) -> None:
@@ -222,7 +264,14 @@ def main(arguments: list[str]) -> None:
     run_config = load_run_config(arguments[0])
     service_entry = next(service for service in run_config.live_services if service.name == arguments[1])
     guard = guard_from_environment(os.environ)  # IAM decides every call: no identity or rights table here
-    service = JobService(connect_nodes(run_config), write_record, connect_issuer(run_config, guard.client))
+    service = JobService(
+        connect_nodes(run_config),
+        write_record,
+        connect_issuer(run_config, guard.client),
+        cluster_policy(run_config.settings.stack),
+        load_teams(),
+        admit_submitter=admit_by_scope(run_config),
+    )
     threading.Thread(
         target=service.run,
         args=(run_config.settings.stack.job_poll_seconds,),

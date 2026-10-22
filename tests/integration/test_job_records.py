@@ -18,7 +18,7 @@ from loc_arena.gateway.core import API_KEY_VARIABLE, GATEWAY_URL_VARIABLE
 from loc_arena.harness import build_recorded_run_events
 
 from meridian_common.jobclient.models import JobState
-from meridian_jobsvc.service import Job
+from meridian_jobsvc.models import Job
 from tests.integration._records_support import (
     LIVE,
     LOOK_AROUND,
@@ -99,6 +99,7 @@ def state_line(at: datetime, state: JobState, node: str | None = None) -> str:
         labels={},
         owner=OWNER,
         principal=WORKLOAD,
+        team="research-platform",
         state=state,
         node=node,
         submitted_at=at,

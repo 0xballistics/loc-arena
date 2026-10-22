@@ -1,10 +1,10 @@
 """What the job service needs of its fleet: on each node, a daemon that runs the node's one job as a process.
 
 The service runs no job itself. A deployment hands it a client of each node's daemon, which starts the job
-it is given in the node's workspace with the environment it is given (the job's own credentials), says whether
-the job's process still runs and how it ended, serves the tails of its output, stops it when asked, and resets
-the node for the next job. The service reads the daemons on each of its passes, so its view of a job can lag
-the process.
+it is given in the node's workspace with the environment it is given (the job's variables and credentials),
+says whether the job's process still runs and how it ended, serves the tails of its output, stops it when
+asked, and resets the node for the next job. The service reads the daemons on each of its passes, so its view
+of a job can lag the process.
 """
 
 from __future__ import annotations
@@ -58,16 +58,18 @@ class NodeDaemon(Protocol):
         """The node: its id, and the cpu and memory a job placed on it gets."""
         ...
 
-    def start(
+    def start(  # noqa: PLR0913 - what one attempt of a job is
         self,
         job_id: str,
         command: list[str],
         owner: str,
         environment: Mapping[str, SecretStr],
+        attempt: int,
     ) -> None:
-        """Start ``command`` as the process of ``owner``'s job ``job_id``, on a node that holds no job.
+        """Start ``command`` as attempt ``attempt`` of ``owner``'s job ``job_id``, on a node holding no job.
 
-        The process gets ``environment``, the job's credentials, which the daemon never writes down.
+        The process gets ``environment``, the job's own variables and credentials, which the daemon never
+        writes down. A job runs again as its next attempt after a drain took it off its node.
         """
         ...
 

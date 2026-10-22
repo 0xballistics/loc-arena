@@ -19,6 +19,7 @@ dependencies = [
   "tenacity>=9.2.1",
   "mcp>=2.3.0",
   "starlette>=1.7.0",
+  "croniter>=6.2.4", # the job service's cron schedules
 ]
 
 [project.scripts]
@@ -42,6 +43,7 @@ dev = [
 # The sandbox image (the Dockerfile's `sandbox` target): its command server, and what the agents' code needs to
 # run the company repos' tests and the benchmark. Nothing of the harness.
 sandbox = [
+  "croniter>=6.2.4",
   "fastapi>=0.115",
   "mcp>=2.3.0",
   "pydantic>=2.13.5",

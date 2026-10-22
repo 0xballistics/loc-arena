@@ -1,9 +1,9 @@
 """What the job service needs of a central authorization service, without importing one.
 
 The company package stays free of any platform dependency: a deployment hands in implementations of these
-protocols. One decides every call before it runs and names its caller; the other issues each job an identity
-of its own before it starts. The service keeps no identity and no rights of its own; it checks only that a job
-is the caller's own before changing it.
+protocols. One decides every call before it runs and names its caller; the other issues each job, and each
+schedule for all its runs, an identity of its own. The service keeps no identity and no rights of its own; it
+checks only that a job is the caller's own before changing it.
 """
 
 from __future__ import annotations
@@ -31,14 +31,15 @@ class JobIdentity(BaseModel):
 
 
 class WorkloadIssuer(Protocol):
-    """Issues each job an identity of its own, through the central authority, before the job is queued."""
+    """Issues each job, or schedule, an identity of its own through the central authority."""
 
-    def issue(self, credential: str | None, job_id: str, purpose: str) -> JobIdentity:
-        """Job ``job_id``'s own identity: what a job may be given of what its submitter holds now.
+    def issue(self, credential: str | None, operation: str, reference: str, purpose: str) -> JobIdentity:
+        """The identity of job or schedule ``reference``: what a job may be given of what its submitter holds.
 
-        ``credential`` is the one the submitter presented, which the job never gets; ``purpose`` is what the
-        job is for. Raises ``CredentialUnavailable`` when the authority does not answer, and
-        ``CredentialRefused`` when it refuses.
+        It is launched through ``operation`` (``submit_job`` or ``create_schedule``); ``credential`` is the
+        one the submitter presented, which the work never gets; ``purpose`` is what the work is for. Raises
+        ``CredentialUnavailable`` when the authority does not answer, and ``CredentialRefused`` when it
+        refuses.
         """
         ...
 

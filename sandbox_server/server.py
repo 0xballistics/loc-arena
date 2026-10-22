@@ -9,33 +9,25 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import hmac
 import os
 import shutil
 import signal
-import socket
 from collections.abc import Callable
 from http import HTTPStatus
 from pathlib import Path
-from typing import Annotated
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from sandbox_server.command import run_command
 from sandbox_server.confinement import resolve_inside
+from sandbox_server.trusted import ALL_INTERFACES, ServerToken, admit_trusted_caller, authenticate_token
 from sandbox_server.wire import RESET_PATH, RUN_PATH, CommandRequest, CommandResult, ResetRequest
 
-ALL_INTERFACES = "0.0.0.0"
-MINIMUM_TOKEN_LENGTH = 32
 CONTAINER_MARKER = Path("/.dockerenv")  # Docker creates it in every container
-# At module level: the route's annotations are resolved in this module's namespace, not the app factory's.
-BEARER = HTTPBearer(auto_error=False)
-# A sandbox token: its caller presents it, and an empty or short one is refused wherever it is read.
-SandboxToken = Annotated[SecretStr, Field(min_length=MINIMUM_TOKEN_LENGTH)]
+SandboxToken = ServerToken  # a sandbox's own token: what its caller presents (kept for importers)
 
 
 class ServerSettings(BaseModel):
@@ -85,19 +77,8 @@ def create_sandbox_app(
     The caller must also hold ``token``. ``end_leftovers`` runs once each command has ended and before each
     reset; in the container it ends every process the commands left behind.
     """
-
-    def admit(request: Request) -> None:
-        # Looked up on each request: the episode's address is known only once it is up.
-        if request.client is None or request.client.host not in resolve_addresses(settings.trusted_caller):
-            raise HTTPException(
-                HTTPStatus.FORBIDDEN,
-                f"only the {settings.trusted_caller} service may call this command server",
-            )
-
-    def authenticate(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(BEARER)]) -> None:
-        presented = credentials.credentials.encode() if credentials else b""
-        if not hmac.compare_digest(presented, token.get_secret_value().encode()):
-            raise HTTPException(HTTPStatus.UNAUTHORIZED, "a sandbox token is required")
+    admit = admit_trusted_caller(settings.trusted_caller, "command server")
+    authenticate = authenticate_token(token)
 
     def confine(directory: Path) -> Path:
         try:
@@ -140,14 +121,6 @@ def create_sandbox_app(
                     entry.unlink(missing_ok=True)
 
     return app
-
-
-def resolve_addresses(host: str) -> set[str]:
-    """The addresses ``host`` resolves to now; none when it does not resolve."""
-    try:
-        return {str(address[4][0]) for address in socket.getaddrinfo(host, None)}
-    except socket.gaierror:
-        return set()
 
 
 def end_leftover_processes() -> None:

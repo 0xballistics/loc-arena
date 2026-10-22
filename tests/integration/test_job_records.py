@@ -1,7 +1,8 @@
 """The job service's records and its nodes' process facts, built into events after play.
 
 An attack run plays in process; the records are written as a stack run copies them out
-(``services/jobsvc.log``, ``services/node-<n>.log``), at times inside the episode's play window.
+(``services/jobsvc.log``, ``services/node-<n>.log``, ``services/iam.log``), at times inside the episode's play
+window.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from http import HTTPStatus
 from pathlib import Path
 
 import pytest
+from loc_arena.config import load_run_config
 from loc_arena.gateway.core import API_KEY_VARIABLE, GATEWAY_URL_VARIABLE
 from loc_arena.harness import build_recorded_run_events
 
@@ -31,8 +33,10 @@ from tests.integration._records_support import (
 
 OWNER = "serving-agent"
 WORKLOAD = "job-5e1fd2c0a9b4"  # the principal IAM issued serving-agent's job-1
+NESTED = "job-8c3b07e2f16d"  # the principal IAM issued job-2, which job-1 submitted
 JOB_OPERATIONS = {"submit_job", "list_jobs", "get_job", "job_logs", "cancel_job"}
 STEP = timedelta(milliseconds=1)
+UNDER_IAM = load_run_config("configs/aurora-efficiency.iam.yaml")  # the same agents, and IAM's log is read
 
 
 @pytest.fixture(autouse=True)
@@ -46,12 +50,19 @@ def run(tmp_path: Path) -> Path:
     return play(tmp_path / "run", episode=[LOOK_AROUND])
 
 
-def request_line(at: datetime, method: str, status: int, operation: str, arguments: dict[str, object]) -> str:
-    """serving-agent's request over HTTP, as the job service records it."""
+def request_line(  # noqa: PLR0913 - every field of the record
+    at: datetime,
+    method: str,
+    status: int,
+    operation: str,
+    arguments: dict[str, object],
+    caller: str = OWNER,
+) -> str:
+    """A request over HTTP, by default serving-agent's, as the job service records it."""
     return json.dumps(
         {
             "wall_ts": at.isoformat(),
-            "caller": OWNER,
+            "caller": caller,
             "method": method,
             "path": "/jobs",
             "status": status,
@@ -93,6 +104,31 @@ def state_line(at: datetime, state: JobState, node: str | None = None) -> str:
         submitted_at=at,
     )
     return json.dumps({"wall_ts": at.isoformat(), "job": job.model_dump(mode="json")})
+
+
+def issued_line(at: datetime, principal: str, sponsor: str, job_id: str) -> str:
+    """IAM's audit line for the workload the job service issued job ``job_id``, as IAM writes it."""
+    grants = {"jobsvc": ["read", "submit"], "notes": ["read"]}
+    workload = {"principal": principal, "resource": "jobsvc", "sponsor": sponsor, "reference": job_id}
+    return json.dumps(
+        {
+            "at": int(at.timestamp()),
+            "kind": "workload_issued",
+            "actor": "jobsvc-service",
+            "via": None,
+            "operation": "submit_job",
+            "reference": job_id,
+            "purpose": "bench",
+            "grants": grants,
+            "ttl": 7200,
+            "result": {
+                **workload,
+                "purpose": "bench",
+                "grants": grants,
+                "expires_at": int(at.timestamp()) + 7200,
+            },
+        },
+    )
 
 
 def fact_line(at: datetime, phase: str, **fact: object) -> str:
@@ -179,3 +215,41 @@ def test_a_nodes_process_facts_are_process_events_of_the_jobs_owner_on_the_seale
         {"node": "node-1", "phase": "exit", "job_id": "job-1", "owner": OWNER, "exit_code": -9},
     ]
     assert events_of(run / "episode", MIRROR, "process") == []
+
+
+def test_a_jobs_own_calls_are_events_of_the_agent_it_works_for_naming_the_workload_on_both_logs(
+    run: Path,
+) -> None:
+    started, _ = read_window(run / "episode")
+    write_log(
+        run,
+        "iam",
+        issued_line(started, WORKLOAD, OWNER, "job-1"),
+        issued_line(started, NESTED, WORKLOAD, "job-2"),
+    )
+    write_log(
+        run,
+        "jobsvc",
+        request_line(started + STEP, "POST", HTTPStatus.CREATED, "submit_job", {"name": "next"}, WORKLOAD),
+        request_line(
+            started + 2 * STEP,
+            "POST",
+            HTTPStatus.FORBIDDEN,
+            "submit_job",
+            {"name": "loop"},
+            NESTED,
+        ),
+    )
+
+    build_recorded_run_events(UNDER_IAM, run)
+
+    actions = {
+        log: [
+            (e.actor_uid, e.payload.get("workload"), e.target_id, e.payload["blocked"])
+            for e in events_of(run / "episode", log, "action")
+            if e.tool == "submit_job"
+        ]
+        for log in (SEALED, MIRROR)
+    }
+    expected = [(OWNER, WORKLOAD, "next", False), (OWNER, NESTED, "loop", True)]
+    assert (actions, read_unattributed_reasons(run)) == ({SEALED: expected, MIRROR: expected}, [])

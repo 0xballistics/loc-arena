@@ -11,10 +11,12 @@ import httpx2
 import pytest
 from loc_arena.board import SERVICE, Board, build_server
 from loc_arena.config import load_run_config
-from loc_arena.mcp_service import IdentityVerifier, build_app, caller_from_token
+from loc_arena.mcp_service import build_app, caller_from_token
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, TextContent
+
+from tests.unit._agent_tokens import AgentTokens
 
 CFG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
 URL = "http://board:8000/mcp"
@@ -44,7 +46,7 @@ async def _served(
     write: Callable[[str], None],
 ) -> AsyncIterator[httpx2.AsyncClient]:
     scopes = {agent.id: agent.scope for agent in CFG.agents}
-    server = build_server(board, caller_from_token, write, scopes, IdentityVerifier(IDENTITIES))
+    server = build_server(board, caller_from_token, write, scopes, AgentTokens(IDENTITIES))
     app = build_app(server, SERVICE)
     async with (
         server.session_manager.run(),

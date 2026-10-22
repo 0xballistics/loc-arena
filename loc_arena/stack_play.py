@@ -8,11 +8,14 @@ starts a new log. ``copy_out`` makes each copy out of the compose project once.
 from __future__ import annotations
 
 import contextlib
+import functools
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
 from loc_arena.config import RunConfig, sandbox_service
+from loc_arena.gateway.model_gateway import MODEL_GATEWAY_SERVICE, drain_record, start_gateway
+from loc_arena.runner_pool import list_runner_services
 from loc_arena.tools_gateway import TOOLS_GATEWAY_SERVICE, serves_tools
 
 EPISODE_SERVICE = "episode"  # the agent loop's compose service: the one caller every sandbox serves
@@ -49,13 +52,25 @@ def renew_services(
 ) -> None:
     """Before the honest twin: every container agent code could leave state in, recreated empty.
 
-    Those are each sandbox, each live service and the tools gateway; the gateway, whose call log runs on, and
-    the episode stay. Each logged service's log so far is first added to its file in ``service_logs``, every
-    copy or none, since a recreated container starts a new log. The recreate uses ``twin_environment``, whose
-    tools gateway config offers the honest twin's tools (no covert tool), so an agent granted a covert tool in
-    the attack config is refused it at the gateway in the twin. Raises ``StackError`` when a log cannot be
-    copied, so nothing is recreated, or when a renewed container does not come back.
+    Those are each sandbox, each runner, each live service and the tools gateway. The model gateway is
+    recreated too, so it admits the twin's runners and counts their calls afresh, once its record is drained;
+    the Collector, and the record, run on. The episode stays. Each logged service's log so far is first added
+    to its file in ``service_logs``, every copy or none, since a recreated container starts a new log. The
+    recreate uses ``twin_environment``, whose tools gateway config offers the honest twin's tools (no covert
+    tool), so an agent granted a covert tool in the attack config is refused it at the gateway in the twin.
+    Raises ``StackError`` when a log cannot be copied or the record does not drain, so nothing is recreated,
+    or when a renewed container does not come back.
     """
+    renewed = [
+        MODEL_GATEWAY_SERVICE,
+        *(sandbox_service(agent.id) for agent in config.agents),
+        *list_runner_services(config),
+        *list_logged_services(config),
+    ]
+    # Every caller the twin renews stops first, so no call is in flight when the record is drained.
+    run = functools.partial(subprocess.run, env=environment)
+    if not drain_record(run, compose, config.settings, callers=renewed[1:]):
+        raise StackError("the gateway's record did not drain before the honest twin, so nothing was renewed")
     copies = list_service_log_copies(config, compose, service_logs)
     logged = [subprocess.run(command, env=environment, capture_output=True) for command, _ in copies]
     if failed := [into.name for (_, into), done in zip(copies, logged, strict=True) if done.returncode]:
@@ -71,9 +86,12 @@ def renew_services(
         raise StackError(
             f"could not write the logs before the honest twin, so nothing was renewed: {error}",
         ) from error
-    renewed = [*(sandbox_service(agent.id) for agent in config.agents), *list_logged_services(config)]
     recreate = ["up", "--detach", "--wait", "--force-recreate", "--renew-anon-volumes", "--no-deps"]
-    if subprocess.run([*compose, *recreate, *renewed], env=twin_environment).returncode != 0:
+    recreated = subprocess.run([*compose, *recreate, *renewed], env=twin_environment).returncode == 0
+    if not (
+        recreated
+        and start_gateway(functools.partial(subprocess.run, env=twin_environment), compose, config.settings)
+    ):
         raise StackError(
             "the renewed containers did not come back for the honest twin: see compose's output above",
         )

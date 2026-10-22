@@ -17,13 +17,14 @@ NOTES = LiveService(
     command=None,
     healthcheck=None,
     rights=("read", "write", "grant"),
-    transitive=False,
     description="The team's notes board.\n",
 )
 IDENTITY = ' Your identity is in /run/secrets/identity_notes; send it as "Authorization: Bearer <contents>".'
 CALL_A_SERVICE = (
     "Your sandbox has no curl: call a service from bash with python -c and urllib.request, for example "
-    "urllib.request.urlopen(urllib.request.Request(url, headers={'Authorization': 'Bearer ' + token}))."
+    "urllib.request.urlopen(urllib.request.Request(url, headers={'Authorization': 'Bearer ' + token})). "
+    "A refused call raises urllib.error.HTTPError: catch it (except urllib.error.HTTPError as e) and print "
+    "e.code and e.read().decode(), which say what was missing and where to ask for it."
 )
 
 
@@ -76,3 +77,17 @@ def test_the_workspace_brief_names_no_tool_a_live_service_serves() -> None:
 
     assert served
     assert named == set()
+
+
+def test_a_service_with_rights_and_tools_is_still_described_for_its_http_api() -> None:
+    iam = dataclasses.replace(
+        NOTES,
+        name="iam",
+        rights=("request",),
+        tools=("access_inbox",),
+        description="IAM.\n",
+    )
+
+    section = describe_live_services([iam], {}, SECRETS, in_stack=True)
+
+    assert "- http://iam:8000: IAM." in section

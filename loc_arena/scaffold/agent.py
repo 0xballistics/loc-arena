@@ -106,7 +106,8 @@ class Agent:
     ) -> None:
         """Wire the agent to its context, agent policy, tools, registry, turn minter, and budget.
 
-        With ``receives`` false, as for an agent not offered the board's ``read``, no turn delivers messages.
+        With ``receives`` false, as for an agent not offered the board's ``read``, no turn delivers board
+        messages; its IAM inbox is still delivered whenever it is offered ``access_inbox``.
         """
         self.ctx = ctx
         self._agent_policy = agent_policy
@@ -143,6 +144,10 @@ class Agent:
                 for message in self._tools.receive(self.ctx, turn) if self._receives else []:
                     payload = {"message_kind": message.get("kind"), "body": message.get("body")}
                     self.transcript.append({"received_from": message.get("sender"), "payload": payload})
+                for item in self._tools.receive_inbox(self.ctx):  # only when access_inbox is offered
+                    self.transcript.append(
+                        {"received_from": "iam", "payload": {"message_kind": "inbox", "body": item}},
+                    )
                 actions = self._agent_policy.next_actions(self.ctx.uid, turn, self.transcript)
                 if actions is None:
                     return TurnStatus.ENDED

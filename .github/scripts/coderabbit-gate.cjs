@@ -1,10 +1,16 @@
 // Runs only from trusted default-branch code; never execute the pull request's checkout.
 const bot = login => login === 'coderabbitai[bot]' || login === 'coderabbitai';
 
-function evaluate({ head, status, reviews, comments, unresolved }) {
-  if (status !== 'success') return { ok: false, reason: 'CodeRabbit has not completed successfully.' };
+// CodeRabbit posts a review only when it has something to say, so a clean review of the head is its commit status
+// alone: statuses belong to one commit, and "Review completed" (not "Review skipped") means it reviewed this one.
+// Approving the pull request replaces that description with "Review approved", which also means it did.
+const REVIEWED = new Set(['Review completed', 'Review approved']);
+
+function evaluate({ head, status, description, reviews, comments, unresolved }) {
+  if (status !== 'success' || !REVIEWED.has(description)) {
+    return { ok: false, reason: 'CodeRabbit has not completed a review of the latest commit.' };
+  }
   const current = reviews.filter(r => bot(r.user.login) && r.commit_id === head && r.state !== 'PENDING');
-  if (!current.length) return { ok: false, reason: 'A CodeRabbit review of the latest commit is required.' };
   const flagged = current.some(r => /Actionable comments posted:\s*[1-9]\d*/i.test(r.body || ''));
   const inline = comments.filter(c => bot(c.user.login) && !c.in_reply_to_id && c.original_commit_id === head);
   if (flagged || inline.length) return { ok: false, reason: 'Latest-commit review has findings; fix and obtain a fresh clean review.' };
@@ -49,7 +55,8 @@ async function run({ github, context }) {
         unresolved += threads.nodes.filter(t => !t.isResolved && bot(t.comments.nodes[0]?.author?.login)).length;
         cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
       } while (cursor);
-      result = evaluate({ head, status: statuses.find(s => s.context === 'CodeRabbit')?.state,
+      const status = statuses.find(s => s.context === 'CodeRabbit');
+      result = evaluate({ head, status: status?.state, description: status?.description,
         reviews, comments, unresolved });
     } catch {
       result = { ok: false, reason: 'Could not verify CodeRabbit metadata; retry this check.' };

@@ -12,7 +12,7 @@ import pytest
 from iam_support import NOTES
 
 from meridian_iam.client import IamClient
-from meridian_iam.contracts import Decision, Unauthenticated, Unavailable, load_manifest
+from meridian_iam.contracts import Decision, Invalid, Unauthenticated, Unavailable, load_manifest
 from meridian_iam.integration import Guard
 
 GOOD: dict[str, Any] = {
@@ -108,6 +108,16 @@ def test_a_4xx_is_the_iam_error_it_names_and_is_not_retried(fake_with) -> None: 
     assert refused.hits == 1
 
 
+def test_every_field_a_malformed_request_got_wrong_reaches_the_caller(fake_with) -> None:  # noqa: ANN001
+    fields = [f"body.field_{index}: missing" for index in range(12)]  # far past the 200-character message
+    refused = fake_with(lambda: (400, {"error": "invalid", "message": "malformed request", "fields": fields}))
+
+    with pytest.raises(Invalid, match="body.field_0: missing") as caught:
+        IamClient(refused.url, "t").submit_request("c", {"resource": "notes"}, "key")
+
+    assert caught.value.fields == tuple(fields)
+
+
 def test_no_credential_means_no_call_to_iam_at_all(fake_with) -> None:  # noqa: ANN001
     fake = fake_with(lambda: (200, GOOD))
     guard = Guard(load_manifest(NOTES), IamClient(fake.url, "t"))
@@ -116,3 +126,29 @@ def test_no_credential_means_no_call_to_iam_at_all(fake_with) -> None:  # noqa: 
     assert fake.hits == 0
     assert guard.check(None, "health") is None  # a public operation needs neither a credential nor IAM
     assert fake.hits == 0
+
+
+WORKLOAD: dict[str, Any] = {
+    "principal": "job-1",
+    "resource": "jobs",
+    "sponsor": "alice",
+    "reference": "run-1",
+    "purpose": "eval run",
+    "grants": {"notes": ["read"]},
+    "expires_at": 1600,
+}
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {k: v for k, v in WORKLOAD.items() if k != "sponsor"},
+        {**WORKLOAD, "expires_at": "soon"},
+        {**WORKLOAD, "grants": {"notes": "read"}},
+        ["not", "an", "object"],
+    ],
+)
+def test_a_malformed_workload_answer_is_unavailable(fake_with, broken: object) -> None:  # noqa: ANN001
+    client = IamClient(fake_with(lambda: (201, broken)).url, "t")
+    with pytest.raises(Unavailable):
+        client.issue_workload("c", "submit_job", "run-1", "eval run", {"notes": ["read"]}, 600, {}, "k")

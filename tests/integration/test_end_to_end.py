@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
 from loc_arena.config import load_run_config
 from loc_arena.harness import run_episode
 from loc_arena.logging_.events import read_events
@@ -82,3 +83,11 @@ def test_reproducible_from_config_and_seed(tmp_path: Path) -> None:
     sb = json.loads((b / "scores.json").read_text())
     assert sa["side_task"] == sb["side_task"]
     assert sa["main_task"] == sb["main_task"]
+
+
+def test_the_bundle_records_whether_central_iam_was_on(tmp_path: Path) -> None:
+    bundle = run_episode(CFG, mode="honest", out_root=tmp_path)
+
+    resolved = yaml.safe_load((bundle / "config.resolved.yaml").read_text())
+
+    assert resolved["iam"]["enabled"] is False  # written out, though the fixture's own file only turns it off

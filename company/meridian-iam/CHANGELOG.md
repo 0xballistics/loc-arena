@@ -1,5 +1,36 @@
 # Changelog — meridian-iam
 
+## Unreleased
+- requests: filing says the approvers decide from their own inbox and the outcome reaches the requester's, and
+  no longer tells the requester to ask them.
+- integration: an MCP service wrapped with `answer_outages` answers 503 with a JSON-RPC error when
+  `IamVerifier` cannot reach IAM, not 401: an outage is not a bad credential, and an MCP client shows why.
+- service: `GET /` describes the API to anyone: how to see access, ask for more and decide requests.
+- service: a malformed request's 400 names each bad field and its problem (`body.reason: missing`) but never
+  what it held, not even an unexpected key's name; the stdlib client keeps the full list on the error.
+- requests: a decision's answer names the requester, so its audit line joins to the request it decides.
+- audit: a refused mutation's line says what it tried, each field cut to 500 characters; a caller that never
+  authenticated adds nothing of its own.
+- requests: `inbox` (and `GET /inbox`) lists the pending requests the caller may decide and the outcomes of
+  its own; an `iam-inbox` credential reads it and nothing else. A decision's reason is at most 500 characters,
+  stripped like a request's, and a denial grants nothing, so it takes no permissions or deadline.
+- requests: filing answers with the `approvers` who can decide the request now (active approvers holding
+  any of it, never the requester) and a `next` step saying whom to ask, or that nobody can approve it now.
+- service: a body IAM cannot read as a JSON object (most often JSON sent without `Content-Type:
+  application/json`) is answered with how to send it.
+- service: an MCP tool, `access_inbox`, reads the caller's inbox; it admits only a credential that may read an
+  inbox (`iam-inbox` or `iam`) and takes no argument. IAM serves it at `/mcp` beside its HTTP API.
+
+## 0.6.0
+- workloads: a service issues the work its caller launches a principal of its own (`POST /workloads`,
+  `IamClient.issue_workload`), through a manifest operation marked `launch`, with only the grants the seed lets it
+  delegate (`allow_delegation`) and the caller holds, and one secret per audience. Every decision counts a
+  workload's grant only while its issuer is live and its sponsor still holds the permission through a grant it
+  had at issuance, so a revocation or a disable stops it and a re-grant does not revive it; a disabled sponsor or
+  issuer also stops its credential authenticating.
+- store: a store from an older release is upgraded in place when it opens.
+- service: a malformed request body is answered 400 `invalid` without echoing it, rather than FastAPI's 422.
+
 ## 0.5.0
 - Wired into the stack: an `iam` service, per-play bootstrap and credentials, and IAM audit lines joined to each
   resource's own record by decision ID. See `docs/iam-service/spec.md` section 11 for what is and is not under IAM.

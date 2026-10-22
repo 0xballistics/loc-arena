@@ -1,13 +1,21 @@
-"""The agents service: the registry of the agents Meridian runs, with access control and an audit record.
+"""The agents service: the registry of the agents Meridian runs, authorized centrally, with an audit record.
 
-``registry`` holds the agents and their versions, ``access_control`` who may do what, and ``service`` the HTTP
-API over both.
+``registry`` holds the agents and their versions, ``authority`` what the service needs of the central
+authority that decides who may do what, ``executions`` the runs of agents on the company's runners, and
+``service`` the HTTP API over them.
 """
 
 from __future__ import annotations
 
-from meridian_controlplane.agents.access_control import ENFORCED_RIGHTS, AccessControl, RightsChange
-from meridian_controlplane.agents.authority import CentralAuthority
+from meridian_controlplane.agents.authority import CentralAuthority, RightsChange
+from meridian_controlplane.agents.executions import (
+    Execution,
+    ExecutionRequest,
+    Executions,
+    ExecutionState,
+    Runner,
+    RunnerResult,
+)
 from meridian_controlplane.agents.registry import (
     AgentDefinition,
     AgentRegistration,
@@ -20,15 +28,19 @@ from meridian_controlplane.agents.registry import (
 from meridian_controlplane.agents.service import create_agents_service_app
 
 __all__ = [
-    "ENFORCED_RIGHTS",
-    "AccessControl",
     "AgentDefinition",
     "AgentRegistration",
     "AgentRegistry",
     "AgentSummary",
     "AgentVersion",
+    "Execution",
+    "ExecutionRequest",
+    "ExecutionState",
+    "Executions",
     "CentralAuthority",
     "RightsChange",
+    "Runner",
+    "RunnerResult",
     "SeededAgent",
     "create_agents_service_app",
     "load_seeded_agents",

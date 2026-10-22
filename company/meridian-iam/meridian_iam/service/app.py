@@ -6,16 +6,38 @@ import dataclasses
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictInt
 
-from meridian_iam.contracts import IamError, Invalid, Unauthenticated
+from meridian_iam.contracts import IamError, InboxItem, Invalid, Unauthenticated
 from meridian_iam.core import Iam
 
 BEARER = "Bearer "
 CALLER_HEADER = "X-Caller-Authorization"
 Key = Annotated[str, Header(alias="Idempotency-Key")]
 Auth = Annotated[str | None, Header()]
+
+
+DESCRIPTION = """Meridian's central IAM: who may do what on each company service, and how to ask for more.
+Send your IAM credential as "Authorization: Bearer <credential>". Every change but a renewal also sends an
+"Idempotency-Key: <unique string>" header; the same key with the same body repeats the first answer.
+Bodies are JSON objects, sent with "Content-Type: application/json".
+GET /access lists your rights everywhere; GET /catalog/<service> what you may ask for on a service;
+GET /grants?resource=<service> who holds what there.
+POST /requests with {"resource": "<service>", "permissions": [...], "reason": "...", "until": <unix time>}
+asks for access; omit "until" for ongoing access where the service allows it. GET /requests lists your
+requests and their decisions; GET /requests/<id> reads one. GET /inbox lists the pending requests you may
+decide and your own requests' outcomes.
+Approvers: GET /queue/<service> lists a service's requests, decided ones too. Decide a pending one, never
+your own, with POST /requests/<id>/decision and {"approve": true or false, "reason": "...", "permissions":
+[...], "until": <unix time>}; permissions and until may only narrow an approval, and a denial sends neither.
+A decision's reason, like a request's, is at most 500 characters.
+POST /grants with {"principal", "resource", "permissions", "until"?} grants within your authority (omit
+"until" for ongoing access); POST /grants/revoke with {"principal", "resource", "permissions"} revokes.
+POST /credentials/renew with {"credential": "<a new secret you generated>"} replaces your credential.
+A 403 names what you lack; a 401 means your credential is wrong, expired or revoked.
+"""
 
 
 class _Body(BaseModel):
@@ -71,6 +93,17 @@ class RenewBody(_Body):
     credential: str
 
 
+class WorkloadBody(_Body):
+    """Work a service launches for its caller: launch operation, ID, purpose, rights, lifetime, secrets."""
+
+    operation: str
+    reference: str
+    purpose: str
+    grants: dict[str, list[str]]
+    ttl: StrictInt  # a JSON number, as the core requires; "600" is refused, not converted
+    credentials: dict[str, str]
+
+
 class AuthorizeBody(_Body):
     """One call to decide; the caller's credential travels in a header, never in the body."""
 
@@ -85,6 +118,29 @@ def bearer(header: str | None) -> str:
     return header.removeprefix(BEARER)
 
 
+UNREADABLE_BODY = "body: send a JSON object with Content-Type: application/json"
+
+
+def malformed_fields(error: RequestValidationError) -> list[str]:
+    """Each malformed part of a request as ``<where>.<declared field>: <problem>``, never its value.
+
+    A value can be a secret, and so can the name of a key the request should not have sent, or a key inside a
+    field (a secret's audience is fine, but a caller can put anything there): only the location and a
+    declared top-level field name are kept.
+    """
+    parts = set()
+    for problem in error.errors():
+        where, kind = problem["loc"], problem["type"]
+        declared = kind != "extra_forbidden" and len(where) > 1 and isinstance(where[1], str)
+        if declared:
+            parts.add(f"{where[0]}.{where[1]}: {kind}")
+        elif where[0] == "body" and kind != "extra_forbidden":
+            parts.add(UNREADABLE_BODY)  # not a JSON object, most often JSON sent without its content type
+        else:
+            parts.add(f"{where[0]}: {kind}")
+    return sorted(parts)
+
+
 def create_app(iam: Iam) -> FastAPI:
     """The API over ``iam``. Handlers are ``async``: one event loop serializes access to the store."""
     app = FastAPI(title="Meridian IAM", docs_url=None, redoc_url=None, openapi_url=None)
@@ -93,9 +149,21 @@ def create_app(iam: Iam) -> FastAPI:
     async def iam_error(_: Request, exc: IamError) -> JSONResponse:
         return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=exc.status)
 
+    @app.exception_handler(RequestValidationError)
+    async def malformed(_: Request, error: RequestValidationError) -> JSONResponse:
+        # An Invalid like any other, naming where and how the request was malformed, never what it held.
+        return JSONResponse(
+            {"error": Invalid.code, "message": "malformed request", "fields": malformed_fields(error)},
+            status_code=Invalid.status,
+        )
+
     @app.get("/health", response_class=PlainTextResponse)
     async def health() -> str:
         return "ok"
+
+    @app.get("/", response_class=PlainTextResponse)
+    async def describe_api() -> str:
+        return DESCRIPTION
 
     @app.post("/authorize")
     async def authorize(
@@ -107,6 +175,26 @@ def create_app(iam: Iam) -> FastAPI:
         return dataclasses.asdict(
             iam.authorize(bearer(authorization), caller_token, body.operation, body.target),
         )
+
+    @app.post("/workloads", status_code=201)
+    async def issue_workload(
+        body: WorkloadBody,
+        key: Key,
+        authorization: Auth = None,
+        caller: Annotated[str | None, Header(alias=CALLER_HEADER)] = None,
+    ) -> dict[str, Any]:
+        workload = iam.issue_workload(
+            bearer(authorization),
+            bearer(caller) if caller else None,
+            body.operation,
+            body.reference,
+            body.purpose,
+            body.grants,
+            body.ttl,
+            body.credentials,
+            key,
+        )
+        return dataclasses.asdict(workload)
 
     @app.post("/credentials/renew")
     async def renew(body: RenewBody, authorization: Auth = None) -> dict[str, Any]:
@@ -170,6 +258,10 @@ def create_app(iam: Iam) -> FastAPI:
             body.until,
             key,
         )
+
+    @app.get("/inbox")
+    async def inbox(authorization: Auth = None) -> list[InboxItem]:
+        return iam.inbox(bearer(authorization))
 
     @app.get("/requests")
     async def my_requests(authorization: Auth = None) -> list[dict[str, Any]]:

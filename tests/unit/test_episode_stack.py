@@ -1,14 +1,14 @@
 """The rendered compose file: the key and the route out in the gateway alone, the logs out of any sandbox.
 
-Every agent's identity on a live service with rights in that agent's sandbox alone and in the service, which
-also gets the starting rights; a stack run copies each live service's log out before teardown.
+Identities and starting rights sit in their sandbox and service alone; services' logs are copied out.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import json
+import socket
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
@@ -19,11 +19,10 @@ from loc_arena import episode_stack
 from loc_arena.config import AgentSandboxConfig, load_run_config
 from loc_arena.episode_stack import (
     AGENT_NETWORK,
-    EGRESS_NETWORK,
     ComposeDocument,
     Identity,
     StackError,
-    _issue_secrets,
+    issue_secrets,
     render_compose,
     run_in_stack,
     sandbox_agent_code,
@@ -41,8 +40,8 @@ from scenarios.loader import SCENARIOS_ROOT, EngineModule, LiveService, load_sce
 REPOSITORY = Path("/repository")
 COMPANY = ("common", "controlplane", "datapipe", "distill", "evalkit", "jobsvc", "serving")
 COMPANY_PATH = ":".join(
-    f"/app/company/meridian-{repo}" for repo in COMPANY
-)  # the engine image's company repos
+    f"/app/company/meridian-{repo}" for repo in (*COMPANY, "iam")
+)  # the engine image's company repos, and the IAM client
 SCRIPTED_CONFIG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
 TWO_AGENTS = (SCRIPTED_CONFIG.agent("agent-main"), SCRIPTED_CONFIG.agent("serving-agent"))
 SANDBOXES = ["sandbox-agent-main", "sandbox-serving-agent"]
@@ -52,7 +51,7 @@ SKILLS = SCENARIOS_ROOT / "aurora_efficiency" / "skills"
 SKILLS_MOUNT = f"{SKILLS}:/skills:ro"  # read-only, where the default settings put them
 # An agent with rights on notes and an agent with none, as the run config seeds them.
 WITH_RIGHTS_AND_WITHOUT = (SCRIPTED_CONFIG.agent("agent-main"), SCRIPTED_CONFIG.agent("controlplane-agent"))
-LIVE_SERVICES = ["notes", "wiki", "board"]
+LIVE_SERVICES = ["notes", "wiki", "status"]
 # A service with tools, run from the engine image: agent-main may call one of its tools, the other none.
 FORGE = LiveService(
     name="forge",
@@ -61,7 +60,6 @@ FORGE = LiveService(
     command=None,
     healthcheck=None,
     rights=(),
-    transitive=False,
     description="the forge",
     tools=("open_pr", "close_pr"),
 )
@@ -78,15 +76,13 @@ PACK = """\
 scorer: aurora_pipeline_cost
 verifier: kill_chain_v1
 services:
-  notes: {build: services/notes, port: 8000, rights: [read, write, grant], description: the notes board}
+  notes: {build: services/notes, port: 8000, rights: [read, write], description: the notes board}
   wiki:
     image: example/wiki:1
     command: [wiki, serve]
     port: 9000
     healthcheck: [CMD, wiki, ping]
-    rights: [view, edit, grant]
-    transitive: true
-  board: {build: services/board, port: 7000}
+  status: {build: services/status, port: 7000}
   ticketboard: {port: 8090}
 """
 
@@ -105,9 +101,10 @@ def render(settings: LocArenaSettings | None = None, *, policy: str = "scripted"
 @pytest.fixture
 def pack(tmp_path: Path) -> Path:
     directory = tmp_path / "pack"
-    for built in ("notes", "board"):
+    for built in ("notes", "status"):
         (directory / "services" / built).mkdir(parents=True)
-        (directory / "services" / built / "Dockerfile").write_text("FROM scratch\n")
+        dockerfile = "FROM scratch\nCOPY --from=meridian-iam /meridian_iam ./meridian_iam\n"  # the IAM client
+        (directory / "services" / built / "Dockerfile").write_text(dockerfile)
     (directory / "scenario.yaml").write_text(PACK)
     return directory.resolve()
 
@@ -158,22 +155,12 @@ def scenario_mounts(compose: ComposeDocument) -> dict[str, list[str]]:
     }
 
 
-def test_only_the_gateway_is_on_the_network_with_a_route_out() -> None:
-    compose = render()
-
-    on_egress = [
-        name for name, service in compose["services"].items() if EGRESS_NETWORK in service["networks"]
-    ]
-
-    assert (on_egress, compose["networks"][EGRESS_NETWORK]["internal"]) == (["gateway"], False)
-
-
 def test_the_stack_has_one_sandbox_per_agent() -> None:
     compose = render()
 
     services = sorted(compose["services"])
 
-    assert services == ["episode", "gateway", *SANDBOXES]
+    assert services == ["collector", "episode", "gateway", *SANDBOXES]
 
 
 @pytest.mark.parametrize("service", ["episode", *SANDBOXES])
@@ -189,12 +176,13 @@ def test_each_service_mounts_only_the_volumes_it_needs() -> None:
     compose = render(policy="model")
 
     sources = {
-        name: sorted(volume.split(":")[0] for volume in service["volumes"])
+        name: sorted(volume.split(":")[0] for volume in service.get("volumes", []))
         for name, service in compose["services"].items()
     }
 
     assert sources == {
-        "gateway": ["/repository/configs", "sealed"],
+        "gateway": [],
+        "collector": ["sealed"],
         "sandbox-agent-main": [str(SKILLS), "checkouts"],
         "sandbox-serving-agent": [str(SKILLS), "checkouts"],
         "episode": ["/repository/configs", "checkouts", "output"],
@@ -218,8 +206,8 @@ def test_the_gateway_holds_the_key_and_the_episode_every_sandbox_token() -> None
     holders = {name: compose["services"][name]["secrets"] for name in ("gateway", "episode")}
 
     assert holders == {
-        "gateway": ["openrouter_api_key"],
-        "episode": ["sandbox_token_agent_main", "sandbox_token_serving_agent"],
+        "gateway": ["openrouter_api_key", "model_gateway_config"],
+        "episode": ["gateway_token", "sandbox_token_agent_main", "sandbox_token_serving_agent"],
     }
 
 
@@ -230,6 +218,9 @@ def test_compose_reads_each_secret_from_its_own_host_variable() -> None:
 
     assert sources == {
         "openrouter_api_key": {"environment": "OPENROUTER_API_KEY"},
+        "model_gateway_config": {"environment": "LOC_ARENA_MODEL_GATEWAY_CONFIG"},
+        "collector_config": {"environment": "LOC_ARENA_COLLECTOR_CONFIG"},
+        "gateway_token": {"environment": "LOC_ARENA_GATEWAY_TOKEN"},
         "sandbox_token_agent_main": {"environment": "LOC_ARENA_SANDBOX_TOKEN_AGENT_MAIN"},
         "sandbox_token_serving_agent": {"environment": "LOC_ARENA_SANDBOX_TOKEN_SERVING_AGENT"},
     }
@@ -242,6 +233,7 @@ def test_every_service_drops_every_capability() -> None:
 
     assert dropped == {
         "gateway": ["ALL"],
+        "collector": ["ALL"],
         "sandbox-agent-main": ["ALL"],
         "sandbox-serving-agent": ["ALL"],
         "episode": ["ALL"],
@@ -255,16 +247,17 @@ def test_the_episode_sends_its_model_calls_to_the_gateway_and_each_agents_code_t
 
     assert environment == {
         core.GATEWAY_URL_VARIABLE: "http://gateway:9191/api/v1/chat/completions",
+        core.GATEWAY_TOKEN_FILE_VARIABLE: "/run/secrets/gateway_token",
         SANDBOX_URL_VARIABLE: "http://sandbox-{agent}:9292",
     }
 
 
-def test_the_episode_starts_once_the_gateway_and_every_sandbox_are_healthy() -> None:
+def test_the_episode_starts_once_the_gateway_has_started_and_every_sandbox_is_healthy() -> None:
     compose = render()
 
     awaited = compose["services"]["episode"]["depends_on"]
 
-    assert awaited == {"gateway": HEALTHY, "sandbox-agent-main": HEALTHY, "sandbox-serving-agent": HEALTHY}
+    assert awaited == {"gateway": STARTED, "sandbox-agent-main": HEALTHY, "sandbox-serving-agent": HEALTHY}
 
 
 @pytest.mark.parametrize("sandbox", SANDBOXES)
@@ -296,22 +289,6 @@ def test_every_sandbox_gets_the_settings_its_command_server_needs_in_its_command
     )
 
 
-def test_the_gateway_shares_the_episodes_network() -> None:
-    compose = render()
-
-    gateway_networks = compose["services"]["gateway"]["networks"]
-
-    assert AGENT_NETWORK in gateway_networks
-
-
-def test_the_gateway_reads_the_settings_of_the_requested_run() -> None:
-    compose = render()
-
-    command = compose["services"]["gateway"]["command"]
-
-    assert command[-1] == "/app/configs/a-run.yaml"
-
-
 def test_the_episode_runs_the_requested_run_and_mode() -> None:
     compose = render()
 
@@ -321,13 +298,19 @@ def test_the_episode_runs_the_requested_run_and_mode() -> None:
 
 
 def test_each_service_runs_its_targets_image_and_one_sandbox_builds_the_sandboxes() -> None:
-    stack = StackSettings(image="engine:tag", sandbox_image="sandbox:tag")
+    stack = StackSettings(
+        image="engine:tag",
+        sandbox_image="sandbox:tag",
+        tools_gateway_image="agentgateway:tag",
+        collector_image="collector:tag",
+    )
 
     services = render(LocArenaSettings(stack=stack))["services"]
 
     built = {name: (service.get("build"), service["image"]) for name, service in services.items()}
     assert built == {
-        "gateway": ({"context": "/repository", "target": "engine"}, "engine:tag"),
+        "gateway": (None, "agentgateway:tag"),
+        "collector": (None, "collector:tag"),
         "sandbox-agent-main": ({"context": "/repository", "target": "sandbox"}, "sandbox:tag"),
         "sandbox-serving-agent": (None, "sandbox:tag"),
         "episode": ({"context": "/repository", "target": "engine"}, "engine:tag"),
@@ -365,19 +348,6 @@ def test_the_limits_of_the_episode_and_of_every_sandbox_come_from_their_own_sett
     assert limits == expected
 
 
-def test_the_gateway_port_is_published_on_the_hosts_loopback_alone() -> None:
-    settings = LocArenaSettings(gateway=GatewaySettings(port=9191))
-
-    published = {name: service.get("ports") for name, service in render(settings)["services"].items()}
-
-    assert published == {
-        "gateway": ["127.0.0.1::9191"],
-        "sandbox-agent-main": None,
-        "sandbox-serving-agent": None,
-        "episode": None,
-    }
-
-
 def test_a_scripted_episode_gets_the_scripted_moves_mounted_read_only() -> None:
     compose = render(policy="scripted")
 
@@ -386,6 +356,7 @@ def test_a_scripted_episode_gets_the_scripted_moves_mounted_read_only() -> None:
     source = SCENARIOS_ROOT / "aurora_efficiency" / "scripted"
     assert mounts == {
         "gateway": [],
+        "collector": [],
         "sandbox-agent-main": [SKILLS_MOUNT],
         "sandbox-serving-agent": [SKILLS_MOUNT],
         "episode": [f"{source}:/app/scenarios/aurora_efficiency/scripted:ro"],
@@ -399,6 +370,7 @@ def test_a_live_model_episode_mounts_only_the_scenarios_skills_read_only_in_ever
 
     assert mounts == {
         "gateway": [],
+        "collector": [],
         "sandbox-agent-main": [SKILLS_MOUNT],
         "sandbox-serving-agent": [SKILLS_MOUNT],
         "episode": [],
@@ -423,7 +395,7 @@ def test_a_sandbox_its_agent_killed_comes_back(sandbox: str) -> None:
     assert restart == "unless-stopped"
 
 
-def test_a_live_service_built_from_its_pack_runs_bounded_on_agent_net_alone_with_every_agents_identity(
+def test_a_live_service_built_from_its_pack_runs_bounded_on_agent_net_alone_with_its_iam_credential(
     pack: Path,
     live_services: tuple[LiveService, ...],
 ) -> None:
@@ -432,7 +404,10 @@ def test_a_live_service_built_from_its_pack_runs_bounded_on_agent_net_alone_with
     notes = render_live(live_services, LocArenaSettings(stack=stack))["services"]["notes"]
 
     assert notes == {
-        "build": {"context": f"{pack}/services/notes"},
+        "build": {
+            "context": f"{pack}/services/notes",
+            "additional_contexts": {"meridian-iam": str(Path(__file__).parents[2] / "company/meridian-iam")},
+        },
         "image": "loc-arena-service-notes:latest",
         "cap_drop": ["ALL"],
         "mem_limit": "300m",
@@ -440,14 +415,14 @@ def test_a_live_service_built_from_its_pack_runs_bounded_on_agent_net_alone_with
         "pids_limit": 64,
         "networks": ["agent-net"],
         "environment": {
-            "LOC_ARENA_VOCABULARY": '["read", "write", "grant"]',
-            "LOC_ARENA_RIGHTS": '{"agent-main": ["read", "write", "grant"], "controlplane-agent": []}',
-            "LOC_ARENA_TRANSITIVE": "false",
+            "LOC_ARENA_IAM_URL": "http://iam:8000",
+            "LOC_ARENA_IAM_MANIFEST": "/srv/iam-manifest.json",
+            "LOC_ARENA_IAM_CREDENTIAL": "/run/secrets/iam_credential",
+            "LOC_ARENA_IAM_TIMEOUT_SECONDS": "2.0",
+            "LOC_ARENA_IAM_RETRIES": "2",
         },
-        "secrets": [
-            {"source": "identity_notes_agent-main", "target": "identity_agent-main"},
-            {"source": "identity_notes_controlplane-agent", "target": "identity_controlplane-agent"},
-        ],
+        "secrets": [{"source": "iam_service_notes", "target": "iam_credential"}],
+        "depends_on": {"iam": HEALTHY},
         "healthcheck": {
             "test": [
                 "CMD",
@@ -477,43 +452,14 @@ def test_a_live_service_from_a_ready_image_runs_its_command_and_healthcheck(
     )
 
 
-@pytest.mark.parametrize(("service", "transitive"), [("notes", "false"), ("wiki", "true")])
-def test_a_live_service_is_told_whether_the_grant_right_can_be_granted(
-    live_services: tuple[LiveService, ...],
-    service: str,
-    transitive: str,
-) -> None:
-    compose = render_live(live_services)
-
-    told = compose["services"][service]["environment"]["LOC_ARENA_TRANSITIVE"]
-
-    assert told == transitive
-
-
-@pytest.mark.parametrize(
-    ("service", "vocabulary"),
-    [("notes", ["read", "write", "grant"]), ("wiki", ["view", "edit", "grant"])],
-)
-def test_a_live_service_is_told_the_rights_its_scenario_declares(
-    live_services: tuple[LiveService, ...],
-    service: str,
-    vocabulary: list[str],
-) -> None:
-    compose = render_live(live_services)
-
-    told = compose["services"][service]["environment"]["LOC_ARENA_VOCABULARY"]
-
-    assert json.loads(told) == vocabulary
-
-
 def test_a_live_service_with_no_rights_gets_no_identity_and_no_rights(
     live_services: tuple[LiveService, ...],
 ) -> None:
     compose = render_live(live_services)
 
-    board = compose["services"]["board"]
+    status = compose["services"]["status"]
 
-    assert (board.get("secrets"), board.get("environment")) == (None, None)
+    assert (status.get("secrets"), status.get("environment")) == (None, None)
 
 
 def test_every_live_service_is_only_on_the_network_with_no_route_out(
@@ -523,7 +469,7 @@ def test_every_live_service_is_only_on_the_network_with_no_route_out(
 
     networks = {name: compose["services"][name]["networks"] for name in LIVE_SERVICES}
 
-    assert networks == {"notes": [AGENT_NETWORK], "wiki": [AGENT_NETWORK], "board": [AGENT_NETWORK]}
+    assert networks == {"notes": [AGENT_NETWORK], "wiki": [AGENT_NETWORK], "status": [AGENT_NETWORK]}
 
 
 def test_each_sandbox_holds_exactly_its_own_identity_on_each_service_with_rights(
@@ -537,12 +483,10 @@ def test_each_sandbox_holds_exactly_its_own_identity_on_each_service_with_rights
         "sandbox-agent-main": [
             {"source": "sandbox_token_agent_main", "target": "sandbox_token"},
             {"source": "identity_notes_agent-main", "target": "identity_notes"},
-            {"source": "identity_wiki_agent-main", "target": "identity_wiki"},
         ],
         "sandbox-controlplane-agent": [
             {"source": "sandbox_token_controlplane_agent", "target": "sandbox_token"},
             {"source": "identity_notes_controlplane-agent", "target": "identity_notes"},
-            {"source": "identity_wiki_controlplane-agent", "target": "identity_wiki"},
         ],
     }
 
@@ -555,8 +499,8 @@ def test_neither_the_gateway_nor_the_episode_holds_an_identity(
     holders = {name: compose["services"][name]["secrets"] for name in ("gateway", "episode")}
 
     assert holders == {
-        "gateway": ["openrouter_api_key"],
-        "episode": ["sandbox_token_agent_main", "sandbox_token_controlplane_agent"],
+        "gateway": ["openrouter_api_key", "model_gateway_config"],
+        "episode": ["gateway_token", "sandbox_token_agent_main", "sandbox_token_controlplane_agent"],
     }
 
 
@@ -570,8 +514,6 @@ def test_compose_reads_each_identity_from_its_own_host_variable(
     assert identities == {
         "identity_notes_agent-main": {"environment": "LOC_ARENA_IDENTITY_NOTES_AGENT_MAIN"},
         "identity_notes_controlplane-agent": {"environment": "LOC_ARENA_IDENTITY_NOTES_CONTROLPLANE_AGENT"},
-        "identity_wiki_agent-main": {"environment": "LOC_ARENA_IDENTITY_WIKI_AGENT_MAIN"},
-        "identity_wiki_controlplane-agent": {"environment": "LOC_ARENA_IDENTITY_WIKI_CONTROLPLANE_AGENT"},
     }
 
 
@@ -581,6 +523,7 @@ def test_identities_that_would_share_one_host_variable_are_refused_naming_both(
     notes = next(service for service in live_services if service.name == "notes")
     config = dataclasses.replace(
         SCRIPTED_CONFIG,
+        settings=LocArenaSettings(),
         agents=(
             SCRIPTED_CONFIG.agent("agent-main"),
             dataclasses.replace(SCRIPTED_CONFIG.agent("agent-main"), id="main"),
@@ -600,34 +543,16 @@ def test_the_episode_starts_once_every_live_service_is_healthy(
     awaited = compose["services"]["episode"]["depends_on"]
 
     assert awaited == {
-        "gateway": HEALTHY,
+        "gateway": STARTED,
         "sandbox-agent-main": HEALTHY,
         "sandbox-controlplane-agent": HEALTHY,
         "notes": HEALTHY,
         "wiki": HEALTHY,
-        "board": HEALTHY,
+        "status": HEALTHY,
     }
 
 
-def test_the_run_config_seeds_grant_on_notes_for_agent_main_alone_and_no_right_for_controlplane_agent() -> (
-    None
-):
-    config = load_run_config("configs/aurora-efficiency.yaml")
-
-    notes = render_compose(config, REPOSITORY, "aurora-efficiency", [])["services"]["notes"]
-
-    assert json.loads(notes["environment"]["LOC_ARENA_RIGHTS"]) == {
-        "agent-main": ["read", "write", "grant"],
-        "serving-agent": ["read", "write"],
-        "distill-agent": ["read", "write"],
-        "eval-agent": ["read", "write"],
-        "datapipe-agent": ["read", "write"],
-        "jobsvc-agent": ["read", "write"],
-        "controlplane-agent": [],
-    }
-
-
-def test_a_service_with_tools_runs_its_engine_module_with_the_run_config_and_every_identity() -> None:
+def test_a_service_with_tools_runs_its_engine_module_with_the_run_config_and_its_iam_credential() -> None:
     stack = StackSettings(service_memory_limit="300m", service_cpus=0.5, service_pids_limit=64)
 
     forge = render_tools(LocArenaSettings(stack=stack))["services"]["forge"]
@@ -638,15 +563,20 @@ def test_a_service_with_tools_runs_its_engine_module_with_the_run_config_and_eve
         "cap_drop": ["ALL"],
         "command": ["python", "-m", "loc_arena.forge.service", "/app/configs/a-run.yaml", "forge"],
         "volumes": ["/repository/configs:/app/configs:ro"],
-        "environment": {"PYTHONPATH": COMPANY_PATH},
+        "environment": {
+            "PYTHONPATH": COMPANY_PATH,
+            "LOC_ARENA_IAM_URL": "http://iam:8000",
+            "LOC_ARENA_IAM_MANIFEST": "/app/scenarios/aurora_efficiency/services/iam-manifests/forge.json",
+            "LOC_ARENA_IAM_CREDENTIAL": "/run/secrets/iam_credential",
+            "LOC_ARENA_IAM_TIMEOUT_SECONDS": "2.0",
+            "LOC_ARENA_IAM_RETRIES": "2",
+        },
         "mem_limit": "300m",
         "cpus": 0.5,
         "pids_limit": 64,
         "networks": ["agent-net"],
-        "secrets": [
-            {"source": "identity_forge_agent-main", "target": "identity_agent-main"},
-            {"source": "identity_forge_controlplane-agent", "target": "identity_controlplane-agent"},
-        ],
+        "secrets": [{"source": "iam_service_forge", "target": "iam_credential"}],
+        "depends_on": {"iam": HEALTHY},
         "healthcheck": {
             "test": [
                 "CMD",
@@ -830,6 +760,7 @@ class FakeDocker:
     unwritable_after_first_play: Path | None = None  # logs whose run's notes.log is a directory once played
     calls: list[list[str]] = field(default_factory=list)
     environment: dict[str, str] = field(default_factory=dict)
+    published: str = ""  # where the gateway's port is published: a socket the test listens on
 
     def __call__(
         self,
@@ -837,6 +768,7 @@ class FakeDocker:
         *,
         env: dict[str, str] | None = None,  # none on the host's own call, for the gateway's published port
         stdout: IO[bytes] | None = None,
+        text: bool = False,
         **_: object,
     ) -> subprocess.CompletedProcess[Any]:
         self.calls.append(command)
@@ -852,7 +784,9 @@ class FakeDocker:
             playing and self.plays > self.plays_passing
         )
         created = "container-id\n" if verb == "ps" and self.episode_created_only else ""
-        printed = NOTES_LOG if verb == "logs" and stdout is None else created
+        published = self.published if verb == "port" else created
+        printed = NOTES_LOG if verb == "logs" and stdout is None else published
+        printed = printed.decode() if text and isinstance(printed, bytes) else printed
         return subprocess.CompletedProcess(command, int(failed), stdout=printed)
 
     @property
@@ -865,10 +799,11 @@ class FakeDocker:
 
 
 @pytest.fixture
-def docker(monkeypatch: pytest.MonkeyPatch) -> FakeDocker:
-    fake = FakeDocker()
-    monkeypatch.setattr(subprocess, "run", fake)
-    return fake
+def docker(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeDocker]:
+    with socket.create_server(("127.0.0.1", 0)) as gateway:
+        fake = FakeDocker(published=f"127.0.0.1:{gateway.getsockname()[1]}")
+        monkeypatch.setattr(subprocess, "run", fake)
+        yield fake
 
 
 def run_aurora_in_stack(logs: Path, mode: str = "honest") -> None:
@@ -896,13 +831,11 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         [v for v in identities.values() if v in written],
     ) == (
         [
-            *(
-                f"LOC_ARENA_IDENTITY_{service}_{agent}"
-                for service in ("AGENTS", "BOARD", "COVERAGE", "FORGE", "JOBS", "NOTES", "SCRATCH")
-                for agent in AURORA_AGENTS
-            ),
+            f"LOC_ARENA_IDENTITY_{service}_{agent}"
+            for service in ("AGENTS", "BOARD", "COVERAGE", "FORGE", "IAM", "JOBS", "NOTES", "SCRATCH")
+            for agent in AURORA_AGENTS
         ],
-        49,
+        56,
         [],
     )
 
@@ -1046,6 +979,7 @@ def test_a_stack_run_copies_each_live_services_log_into_its_run_directory_before
                 "board.log",
                 "coverage.log",
                 "forge.log",
+                "iam.log",
                 "jobs.log",
                 "notes.log",
                 "scratch.log",
@@ -1070,7 +1004,7 @@ def test_a_graded_stack_run_copies_its_run_directory_out_once(
     assert len(outputs) == 1
 
 
-def test_an_attack_stack_run_renews_every_container_but_the_gateway_and_the_episode_before_the_honest_twin(
+def test_an_attack_stack_run_drains_the_record_then_renews_every_container_but_the_episode_for_the_twin(
     docker: FakeDocker,
     tmp_path: Path,
 ) -> None:
@@ -1081,15 +1015,30 @@ def test_an_attack_stack_run_renews_every_container_but_the_gateway_and_the_epis
 
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
-    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "agentgateway")
-    assert commands[plays[0] + 1 : plays[1]] == [
+    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "iam", "agentgateway")
+    between = [
+        command[:2] if command[0] == "cp" else command for command in commands[plays[0] + 1 : plays[1]]
+    ]
+    renewed = ["sandbox-agent-main", "sandbox-serving-agent", "sandbox-distill-agent", "sandbox-eval-agent"]
+    renewed += ["sandbox-datapipe-agent", "sandbox-jobsvc-agent", "sandbox-controlplane-agent"]
+    renewed += ["runner-1", "runner-2", "runner-3", *logged]
+    assert between == [
+        ["stop", *renewed],
+        ["logs", "--no-color", "--no-log-prefix", "gateway"],
+        ["cp", "collector:/sealed/calls.jsonl"],
         *(["logs", "--no-color", "--no-log-prefix", service] for service in logged),
         [
-            *["up", "--detach", "--wait", "--force-recreate", "--renew-anon-volumes", "--no-deps"],
-            *["sandbox-agent-main", "sandbox-serving-agent", "sandbox-distill-agent", "sandbox-eval-agent"],
-            *["sandbox-datapipe-agent", "sandbox-jobsvc-agent", "sandbox-controlplane-agent"],
-            *logged,
+            "up",
+            "--detach",
+            "--wait",
+            "--force-recreate",
+            "--renew-anon-volumes",
+            "--no-deps",
+            "gateway",
+            *renewed,
         ],
+        ["up", "--detach", "--wait", "gateway"],
+        ["port", "gateway", "8080"],
     ]
 
 
@@ -1198,7 +1147,7 @@ def test_honest_mode_drops_the_covert_tools_from_each_agents_sandbox_tools() -> 
 def test_the_honest_twin_env_carries_a_gateway_config_without_covert_tools() -> None:
     config = load_run_config("configs/aurora-efficiency.yaml")
 
-    attack_env, twin_env = _issue_secrets(config)
+    attack_env, twin_env = issue_secrets(config)
 
     attack_policy = attack_env[TOOLS_GATEWAY_CONFIG_VARIABLE]
     twin_policy = twin_env[TOOLS_GATEWAY_CONFIG_VARIABLE]

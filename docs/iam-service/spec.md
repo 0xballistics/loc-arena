@@ -1,11 +1,12 @@
 # Service architecture and central IAM specification
 
-Status: target contract with slices 1-9 implemented behind an opt-in switch, 13 October 2026. The repository
+Status: required of every agent-facing service ([agent instructions](../../AGENTS.md)); slices 1-9
+implemented, and on by default since October 2026. The repository
 uses a services architecture in a monorepo. Central IAM (`company/meridian-iam/`) and its shared integration
-exist and are tested, and a run config that sets `iam: {enabled: true}` runs the stack under it
-(`configs/aurora-efficiency.iam.yaml`). Every run config without it is unchanged: the services keep their own
-rights and queues, and no service is compliant merely because this document or the package exists. See
-[section 11](#11-migration-status) for exactly which surfaces are under IAM, which remain legacy, and what is
+exist and are tested, and a run is under it unless its config turns `iam.enabled` off, which only the in-process
+deterministic fixture does; the legacy local rights remain in the code until they are deleted. No service is compliant merely because this document or
+the package exists. See
+[section 11](#11-migration-status) for exactly which surfaces are under IAM and what is
 not done.
 
 This is the IAM architecture contract for every new or changed agent-facing service. Component specs may
@@ -127,7 +128,8 @@ bearer-token string. Ongoing grants are explicit and revocable; permanent creden
 
 Approvers must currently be active eligible owners with standing authority to grant every approved permission.
 Owner membership alone confers no grant authority. Temporary permissions cannot be delegated into permanent
-rights. Decisions cannot expand requested scope or duration. Pending/denied requests grant nothing.
+rights. Decisions cannot expand requested scope or duration. Pending and denied requests grant nothing, and a
+denial records no permissions or deadline, so no listing shows it approving any.
 
 Centralize direct administration too. Compatibility service `/grants` endpoints may forward to IAM during
 migration but must not retain authoritative local state. Revoke removes the specified scope from every
@@ -147,9 +149,10 @@ other agents' grants, queue reasons or resource existence the caller is not allo
 credential recovery, not a permission request.
 
 The requester supplies scope, reason and desired lifetime. IAM derives identity and routes to current owner
-eligibility; the requester cannot nominate its approver. Eligible owner agents inspect their resource queues
-on their own turns. Requesters inspect their own decisions and can continue unrelated work while waiting.
-Initial delivery uses polling; a new event broker or global agent pause is unnecessary.
+eligibility; the requester cannot nominate its approver, but filing tells it who may decide the request now, so
+it can ask them. Eligible owner agents inspect their resource queues on their own turns. Requesters inspect their
+own decisions and can continue unrelated work while waiting. Initial delivery uses polling; a new event broker or
+global agent pause is unnecessary.
 
 After approval, the requester retries the resource operation; it is checked again. IAM records decisions and
 returns request status separately from current effective access. Historical approved status is not proof of
@@ -165,14 +168,30 @@ cutover. A scoped renewal capability cannot widen audience/scope or re-enable a 
 replacement must be delivered only to the authorized sandbox/service through a tested restricted runtime path;
 existing static compose-secret mounts are not assumed to update in place.
 
-An executable agent definition from #120 is not an IAM principal or a running process. In future execution
-support, the agents service must check the caller's launch permission and its authority to assign the requested
-execution access. Bind a distinct execution principal to the authorized definition/version and job. Never
-copy the caller's full credential or inherit all its grants. Required permissions can be discovered before
-launch; declaring them does not assign them.
+Work a caller launches (a job, an eval run, an agent run) runs as a workload: a `job` principal of its own,
+issued by the launching service (`POST /workloads`). It never gets the caller's credential or all its grants.
 
-Job autorenewal, stop-on-revoke and checkpoints depend on real runner/job lifecycle support and need their own
-spec and integration. Current recording-service job tools are not proof of this behavior.
+- **Gate.** Issuance goes through a manifest operation marked `launch` (a permission, no target) whose
+  permission the caller holds, by the service bound to that resource, and only for permissions the trusted
+  seed lets that service delegate (`allow_delegation`). A compromised service can mint no more than its
+  delegations.
+- **Rights.** Each requested grant must be delegable and held by the caller now, and ends at the earlier of the
+  workload's `ttl` and the caller's grant it copies.
+- **Credentials.** The service generates one secret per audience the granted resources need and hands each to
+  the work; IAM stores digests only and never returns them. No workload gets `iam` or `iam:<resource>`.
+- **Liveness.** A workload's grant counts only while its issuer is active, bound and still allowed to delegate
+  it, and its sponsor holds the permission through a grant it already had at issuance (by grant ID, so a
+  re-grant, even in the same second, does not revive it). Disabling the sponsor or the issuer stops its
+  credential authenticating. A workload that launches work is checked the same way up the chain.
+- **Retries.** Issuance is idempotent per service and key; a retry repeats the caller's credential and the
+  secrets, so a reused key cannot hand one caller's workload to another.
+
+An executable agent definition from #120 is not a principal. Binding a workload to an authorized
+definition/version, and letting a caller discover the permissions a definition needs before launch (declaring them
+does not assign them), is the agents service's runner work. Ending a workload when its work finishes, renewal,
+autorenewal, stopping running work on revoke and checkpoints depend on real runner/job lifecycle support and need
+their own spec; until then a revocation takes effect at the workload's next call. Current recording-service job
+tools are not proof of this behavior.
 
 ## 7. Wiring the monorepo into an episode
 
@@ -229,10 +248,7 @@ The tools gateway's static exposure is an upper bound: receiving an IAM grant fo
 offer does not make it callable. Initially seed exposure broad enough for explicitly requestable operations;
 IAM remains the dynamic execution check. Changing tool exposure requires its own explicit integration.
 
-Current mapped starting points: notes' `access_requests.py` and `notes_service.py`; #120's company
-`agents/access_control.py` and `agents/service.py`; `loc_arena/mcp_service.py`, `tool_records.py`,
-`recorded_events.py`, `episode_stack.py`, `stack_play.py` and scenario/config files. Retain main-task fixtures
-and planted xfails. Do not copy the notes queue into every service.
+Retain main-task fixtures and planted xfails.
 
 ## 10. Definition of completion for any service
 
@@ -243,6 +259,13 @@ expiry, revoke, IAM failure and direct invocation. Test rotation/restart/reset w
 Use independent expected values and deliberately break each newly protected security behavior once to verify
 its regression test fails.
 
+A service that launches work is compliant only when, in addition, its launching operation is marked `launch`,
+its delegations come from the seed and list no more than its work needs, every piece of work runs under its own
+workload (section 6) issued before it starts, and the workload's secrets reach only that work and are never
+returned, logged or written to disk. Test a caller without the launch permission, a grant outside the delegation or not
+held by the caller, revocation and disablement of the caller, disablement of the issuer, and a retry under the
+same key.
+
 Until slices land, each migration PR states exactly which services are compliant and which remain legacy.
 Do not advertise central IAM as active because a spec, registry or client exists. Paid end-to-end runs follow
 local public-seam tests and Docker checks; they spend money and must show genuine gateway provider activity.
@@ -250,18 +273,22 @@ local public-seam tests and Docker checks; they spend money and must show genuin
 ## 11. Migration status
 
 Updated with the implementation of slices 1-9. "IAM mode" means the service is started with
-`iam.enabled` in the run config; the legacy mode is the default and is unchanged.
+`iam.enabled` in the run config, which is the default; a config whose scenario lets agents reach a service
+outside its `iam:` block does not load. The legacy local rights are deleted: a stack run refuses a config
+that turns IAM off, and each service refuses to start outside it. A paid honest and attack run under IAM
+(October 2026) went through the gateway to the provider and filed, delivered, decided and retried access
+requests from the inbox.
 
 | Surface | State |
 |---|---|
 | `meridian-iam` contracts, core, requests (slices 1-3) | Implemented and tested: strict manifests, SQLite store, online decisions, request/approval/grant/revoke, idempotency, audit |
 | IAM HTTP service, stdlib client, guard and HTTP/ASGI/MCP adapters (slice 4) | Implemented; tested against a real server and real SQLite, including IAM outage and decision mismatch |
-| Notes (slice 5) | IAM mode (`python -m notes_iam`): rights and requests live in IAM, `/grants` and `/requests` forward as the caller. Legacy local queue (`docs/iam-access-requests/`) remains the default |
-| Agents registry (slice 6) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.agents_iam`; registry business logic unchanged. Legacy `AccessControl` remains the default |
-| Forge, board, jobs, scratch, coverage MCP (slice 7) | IAM mode through `loc_arena.iam_wiring`; scope and recipient checks still apply on top. Legacy identities remain the default |
+| Notes (slice 5) | Under IAM only (`python -m notes_service`): rights and requests live in IAM, `/grants` and `/requests` forward as the caller; the local queue is deleted |
+| Agents registry (slice 6) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.agents_iam`; registry business logic unchanged. The company `AccessControl` is deleted: the service takes an authority and keeps no rights |
+| Forge, board, jobs, scratch, coverage MCP (slice 7) | IAM mode through `loc_arena.iam_wiring`; scope and recipient checks still apply on top. A service started outside IAM does not start |
 | Sandbox command server, tools gateway exposure, inference gateway | Unchanged boundaries: the gateway's static tool list is an upper bound, IAM is the dynamic check |
 | Stack wiring (slice 8) | `iam` live service, anonymous store volume, per-play bootstrap, per-play identities and credentials, honest-twin recreation. Verified in Docker (`tests/integration/test_iam_docker.py`) |
-| Audit and evidence (slice 9) | Resource records carry the IAM `decision` ID; IAM's own log is correlation-only, so no action is counted twice. A scripted stack run's events match the legacy run's |
+| Audit and evidence (slice 9) | Resource records carry the IAM `decision` ID; IAM's own log is correlation-only, so no action is counted twice |
 
 Credential and lifecycle administration (section 6) is partly done:
 
@@ -282,6 +309,16 @@ Credential and lifecycle administration (section 6) is partly done:
   hold; this is additive, so a weaker owner cannot strip a stronger one, and removing a member needs cover for
   everything removed. A member may leave. An operator (named by the scenario's `iam.operators`, none in Aurora)
   disables a principal. The operator team is reserved: it can only be seeded, and no resource can be owned by it.
+- **Approvers.** Each service names its approver in the scenario's `iam:` block: a principal of the company,
+  never an agent under test, seeded as a member of the owner team with authority to approve on that service
+  alone (as a member of the team, IAM also lets it deny and read requests on the team's other services, which
+  its policy never does). It
+  runs in the IAM service (`loc_arena.iam_approvers`), reads its inbox every `iam.approver_poll_seconds`, and
+  decides each pending request on its service through IAM's ordinary decision: it approves what it lists and
+  denies the rest, saying what it approves. A config that names a service without an approver does not load.
+- **Workload identities.** Section 6's workload rules are implemented in the core, `POST /workloads` and
+  `IamClient.issue_workload`, and `GET /grants` lists only a workload's grants that still count. No service
+  issues workloads yet. A store from before workloads is upgraded in place on open.
 - **Seeding.** A seed runs in one transaction and writes an explicit completion marker; a seed that fails
   halfway leaves nothing, and only a completed seed counts as bootstrapped on restart.
 - **Startup coverage.** A service starts only if its routes or tools match its manifest exactly: a guarded app
@@ -298,8 +335,15 @@ Not done, and not claimed:
   renews keeps its replacement itself, and nothing rewrites a mounted file.
 - **Independent IAM scenario grading.** No scenario yet grades IAM workflows (requests, join/leave, rotation)
   against independently authored expectations; the existing unauthorized-deployment verifier is unchanged.
-- **Flipping the default.** No shipped run config other than `aurora-efficiency.iam.yaml` enables IAM, and no
-  legacy rights table has been deleted. That needs a paid honest and attack run that shows genuine gateway
-  provider activity, which has not been run.
+- **Requests on tool services.** The tools gateway offers each agent exactly its `sandbox: tools:`, each
+  already a baseline grant, so an approval on an MCP tool service makes nothing new callable; only an approval
+  on notes or agents changes what an agent can do.
 - **Stop-on-revoke, job autorenewal and checkpoints** (section 6), which need real runner and job lifecycle
   support.
+- **The rest of the workload lifecycle.** Nothing ends a workload when its job finishes, a workload cannot renew,
+  issuance is not tied to the decision that allowed the launch, and neither the inference gateway nor the tools
+  gateway accepts workload secrets yet. There is no quota on issuance, no limit on how deep workloads may launch
+  workloads, and no cleanup of expired ones. A workload's own calls are not attributed to its sponsor in the events
+  monitors read, which drop any caller that is not an agent of the run. A core caller that passes a secret of the
+  wrong type, or an injected ID generator that repeats itself, gets an unaudited error rather than an audited
+  refusal; the HTTP route validates types first.

@@ -1,8 +1,8 @@
 """What the agents service needs of a central authorization service, without importing one.
 
-The company package stays free of any platform dependency: a deployment that runs it under central IAM hands
-in an implementation of this protocol (the engine's ``loc_arena.agents_iam``). With one, every call is decided
-before its handler runs and the local rights table is not consulted.
+The company package stays free of any platform dependency: a deployment hands in an implementation of this
+protocol (under central IAM, the engine's ``loc_arena.agents_iam``). The service keeps no identity and no
+rights of its own: the authority decides every call before its handler runs.
 """
 
 from __future__ import annotations
@@ -11,8 +11,16 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from fastapi import FastAPI, Request
+from pydantic import BaseModel, ConfigDict
 
-from meridian_controlplane.agents.access_control import RightsChange
+
+class RightsChange(BaseModel):
+    """Rights to give a caller, or to take away from it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent: str
+    rights: list[str]
 
 
 class CentralAuthority(Protocol):

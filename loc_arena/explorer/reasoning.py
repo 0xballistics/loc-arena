@@ -5,8 +5,8 @@ the run's bundle (``locate_call_log``); the sealed log keeps only each reply's f
 belongs to the sealed ``inference_call`` whose ``output_fp`` it fingerprints to, as the gateway computes it:
 the assistant message, or the bare text for a ``prompt`` or batch call. Calls with the same reply are paired
 in order, each sealed event with the first recorded call not yet paired. The call log covers the run's honest
-twin too, whose calls pair with nothing on the run's page. Only the explorer reads it: no monitor input holds
-reasoning.
+twin too, which played after the run, so the twin's calls pair after all of the run's. Only the explorer reads
+it: no monitor input holds reasoning.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 
 from loc_arena.gateway.core import ProviderResult
-from loc_arena.gateway.proxy import GatewayCall, locate_call_log
+from loc_arena.gateway.model_gateway import GatewayCall, locate_call_log
 from loc_arena.logging_.events import fingerprint, read_events
 
 
@@ -38,10 +38,12 @@ class _RecordedCompletion(BaseModel):
     choices: list[_RecordedChoice]
 
 
-def read_reasoning(bundle: Path) -> Mapping[int, str]:
+def read_reasoning(bundle: Path, twin: Path | None = None) -> Mapping[int, str]:
     """The model's reasoning by the sealed seq of its call, for each call it returned some on.
 
-    Nothing when no call log sits where a stack run leaves it: an in-process run, or a bundle moved away.
+    The run's own play, or the honest twin's when ``twin`` names its folder in the bundle, paired after the
+    run's so a reply both plays share goes to the run first. Nothing when no call log sits where a stack run
+    leaves it: an in-process run, or a bundle moved away.
     """
     call_log = locate_call_log(bundle.parent.parent, bundle.name.rpartition("__")[2])
     if not call_log.exists():
@@ -60,16 +62,19 @@ def read_reasoning(bundle: Path) -> Mapping[int, str]:
         for output_fp in {fingerprint(reply), *([] if message.tool_calls else [fingerprint(text)])}:
             waiting[output_fp].append((index, message.reasoning or None))
     paired: set[int] = set()
+    plays = [bundle, twin] if twin else [bundle]
     reasoning: dict[int, str] = {}
-    for event in read_events(bundle / "events.sealed.jsonl"):
-        if event.kind != "inference_call":
-            continue
-        calls = waiting[event.payload["output_fp"]]
-        while calls and calls[0][0] in paired:
-            calls.popleft()
-        if calls:
-            index, said = calls.popleft()
-            paired.add(index)
-            if said:
-                reasoning[event.seq] = said
+    for play in plays:
+        reasoning = {}  # only the last play's is kept: an earlier play only takes its calls first
+        for event in read_events(play / "events.sealed.jsonl"):
+            if event.kind != "inference_call":
+                continue
+            calls = waiting[event.payload["output_fp"]]
+            while calls and calls[0][0] in paired:
+                calls.popleft()
+            if calls:
+                index, said = calls.popleft()
+                paired.add(index)
+                if said:
+                    reasoning[event.seq] = said
     return reasoning

@@ -1,6 +1,7 @@
 # aurora-efficiency.iam.yaml
-# The deterministic fixture with central IAM in front of the scenario's services (docs/iam-service/spec.md): the
-# services the pack's `iam:` block names are checked by IAM on every call, and the run starts an `iam` service.
+# The deterministic fixture as a stack run, with central IAM in front of the scenario's services
+# (docs/iam-service/spec.md): the scripted policy plays, the services the pack's `iam:` block names are checked by
+# IAM on every call, and the run starts an `iam` service. Run it with STACK=1.
 extends: aurora-efficiency.deterministic.yaml
 iam:
   enabled: true

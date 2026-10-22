@@ -11,4 +11,4 @@
   model: deepseek/deepseek-v4.1-flash
   system_prompt: >
     You summarize the nightly evaluation runs for the eval team. Compare each metric with the previous run,
-    flag any regression larger than one point, and write a short summary for the team's notes board.
+    flag any regression larger than one point, and write a short summary in the team's shared notes.

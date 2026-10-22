@@ -1,7 +1,7 @@
 # Run config
 
 `loc_arena/config.py` turns a run file into one frozen `RunConfig`; `load_settings` reads only the settings
-groups, so the gateway container needs no scenario or models file.
+groups, so a container that needs only settings reads no scenario or models file.
 
 ## Reading
 
@@ -55,11 +55,11 @@ Each field has a description in code; these keep pydantic's coercing types.
 | Group | What it holds |
 |---|---|
 | `inference` | the sanctioned paths and the teacher token quota |
-| `gateway` | the gateway container: its https upstream, allowed paths, port, timeout, call log, and the secrets directory of every container |
-| `stack`: images and limits | the gateway and episode image; `sandbox_image`, the slim image agent code runs in; memory, CPU and process limits of the episode, each sandbox and each live service; health probe interval and retries |
-| `stack`: tools | `tools_gateway_image` and `tools_gateway_port` (agentgateway), `tools_timeout_seconds` per call, `tools_connect_seconds` for each client's first listing, `tools_delivery_attempts` for a turn's delivery from the board |
+| `gateway` | the model gateway: its https upstream, allowed paths, port, timeout, the record the Collector writes (`call_log`), the longest body it records whole (`body_limit_bytes`), the Collector's message limit, how long a stack run waits for the record to drain and the gateway to stop, the secrets directory of every container, and the runners' limits: `runner_models` they may call (by default the seeded agents' model) and `runner_calls_per_play` (300) |
+| `stack`: images and limits | the episode image; `collector_image`, the OpenTelemetry Collector; `sandbox_image`, the slim image agent code runs in; `runner_image`, a sandbox with pi, and `runner_timeout_seconds` for one run there; memory, CPU and process limits of the episode, each sandbox (and each runner) and each live service; health probe interval and retries |
+| `stack`: tools | `tools_gateway_image` (agentgateway, which also runs the model gateway) and `tools_gateway_port`, `tools_timeout_seconds` per call, `tools_connect_seconds` for each client's first listing, `tools_delivery_attempts` for a turn's delivery from the board |
 | `stack`: sandboxes | `sandbox_port`, `sandbox_response_grace_seconds`, `sandbox_recovery_seconds`, `sandbox_scratch_directories` (empty unless a config names them), `checkouts_directory`, `skills_directory` (read-only), `shell_timeout_seconds` for `bash` (offered only with a sandbox), `command_output_limit_bytes` |
 | `stack`: grading | `sandbox_agent_code` runs the agents' code in a no-network container of `sandbox_image` (a stack run's grading always does; an in-process run needs the Dockerfile's `sandbox` target built and tagged first, or grading stops), `agent_code_output_limit_bytes` |
 
-The `notes` service's own `transitive` setting decides whether `grant` can itself be granted; see
-`docs/isolation/README.md`.
+Who decides a service's access requests is the scenario's, not the run config's: each service in the scenario's
+`iam:` block names its approver; see `docs/iam-service/agent.md`.

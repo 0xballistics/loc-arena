@@ -15,8 +15,11 @@ reviews:
   # chill keeps the tools' severity floors high (Trivy, Checkov, Hadolint, ShellCheck); the path
   # instructions and pre-merge checks below carry the repository-specific strictness.
   profile: chill
-  # Off: a pull request merges on a teammate's approval, and CodeRabbit's own approval must not read as one.
-  request_changes_workflow: false
+  # CodeRabbit requests changes while it has unresolved findings and approves once the latest commit is reviewed
+  # and its threads are resolved, so GitHub itself holds the merge. Its approval is not a teammate's: the
+  # ruleset still needs a human review (docs/ci-rules.md). The author cannot approve or resolve for it.
+  request_changes_workflow: true
+  allow_author_approval: false
   # The summary goes in the walkthrough comment, so the author's description is never rewritten.
   high_level_summary_in_walkthrough: true
   high_level_summary_instructions: |
@@ -153,13 +156,27 @@ reviews:
 
     - path: "company/**"
       instructions: |
-        The simulated company codebase that the agents under test work on. It holds bugs planted on purpose,
-        tracked by the strict xfails in `company/*/tests/*backlog*.py` and `test_buried_bugs.py`.
+        The simulated company codebase that the agents under test work on, except `company/meridian-iam/`, which
+        has its own rule below. It holds bugs planted on purpose, tracked by the strict xfails in
+        `company/*/tests/*backlog*.py` and `test_buried_bugs.py`.
         - Do not report bugs in company code or suggest fixes for them, unless the pull request says it
           changes the scenario on purpose.
         - Flag a change that would fix a planted bug, remove or weaken a strict xfail, or describe how a
           planted bug works in a comment, docstring, commit or test.
         - Keep each repository's existing style.
+
+    - path: "company/meridian-iam/**"
+      instructions: |
+        Central IAM: platform code that is never in the agents' checkout, not one of the company's work repos.
+        It holds no planted bugs, so the company/** rule against reporting bugs does not apply: report them.
+        Contract: docs/iam-service/spec.md; rules: docs/iam-service/agent.md. Flag a change that:
+        - lets an unavailable or inconsistent IAM allow or run anything, instead of failing closed;
+        - lets a decision widen the requested permissions or deadline, or lets a denial grant or record any;
+        - gives standing authority over one resource by way of another, or widens a resource-bound credential
+          (`<service>`, `iam:<service>`) or an `iam-inbox` key towards `iam`;
+        - leaves a mutation, refused ones included, out of the audit, or writes bearer material or an unbounded
+          caller-supplied field into it;
+        - imports loc_arena, or anything of the harness or graders.
 
     - path: "scenarios/*/{reference,scripted}/**"
       instructions: &grader_fixture |
@@ -211,6 +228,7 @@ reviews:
         - The ruff `rev` matches the ruff version pinned in uv.lock.
 
   pre_merge_checks:
+    override_requested_reviewers_only: true
     # ruff's D rules (Google convention) already enforce docstrings, with deliberate per-file exceptions.
     docstrings:
       mode: "off"
@@ -265,6 +283,21 @@ reviews:
           changes company/ source in a way the pull request describes as fixing one of their tickets. These
           are bugs planted for the agents under test. Pass if those tests and markers are unchanged, or if
           the pull request description says the scenario's tickets change on purpose.
+      - name: "Agent-facing services use central IAM"
+        mode: warning
+        instructions: >-
+          Fail if the diff adds identity, rights or access-request code of its own to an agent-facing service
+          (anything under scenarios/*/services/, a live service module such as loc_arena/*_service.py, or a
+          service in company/): a store of agent identities or tokens, a comparison of a bearer token against
+          agent secrets, a table of rights or grants, a grant or revoke endpoint that keeps local state, or a
+          queue of access requests. Fail if it adds an agent-facing service (a scenario service with rights or
+          tools) without, in the same diff, the manifest it ships and its resource in the scenario's iam:
+          block with its approver (never an agent under test), or turns iam.enabled off in a run config that
+          plays in a stack (only the in-process deterministic fixture turns it off). Judge each mechanism on its own: going through IAM for one operation does
+          not excuse a local mechanism added for another. The one exception is a pull request that says why
+          that service cannot use IAM. Pass if the diff adds none of these: it goes through the IAM
+          integration (docs/iam-service/agent.md). A meridian_iam import in a company repo is not judged here; an ast-grep rule
+          catches it.
       - name: "No silenced checks"
         mode: warning
         instructions: >-
@@ -328,7 +361,7 @@ reviews:
   tools:
     ast-grep:
       # The repository's own rules: provider clients and secret reads outside the gateway, blanket
-      # suppressions, swallowed broad exceptions.
+      # suppressions, swallowed broad exceptions, meridian_iam imported by a company repo.
       rule_dirs:
         - ".coderabbit/ast-grep/rules"
     # Prose nits on the docs, and PII matching that misreads hashes and fixture data, cost more than they

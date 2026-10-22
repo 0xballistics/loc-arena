@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from http import HTTPStatus
 from typing import Any
 
 import pytest
@@ -16,6 +18,7 @@ from meridian_iam.contracts import Decision, ManifestError, Unavailable, load_ma
 from meridian_iam.core import Iam
 from meridian_iam.integration import Guard
 from meridian_iam.integration.asgi import dependency, verify_app
+from meridian_iam.service import create_app
 
 MANIFEST = {
     **NOTES,
@@ -267,3 +270,62 @@ def test_an_app_that_does_not_carry_the_guards_dependency_does_not_start_even_if
     right = FastAPI(docs_url=None, redoc_url=None, dependencies=[Depends(dependency(guard))])
     serve_notes_routes(right)
     verify_app(guard, right)
+
+
+def test_iam_tells_anyone_how_to_ask_for_access_and_how_to_decide(iam: Iam) -> None:
+    reply = TestClient(create_app(iam)).get("/")
+
+    assert reply.status_code == HTTPStatus.OK
+    routes = (
+        "POST /requests",
+        "Idempotency-Key",
+        "Content-Type: application/json",
+        "POST /requests/<id>/decision",
+        "at most 500 characters",
+    )
+    assert all(route in reply.text for route in routes)
+
+
+def test_a_malformed_request_names_bad_fields_never_contents(
+    iam: Iam,
+    tokens: dict[str, str],
+) -> None:
+    value, key = "mi_a_value_that_must_never_be_echoed", "mi_a_key_name_that_must_never_be_echoed"
+    body = {"resource": "notes", "permissions": value, key: 1}
+
+    reply = TestClient(create_app(iam)).post("/requests", headers=bearer(tokens["alice"]), json=body)
+
+    assert reply.status_code == HTTPStatus.BAD_REQUEST
+    assert reply.json()["fields"] == [
+        "body.permissions: list_type",
+        "body.reason: missing",
+        "body: extra_forbidden",
+        "header.Idempotency-Key: missing",
+    ]
+    assert value not in reply.text
+    assert key not in reply.text
+
+
+def test_a_malformed_dict_field_never_echoes_its_keys(iam: Iam, tokens: dict[str, str]) -> None:
+    audience = "mi_an_audience_name_that_must_never_be_echoed"
+    body = {"operation": "submit_job", "reference": "r", "purpose": "p", "grants": {}, "ttl": 60}
+    body["credentials"] = {audience: 5}
+
+    reply = TestClient(create_app(iam)).post("/workloads", headers=bearer(tokens["svc"]), json=body)
+
+    assert reply.json()["fields"] == ["body.credentials: string_type", "header.Idempotency-Key: missing"]
+    assert audience not in reply.text
+
+
+def test_a_body_iam_cannot_read_says_how_to_send_it(iam: Iam, tokens: dict[str, str]) -> None:
+    body = json.dumps({"resource": "notes", "permissions": ["read"], "reason": "need it"})
+    headers = {
+        **bearer(tokens["alice"]),
+        "Idempotency-Key": "k",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    reply = TestClient(create_app(iam)).post("/requests", content=body, headers=headers)
+
+    assert reply.status_code == HTTPStatus.BAD_REQUEST
+    assert reply.json()["fields"] == ["body: send a JSON object with Content-Type: application/json"]

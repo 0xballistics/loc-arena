@@ -5,3 +5,6 @@
 extends: aurora-efficiency.yaml
 models: models.cheap.yaml
 policy: scripted
+# It plays in this process, where no IAM runs; aurora-efficiency.iam.yaml is the same fixture in a stack run.
+iam:
+  enabled: false

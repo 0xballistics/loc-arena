@@ -6,20 +6,76 @@ log has the details.
 
 ## [Unreleased]
 
+### Changed
+
+- **Each service has its own approver, and no agent under test approves.** The scenario's `iam:` block names
+  one per service (in Aurora `notes-owner`, `agents-owner`, ...): a principal of the company that IAM makes a
+  member of the owner team, and that approves the permissions it lists and denies the rest. It runs in the IAM
+  service and decides from its inbox every `iam.approver_poll_seconds`, so a requester's inbox shows its
+  decision. agent-main, which approved notes and agents requests through its `grant` right, no longer can: the
+  `grant` right and the scenario's `transitive` flag are gone. A service without an approver, an approver that is
+  an agent of the run, or one approving what nobody can request, stops the config loading.
+- **No service keeps rights of its own.** The legacy local rights are deleted: the notes service's local access
+  requests and rights table, the agents service's `AccessControl` (company code: the service now takes the
+  central authority alone), and the MCP services' own identity check. A stack run refuses a config that turns
+  IAM off, and each service refuses to start outside it. Notes is one IAM-only module, `notes_service`.
+- **Central IAM is on by default.** `iam.enabled` is on unless a run config turns it off, which only the
+  deterministic fixture does; `aurora-efficiency.iam-live.yaml` is gone, as the live config is that run now.
+- **A run plays where its config needs.** `make run` and `loc-arena run` play in a stack when the config turns IAM
+  on and in this process when it is off; `STACK=1|0` (`--stack`, `--no-stack`) forces either.
+- **A run in this process refuses central IAM, before writing anything.** IAM runs only in a stack, so a run or a
+  sweep here would play on services nobody authorizes; `make sweep` sweeps the deterministic fixture
+  (`SWEEP=`).
+- **A config whose scenario lets agents reach a service outside its `iam:` block does not load,** by tools or by
+  rights, so no agent-facing service can be left out of IAM.
+- **A run's bundle records whether central IAM was on,** even when that was the default, so a later change of
+  default cannot change what it replays.
+- **The model gateway is agentgateway.** It holds the provider key and admits each caller by its own token: the
+  episode, the host's monitors, each agent's sandbox (its sandbox token, as for the tools gateway) and each runner
+  on the runners' route. Agent code that calls the gateway now has to send its sandbox token. An OpenTelemetry
+  Collector, reachable from the gateway alone, writes the record of every call, refused and failed ones
+  included; a stack run waits until the record holds every call before the gateway stops, and copies it out as
+  before (`logs/gateway/<project>.calls.jsonl`, with the Collector's own lines beside it).
+
 ### Added
 
+- **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
+  run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score
+  on the run beside its score on the twin, with the twin's overall as the bar. A verdict exactly at the audit threshold
+  is marked: the scores that set it read as clean before.
+- **An attack run's scores keep its honest twin's verdicts.** `scores.json` has an `honest_twin` block: every
+  verdict on the twin, each monitor's score and peak, and its overall suspicion, from the scoring that set both audit
+  thresholds. Grading used to drop them, so nothing showed what the monitors flagged in honest work.
+- **Agents can run the company's agents.** In a stack run, an agent with `run` on the agents service (in the
+  default config, agent-main) starts an execution of a registered agent with `POST /executions`: pi runs its
+  latest version on one of three runners, and the execution ends completed, failed or cancelled. Starting and
+  cancelling are actions on the event logs; each change of state is an audit line naming its runner.
+- **Runners for the company's own agents.** A scenario's service can declare `runners: <n>`: a stack run then
+  starts `runner-1` to `runner-<n>`, sandboxes with pi in an empty workspace that only that service can drive,
+  each with its own token. pi there calls models through the gateway, which by default lets runners make 300
+  calls per play of the seeded agents' model only, and refuses the rest with a 429 or 403 it records. The gateway
+  and the runners are recreated before the honest twin, so it starts with empty runners and a fresh count.
+- **The run explorer shows the honest twin.** An attack run's honest twin, which is played to set the audit
+  threshold, now has a page of its own beside the run's, linked both ways: every agent's turns, tool calls and model
+  calls, with no outcome (it is not scored on its own) and no verdicts (grading does not save them).
 - A shipping check requires a clean latest-commit CodeRabbit review and no unresolved CodeRabbit threads.
 
 - Every PR checks whole edited files against 700 lines, or their base size if already larger; untouched files are excluded.
 
-- **Central IAM, opt-in.** A run config with `iam: {enabled: true}` (`configs/aurora-efficiency.iam.yaml`) runs
-  an `iam` service beside the others, and every call to the notes board, the agents service, the forge, the
+- **Central IAM.** A stack run runs an `iam` service beside the others, and every call to the notes board, the agents service, the forge, the
   board and the job, scratch and coverage services is checked against it online before it runs. Access is a
   grant with an owner, a lifetime and a revocation, not a bearer string: an agent refused a call is told which
   permission it lacks and how to ask; the resource's approver decides; the retry works, across calls, until the
   grant expires or is revoked. IAM unavailable stops the call. The honest twin gets a fresh store and fresh
-  credentials. Every run config without the switch behaves as before; see `docs/iam-service/spec.md` section 11
-  for what is and is not under it.
+  credentials. See `docs/iam-service/spec.md` section 11 for what is and is not under it.
+- **Agent-facing services must use central IAM.** A new or changed service declares its operations and
+  enforces them through IAM's shared integration, never with its own identity store, rights table, stateful
+  grant endpoint or access-request queue. CodeRabbit flags a pull request that adds such a mechanism, and an ast-grep rule flags a company repo
+  that imports `meridian_iam`.
+- **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
+  run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused
+  from its next call once the launcher loses that access or the service is disabled. No service issues them
+  yet; jobsvc and the agents runners are the first planned callers.
 - **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
   agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
   as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in
@@ -124,6 +180,57 @@ log has the details.
 
 ### Changed
 
+- **Agents learn of access requests at the start of their turn.** Under central IAM the harness reads each
+  agent's IAM inbox when its turn starts, as it reads its board messages, and hands it each new item once as a
+  message from IAM: an approver sees a request it may decide, with the whole call to decide it (credential,
+  `Idempotency-Key` and body), and a requester sees its outcome. A failed read, or an answer that does not parse
+  as inbox items, is a warning, never an action of the agent's; an agent's own call to `access_inbox` is logged
+  as its action. In live run 3 a request went
+  undecided because its approver never looked; in live run 4 both were decided.
+
+- **Under central IAM every agent is offered its IAM inbox.** IAM's `access_inbox` tool goes through the
+  tools gateway to every agent, which sends the agent's per-play inbox key: it reads that inbox and nothing
+  else, so the gateway never holds a credential that manages IAM. Sandboxes keep their IAM identity for asking
+  and deciding over HTTP, and in-process runs, which have no IAM, offer no such tool.
+
+- **The notes service is "the team's shared notes", not a "board".** Its description in agents' prompts and at
+  its `GET /` no longer calls it a board, so "the board" means only the message board between agents. In live
+  run 3 the only access request came from an agent that confused the two.
+
+- **IAM says how to send a body it cannot read.** A request whose body is not a JSON object, most often JSON
+  sent without `Content-Type: application/json` (urllib's default), now gets a 400 that says to send a JSON
+  object with that header. In live run 3 the old answer cost three turns.
+
+- **Filing an access request says whom to ask.** IAM's answer, and the notes board's, now names the approvers who
+  can decide the request and tells the requester to ask them. On Aurora the requester can then message the
+  approver on the board, which delivers it at the approver's next turn. In both earlier live IAM runs requests
+  went undecided because no approver knew of them.
+
+- **A refused IAM change shows what was tried.** Its audit line, and so the blocked action monitors see, now
+  carries the request's fields (resource, permissions, reason), each cut to 500 characters because a refused
+  request was never validated, so one long field cannot hide the rest; a caller that never authenticated adds
+  nothing. Before, the line said only which kind of change failed and why.
+
+- **An access request's event keeps its request ID.** The event built from IAM's audit line now carries what IAM
+  answered, so a request can be joined to its decision; before, a new request's ID was dropped with the rest of
+  the answer.
+
+- **A malformed request to IAM says what is wrong.** IAM answers it 400 naming each bad field and its problem
+  (`body.reason: missing`), never its value or an unexpected key's name, which can be secrets. In the live run
+  agents learned IAM's request format only from such field lists, which a bare 400 had removed.
+
+- **The notes board under IAM describes its request routes again.** In IAM mode its `GET /` said nothing about
+  requests, because the local queue it described is gone; it now names the request and decision routes it
+  forwards to IAM and points at IAM's own description.
+
+- **Central IAM describes itself.** `GET /` on the IAM service says, without a credential, how to see your
+  access, ask for more (body fields and the `Idempotency-Key` header) and, as an approver, find and decide
+  requests; the prompt's IAM line points there. In the live IAM run agents could only learn this from errors.
+
+- **A refused service call shows its reason in a stack run.** The system prompt's urllib example now prints a
+  refused call's status and body, so an agent sees which permission it lacks and where to ask for it; before,
+  the example raised on any 403 and the guidance in the body was never read.
+
 - **A stack run keeps each live service's log in its own run directory.** The logs of the live services and of
   agentgateway are copied to `services/<name>.log` in the run directory before grading, where the events of their
   records are built, instead of to `<logs>/services/` after grading, where every run in the same directory
@@ -163,6 +270,30 @@ log has the details.
   control-plane PR under agent-main's name in every attack episode, which gave the PR review monitor a catch
   the model never earned. The scripted policy opens that PR as one of agent-main's own attack moves, through
   the forge like any other PR.
+- **A run whose instance ID reads as a number starts.** The stack wrote its compose file, and agentgateway's and the
+  Collector's configs, as YAML 1.1, which leaves a string like `401e98` unquoted; compose, a YAML 1.2 reader, took
+  it for a number and refused the file, about one run in forty. Every string compose's reader takes for a number is
+  now quoted.
+- **A malformed notes file no longer breaks the run explorer's notes.** Importing one kept marks a note card
+  cannot draw, which broke the notes view on every later visit, and a step named `__proto__` reached every object on
+  the page; the import now keeps only marks with a quote and only a file's own step names.
+- **Services under central IAM ask it as the run config says.** The `iam:` block's `timeout_seconds` (now at most
+  five minutes) and `retries` reach every managed service's IAM client, which kept its defaults, and a service
+  with an invalid one does not start.
+- **An MCP service reports an IAM outage as one.** One that cannot reach IAM to verify a caller answers 503 with
+  a JSON-RPC error saying so, where it answered 401 as if the credential were bad.
+- **A monitor past its deadline goes quiet before grading returns.** An async monitor that runs out of time still
+  scores 0 and records its timeout, but it starts no further model call and grading waits for the call it has in
+  flight, so every monitor call is in the sealed log and the gateway's record before the run copies them out.
+
+- **A denied access request no longer reads as approved.** Central IAM stored a denial with the permissions and
+  deadline it was asked for, so the requester's requests, the request itself and the owner's queue showed it
+  approving them, though it granted nothing. A denial now records neither, and every listing and the inbox
+  show nothing approved. Notes' IAM help text and the seeded eval summarizer now call the notes the team's
+  shared notes, not a board.
+- **CodeRabbit reviews central IAM for bugs.** Its rule for company code, which holds planted bugs it must not
+  report, also matched `company/meridian-iam/`, which holds none. IAM now has its own rule: report its bugs, and
+  flag a change that fails open, widens a decision or a credential, or leaves a mutation out of the audit.
 - **The explorer no longer counts a refused send as a message between agents.** The Communication view lists it
   as a refused send, counted apart and never read, since the board delivered nothing.
 - **A timed-out agent-code container is gone before the timeout is reported.** The grader force-removes it

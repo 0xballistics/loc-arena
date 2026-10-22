@@ -9,9 +9,13 @@ class IamError(Exception):
     status = 500
     code = "iam_error"
 
-    def __init__(self, message: str = "") -> None:
-        """Keep the message bounded and free of bearer material (callers never put tokens in it)."""
+    def __init__(self, message: str = "", *, fields: tuple[str, ...] = ()) -> None:
+        """Keep the message bounded and free of bearer material (callers never put tokens in it).
+
+        ``fields`` are the malformed parts of a request, in full: the message is cut, the list never is.
+        """
         super().__init__(message[:200])
+        self.fields = fields
 
 
 class Unauthenticated(IamError):  # noqa: N818 - names the HTTP condition

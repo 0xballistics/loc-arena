@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from meridian_iam.core.store import connect, transaction
+from meridian_iam.core.store import _MIGRATIONS, SCHEMA_VERSION, connect, transaction
 
 
 def test_a_commit_that_cannot_complete_leaves_the_connection_usable(tmp_path: Path) -> None:
@@ -41,3 +43,65 @@ def test_a_rollback_after_sqlite_ended_the_transaction_does_not_hide_the_real_er
             store.execute("COMMIT")  # the transaction is already over, as when SQLite ends one itself
             raise BoomError
     assert not store.in_transaction
+
+
+def test_a_version_1_store_is_upgraded_in_place(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    old = connect(path)
+    old.execute("INSERT INTO meta VALUES ('kept', 'yes')")
+    old.execute("DROP TABLE workloads")
+    old.execute("DROP TABLE delegations")
+    old.execute("PRAGMA user_version = 1")  # what a store from before workloads looks like
+    old.close()
+
+    upgraded = connect(path)
+
+    tables = {row[0] for row in upgraded.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"workloads", "delegations"} <= tables
+    assert upgraded.execute("SELECT value FROM meta WHERE key = 'kept'").fetchone()[0] == "yes"
+
+
+def test_two_openers_of_an_old_store_upgrade_it_once(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    old = connect(path)
+    old.execute("DROP TABLE workloads")
+    old.execute("DROP TABLE delegations")
+    old.execute("PRAGMA user_version = 1")
+    old.close()
+    first = sqlite3.connect(path, isolation_level=None)
+    first.execute("BEGIN IMMEDIATE")  # the first opener holds the write lock while it upgrades
+    opened: list[sqlite3.Connection] = []
+    second = threading.Thread(target=lambda: opened.append(connect(path, timeout=5)))
+    second.start()
+    time.sleep(0.3)  # the second opener has read version 1 and waits for the lock
+    for statement in _MIGRATIONS[1].split(";"):
+        if statement.strip():
+            first.execute(statement)
+    first.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    first.execute("COMMIT")
+
+    second.join(timeout=10)
+
+    assert opened, "the second opener failed instead of finding the store already upgraded"
+    assert opened[0].execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_a_failed_upgrade_leaves_the_store_as_it_was_and_unlocked(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    old = connect(path)
+    old.execute("DROP TABLE workloads")
+    old.execute("DROP TABLE delegations")
+    old.execute("CREATE TABLE workloads (squatter TEXT)")  # the upgrade's second table cannot be created
+    old.execute("PRAGMA user_version = 1")
+    old.close()
+
+    with pytest.raises(sqlite3.OperationalError, match="already exists") as failed:
+        connect(path)
+
+    raw = sqlite3.connect(path, isolation_level=None, timeout=0.1)
+    tables = {row[0] for row in raw.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "delegations" not in tables  # the upgrade's first table was rolled back
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 1
+    raw.execute("BEGIN IMMEDIATE")  # nothing holds the write lock, though the error is still referenced
+    raw.execute("ROLLBACK")
+    assert failed.value

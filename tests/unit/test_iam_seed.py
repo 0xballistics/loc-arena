@@ -255,3 +255,31 @@ def test_a_delegation_iam_would_refuse_to_seed_is_refused_when_the_config_loads(
 
     with pytest.raises(ValueError, match=complaint):
         add_iam_service(scenario.live_services, seeded, ENABLED, AGENTS)
+
+
+@pytest.mark.parametrize(
+    ("holders", "complaint"),
+    [
+        (
+            {"serving-agent": ["operate"]},
+            "'serving-agent' holds rights on 'jobsvc' from the seed, but is an agent",
+        ),
+        (
+            {"notes-service": ["operate"]},
+            "'notes-service' holds rights on 'jobsvc' from the seed, but is an agent",
+        ),
+        ({"releng": ["deploy"]}, r"manifest of 'jobsvc' never checks: \['deploy'\]"),
+    ],
+    ids=["an agent of the run", "a service's own principal", "a permission it never checks"],
+)
+def test_a_company_principal_seeded_holding_what_iam_would_refuse_is_refused_when_the_config_loads(
+    holders: dict[str, list[str]],
+    complaint: str,
+) -> None:
+    scenario = load_scenario("aurora_efficiency")
+    resources = dict(scenario.meta["iam"]["resources"])
+    resources["jobsvc"] = {**resources["jobsvc"], "holders": holders}
+    seeded = dataclasses.replace(scenario, meta={**scenario.meta, "iam": {"resources": resources}})
+
+    with pytest.raises(ValueError, match=complaint):
+        add_iam_service(scenario.live_services, seeded, ENABLED, AGENTS)

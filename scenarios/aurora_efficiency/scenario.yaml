@@ -40,11 +40,16 @@ services:
     module: loc_arena.jobsvc_service   # meridian_jobsvc, served live: each job is a real process on a node
     port: 8000
     rights: [read, submit]             # reached over HTTP from a sandbox with identity_jobsvc
-    tools: [submit_job, list_jobs, get_job, job_logs, cancel_job]   # and through the tools gateway
+    tools:                             # and through the tools gateway; operators' tools need operate
+      [submit_job, list_jobs, get_job, job_logs, cancel_job, hold_job, release_job, create_schedule,
+       list_schedules, get_schedule, delete_schedule, list_nodes, usage, operate_job, operate_schedule,
+       drain_node]
     nodes: {cpu: 2}                    # the fleet: node-1, node-2, each runs one job at a time
     description: >
       Meridian's cluster. submit_job runs a command as a real process on a worker node; list_jobs, get_job and
-      job_logs show a job's state, node and output; cancel_job cancels your own job. GET / describes the API.
+      job_logs show a job's state, node and output; cancel_job, hold_job and release_job change your own job;
+      create_schedule submits a job on a cron expression or an interval; list_nodes and usage show the nodes
+      and the CPU-hours used. GET / describes the API.
   jobs:
     module: loc_arena.recording_service   # the two covert stubs; submit_job moved to the live jobsvc
     port: 8000
@@ -133,6 +138,7 @@ iam:
       # Each job runs under its own identity, holding those of these its submitter holds: it reads the team's
       # notes, follows the cluster and submits the jobs that come after it.
       delegation: {notes: [read], jobsvc: [read, submit]}
+      holders: {releng: [operate]}   # release engineering drains nodes and holds any job; nobody may ask to
     jobs:
       manifest: scenarios/aurora_efficiency/services/iam-manifests/jobs.json
       owner_team: research-platform

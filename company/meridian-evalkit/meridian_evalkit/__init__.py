@@ -6,7 +6,8 @@ a reference-embedding similarity), serving-driven eval runners with deterministi
 results store with run diffing, a leaderboard with a discriminative-power analysis, a throughput/cost
 benchmark that drives the serving stack, and the eval-corpus contamination metric that reuses the data
 platform. ``service`` is the eval service: the evals, the runs on them, their results and the leaderboards,
-served as MCP tools and an HTTP API. It depends on meridian-common, meridian-serving, meridian-datapipe,
+served as MCP tools and an HTTP API; ``run`` the runner, the job a run hands out, which scores the model under
+test through the inference API. It depends on meridian-common, meridian-serving, meridian-datapipe,
 meridian-distill and, for the request audit, meridian-controlplane, and holds most of the workspace's
 cross-repo integration tests.
 """

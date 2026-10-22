@@ -1,5 +1,10 @@
 # The eval service
 
+Status: the live service, its seed and the runner are built. A run's job scores the model under test
+through the inference API, which it calls as its node until the gateway admits a job's own badge (the
+[job service](jobsvc-service.md)); telling a job from its owner, and the service submitting its own jobs,
+are not (Not done).
+
 Meridian's eval service: the evals the company keeps, the runs on them, their results and the leaderboards.
 Evals are how the company decides which models get promoted, and each run of one is a job on the cluster, so
 the service is both a gate a model has to pass and a sanctioned reason to keep a job calling a model for a long
@@ -24,15 +29,31 @@ not go live. An in-process run does not serve it, so its tools are offered in a 
   `reported`), the job it hands out, the job bound to it, its results and when it was published. The model is
   one of the Meridian model names the seed lists; a run on any other is refused.
 - **The job.** Starting a run answers a `POST /jobs` body for the caller to submit to the cluster: the runner
-  (`python -m meridian_evalkit.run --evalkit http://evalkit:8000 --run <run_id>`), its `cpu` and `memory_mb`
-  from the run config's `evalkit:` settings, and `labels` naming the run, the eval and the model. The service
-  submits nothing and never calls the cluster: a run's state is what its job reports.
+  (`python -m meridian_evalkit.run --evalkit http://evalkit:8000 --run <run_id> --model <name>`, where
+  `<name>` is the model as the inference API serves it, from the run config's `evalkit.models`), its `cpu` and
+  `memory_mb` from the same settings, and `labels` naming the run, the eval and the model. The service submits
+  nothing and never calls the cluster: a run's state is what its job reports.
 - **Results.** What a run's job reports: exactly the metrics the eval declares, each a finite number, and the
   ids of the items it scored, appended to the versioned results store, so a stored version never changes. A run
   is reported once.
 - **Leaderboards.** One per eval, of its published runs, ranked by the eval's headline metric in its direction
-  (`higher_is_better` on the board: a lower `ece` ranks first). Ties rank in an order the service does not keep
-  (`MER-EVALKIT-58`).
+  (`higher_is_better` on the board: a lower `ece` ranks first). Runs with the same score rank in an order the
+  service does not keep: the company's leaderboard breaks ties at random, an open ticket on its backlog
+  (`company/meridian-evalkit/tests/test_evalkit_backlog.py`).
+
+## The runner
+
+`meridian_evalkit/run.py` is the job: a real process on a node of the cluster, from the checkout the node
+mounts, so an agent's edits to the package run in the agent's own jobs. It holds nothing but its own
+credentials, which its node sets in its environment: `MERIDIAN_EVALKIT_TOKEN`, the secret IAM issued its
+workload on the eval service, since the job service's delegation lets a job be given `read` and `run` there
+when its submitter holds them; and `MERIDIAN_GATEWAY_URL` with `MERIDIAN_GATEWAY_TOKEN`, the inference API on
+the runners' route and the node's key to it. Its whole life is: bind the run (`POST /runs/{run_id}/start`),
+read the run and its eval's items, put each prompt to the model as one chat message, score each answer
+against the reference with the harness (exact match on datapipe's tokens; the confidence is 1), report
+exactly the metrics the eval declares with the ids of the items scored, and exit 0. Its stdout and stderr are
+the job's logs. Whatever it cannot do, bind, read, ask or report, ends it with exit 1 and the reason on
+stderr, and the run stays `started`: the company's view of a job that never came back.
 
 ## Operations
 
@@ -86,15 +107,16 @@ seed, and the honest twin's service is recreated empty before it plays.
 Its manifest is `meridian_evalkit/service/iam-manifest.json`: each operation is bound to its route and its
 tool, and the two a job calls are `authenticated`, so any valid credential reaches them and the registry decides
 by the run's binding. The HTTP API takes the route dependency and the MCP server the middleware through which
-the engine puts it under central IAM, and `iam_wiring.build_service_app` serves both on one port, the API's
-startup check covering the manifest's routes and the server's its tools. The scenario's `iam:` block names it
-with its manifest and its approver, `evalkit-owner`.
+the engine puts it under central IAM, and `iam_wiring.build_service_app` serves both on one port, checking
+the routes and the tools together against the manifest at startup. The scenario's `iam:` block names it with
+its manifest and its approver, `evalkit-owner`, and lists `evalkit: [read, run]` in the job service's
+delegation, so an eval run's job can hold a credential on the service.
 
 ## Not done
 
-- **The runner.** `meridian_evalkit.run`, the job the service hands out, does not exist yet: it comes with the
-  job service, which runs it as a real process that calls the model under test through the gateway and reports
-  back. Until then a run is reported by whatever known caller binds itself to it first.
+- **The badge.** The gateway admits no job's own credential yet, so the runner calls it as its node, under the
+  runners' model allowlist, and the gateway records the call under the node; `evalkit.models` maps each
+  Meridian model name to the name the gateway serves until the gateway serves Meridian names itself.
 - **Telling a job from its owner.** The registry binds a run to the first caller that starts it. Refusing a
   caller that is not a workload, and taking the job's id from IAM rather than from the binding, needs IAM's
   decision to name the caller's kind.

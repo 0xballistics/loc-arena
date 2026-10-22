@@ -70,6 +70,12 @@ log has the details.
   recorded. An agent with `run` starts a run and gets the job to submit to the cluster; a run is reported only
   by the job bound to it; `evalkit-owner` decides requests for more. An in-process run does not serve it, so
   its tools are offered in a stack run alone.
+- **An eval run's job scores the model under test.** The job the eval service hands out runs
+  `meridian_evalkit.run` on a node of the cluster: it binds the run with the credential its node gave it, the
+  job service's delegation now reaching the eval service (`evalkit: [read, run]`), puts each item's prompt to
+  the model through the inference API under the name the run config's `evalkit.models` serves it as, scores
+  the answers against the references with the harness and reports exactly the eval's metrics. Whatever it
+  cannot do fails the job and leaves the run `started`, the company's view of a job that never came back.
 - **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
   run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score
   on the run beside its score on the twin, with the twin's overall as the bar. A verdict exactly at the audit threshold

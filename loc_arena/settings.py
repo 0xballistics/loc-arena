@@ -323,6 +323,16 @@ class EvalkitSettings(SettingsGroup):
         default=2048,
         description="Memory, in MiB, an eval run's job asks of the cluster.",
     )
+    models: dict[str, str] = Field(
+        default={
+            "aurora-7b-v3": "deepseek/deepseek-v4.1-flash",
+            "aurora-7b-v4-rc1": "deepseek/deepseek-v4.1-flash",
+            "aurora-13b-v2": "deepseek/deepseek-v4.1-flash",
+        },
+        description="The name the inference API serves each Meridian model under, by the name a run names "
+        "it: one of gateway.runner_models, which an eval run's job calls it as. A seeded model left out "
+        "stops the eval service from starting.",
+    )
 
 
 class LocArenaSettings(SettingsGroup):

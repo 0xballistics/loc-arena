@@ -19,7 +19,7 @@ import httpx2
 import pytest
 import uvicorn
 from loc_arena.agents_iam import IamAuthority
-from loc_arena.iam_wiring import iam_options
+from loc_arena.iam_wiring import build_service_app, iam_options
 from loc_arena.mcp_service import build_app, caller_from_token
 from loc_arena.tool_records import tool_call_recorder
 from mcp import Client
@@ -60,9 +60,8 @@ def call(url: str, method: str, path: str, token: str | None = None, body: objec
             timeout=5,
         ) as r:
             raw = r.read()
-            return r.status, json.loads(
-                raw,
-            ) if r.headers.get_content_type() == "application/json" else raw.decode()
+            is_json = r.headers.get_content_type() == "application/json"
+            return r.status, json.loads(raw) if is_json else raw.decode()
     except urllib.error.HTTPError as error:
         return error.code, json.loads(error.read())
 
@@ -96,7 +95,8 @@ def world(tmp_path: Path) -> Iterator[World]:
     )
     iam.bind_service("evalkit-svc", SERVICE, SERVICE)
     tokens = {
-        n: iam.issue_credential(n, [SERVICE, f"iam:{SERVICE}"]) for n in ("lead", "alice", "bob", "job-1")
+        name: iam.issue_credential(name, [SERVICE, f"iam:{SERVICE}"])
+        for name in ("lead", "alice", "bob", "job-1")
     }
     tokens["admin"] = iam.issue_credential("lead", ["iam"])  # the lead as an operator of IAM itself
     tokens["svc"] = iam.issue_credential("evalkit-svc", ["iam"])
@@ -104,7 +104,7 @@ def world(tmp_path: Path) -> Iterator[World]:
     guard = Guard(manifest, IamClient(iam_url, tokens["svc"], timeout=1, retries=0))
     audit: list[str] = []
     registry = EvalkitRegistry(load_seed(), clock=lambda: datetime(2026, 9, 1, tzinfo=UTC))
-    server, url = serve(create_evalkit_api(registry, audit.append, authority=IamAuthority(guard)))
+    server, url = serve(create_evalkit_api(registry, audit.append, IamAuthority(guard)))
     yield World(url, iam_url, iam, tokens, iam_server, registry, guard, audit)
     server.should_exit = True
     iam_server.should_exit = True
@@ -145,13 +145,11 @@ def test_a_granted_call_runs_as_its_principal_and_its_audit_line_carries_the_dec
     assert world.tokens["alice"] not in "".join(world.audit)
 
 
-def test_the_job_routes_admit_any_credential_and_the_registry_keeps_them_to_the_runs_job(
-    world: World,
-) -> None:
+def test_the_job_routes_admit_any_credential_and_the_registry_keeps_them_to_the_job(world: World) -> None:
     grant(world, "alice", ["run"])
     run_id = call(world.url, "POST", "/runs", world.tokens["alice"], START)[1]["run_id"]
 
-    bound = call(world.url, "POST", f"/runs/{run_id}/start", world.tokens["job-1"])[0]  # job-1 holds no grant
+    bound = call(world.url, "POST", f"/runs/{run_id}/start", world.tokens["job-1"])[0]  # job-1 has no grant
     owner_reports = call(world.url, "POST", f"/runs/{run_id}/results", world.tokens["alice"], RESULTS)[0]
     job_reports = call(world.url, "POST", f"/runs/{run_id}/results", world.tokens["job-1"], RESULTS)[0]
 
@@ -165,7 +163,6 @@ def tool_server(world: World, write: Callable[[str], None]) -> Any:  # noqa: ANN
     return build_evalkit_server(
         world.registry,
         caller_from_token,
-        None,
         options["verifier"],
         [recorder, *options["extra_middleware"]],
     )
@@ -195,8 +192,8 @@ def test_a_tool_is_decided_by_iam_and_each_call_is_recorded_with_its_outcome(wor
     allowed = anyio.run(call_tool, server, world.tokens["bob"], "start_run", START)
 
     assert refused.is_error
-    assert (
-        text(refused) == "not permitted: run on evalkit. Ask for it with: POST /requests on the IAM service."
+    assert text(refused) == (
+        "not permitted: run on evalkit. Ask for it with: POST /requests on the IAM service."
     )
     assert not allowed.is_error
     records = [json.loads(line) for line in lines]
@@ -208,14 +205,32 @@ def test_a_tool_is_decided_by_iam_and_each_call_is_recorded_with_its_outcome(wor
     assert [run.owner for run in world.registry.list_runs()][SEEDED_RUNS:] == ["bob"]
 
 
+def test_the_tools_and_the_api_are_served_as_one_app(world: World) -> None:
+    grant(world, "alice", ["read"])
+    api = create_evalkit_api(world.registry, print, IamAuthority(world.guard))
+    server = tool_server(world, print)
+    app = build_service_app(world.guard, server, SERVICE, api)
+
+    async def read() -> tuple[int, int, bool]:
+        headers = {"Authorization": f"Bearer {world.tokens['alice']}"}
+        async with (
+            server.session_manager.run(),
+            httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), headers=headers) as http,
+            Client(streamable_http_client(f"http://{SERVICE}:8000/mcp", http_client=http)) as client,
+        ):
+            health = await http.get(f"http://{SERVICE}:8000/health")
+            evals = await http.get(f"http://{SERVICE}:8000/evals")
+            listed = await client.call_tool("list_evals", {})
+            return health.status_code, evals.status_code, listed.is_error
+
+    assert anyio.run(read) == (200, 200, False)
+
+
 def test_startup_refuses_a_manifest_that_does_not_cover_the_routes(world: World) -> None:
     raw = json.loads(MANIFEST.read_text())
-    del (
-        raw["http"]["POST /runs/{run_id}/publish"],
-        raw["operations"]["publish_run"],
-        raw["tools"]["publish_run"],
-    )
+    del raw["http"]["POST /runs/{run_id}/publish"]
+    del raw["operations"]["publish_run"], raw["tools"]["publish_run"]
     guard = Guard(load_manifest(raw), IamClient(world.iam_url, world.tokens["svc"]))
 
     with pytest.raises(ManifestError, match="undeclared route POST /runs/{run_id}/publish"):
-        create_evalkit_api(world.registry, print, authority=IamAuthority(guard))
+        create_evalkit_api(world.registry, print, IamAuthority(guard))

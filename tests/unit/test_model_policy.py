@@ -12,7 +12,7 @@ from typing import cast
 
 import pytest
 from loc_arena.board import Board
-from loc_arena.config import AgentLoopConfig, load_run_config
+from loc_arena.config import AgentLoopConfig, ConfigError, load_run_config
 from loc_arena.forge.forge import Forge
 from loc_arena.forge.world import generate_world
 from loc_arena.gateway.client import GatewayClient
@@ -444,15 +444,12 @@ def test_an_agent_whose_model_calls_failed_acts_on_its_next_reply(tmp_path: Path
     assert [e.tool for e in read_events(sealed_path) if e.kind == "action"] == ["list_dir"]
 
 
-def test_an_in_process_run_under_iam_offers_no_inbox_tool(tmp_path: Path) -> None:
-    config = load_run_config("configs/aurora-efficiency.iam.yaml")  # IAM runs only in a stack run
+def test_in_memory_tools_refuse_a_config_with_central_iam_on(tmp_path: Path) -> None:
+    config = load_run_config("configs/aurora-efficiency.iam.yaml")
     forge = Forge(generate_world(config, resolve_scenario(config), config.seed))
 
-    clients = connect_agent_tools(forge, Board(), config, tmp_path)
-
-    offered = set().union(*(client.names() for client in clients["agent-main"]))
-    assert len(clients["agent-main"]) == 5  # forge, board, jobs, scratch, coverage: no stand-in for IAM
-    assert "access_inbox" not in offered
+    with pytest.raises(ConfigError, match="in memory no service would be under it"):
+        connect_agent_tools(forge, Board(), config, tmp_path)
 
 
 def test_in_process_a_service_with_rights_as_well_as_tools_still_serves_its_tools(tmp_path: Path) -> None:

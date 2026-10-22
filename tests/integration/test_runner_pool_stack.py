@@ -1,11 +1,13 @@
 """The runner pool in a stack run: who may drive a runner, what it holds, how far its pi reaches, executions.
 
-Starts the gateway, the agents service with its runners, and agent-main's sandbox from the compose file a
-stack run renders. The gateway's key is a placeholder; the only model call made is one the gateway refuses.
+Starts the gateway, the agents service with its runners and central IAM, and agent-main's sandbox from the
+compose file a stack run renders, with one play's secrets. The gateway's key is a placeholder; the only model
+call made is one the gateway refuses.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import secrets
@@ -13,19 +15,19 @@ import subprocess
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from http import HTTPStatus
+from pathlib import Path
 
 import pytest
 import yaml
 from loc_arena.config import load_run_config, sandbox_service
-from loc_arena.episode_stack import REPOSITORY, issue_identities, render_compose, token_variable
+from loc_arena.episode_stack import REPOSITORY, issue_secrets, render_compose
 from loc_arena.gateway.core import API_KEY_VARIABLE
-from loc_arena.gateway.proxy import PROJECT_PREFIX, GatewayCall, name_compose_service
+from loc_arena.gateway.model_gateway import PROJECT_PREFIX, GatewayCall, copy_call_log
 from loc_arena.runner_pool import list_runner_services, runner_token_variable
-from loc_arena.tools_gateway import TOOLS_GATEWAY_CONFIG_VARIABLE
 
 from tests.integration._docker_support import image_exists
 
-RUN = "aurora-efficiency.deterministic"
+RUN = "aurora-efficiency.iam"
 OWNER = "agents"
 SANDBOX = sandbox_service("agent-main")
 COSTLY_MODEL = "costly/model"  # on no runner's list of models
@@ -76,10 +78,11 @@ print(json.dumps(execution))
 
 @dataclass(frozen=True)
 class RunnerPool:
-    """The started project: a way to run a command in one of its services, and each runner's token."""
+    """The started project: a way to run a command in one of its services, each runner's token, the record."""
 
     run_in: Callable[..., str]
     tokens: dict[str, str]
+    read_gateway_calls: Callable[[], list[GatewayCall]]  # every call the gateway has recorded so far
 
     def call_runner(
         self,
@@ -108,11 +111,6 @@ class RunnerPool:
         assert isinstance(result, dict)
         return result
 
-    def read_gateway_calls(self) -> list[GatewayCall]:
-        """Every call the gateway has logged so far."""
-        log = self.run_in("gateway", "cat", str(CONFIG.settings.gateway.call_log))
-        return [GatewayCall.model_validate_json(line) for line in log.splitlines()]
-
 
 def run_docker(*arguments: str, environment: dict[str, str]) -> str:
     done = subprocess.run(
@@ -126,22 +124,26 @@ def run_docker(*arguments: str, environment: dict[str, str]) -> str:
     return done.stdout
 
 
+def read_calls(compose: list[str], environment: dict[str, str], call_log: Path) -> list[GatewayCall]:
+    """The gateway's record so far, copied out once it holds every call the gateway logged."""
+    assert copy_call_log(
+        functools.partial(subprocess.run, env=environment),
+        compose,
+        CONFIG.settings,
+        call_log,
+        callers=[],  # the pool's tests go on calling; each call has returned
+    )
+    return [GatewayCall.model_validate_json(line) for line in call_log.read_text().splitlines()]
+
+
 @pytest.fixture(scope="module")
 def pool(tmp_path_factory: pytest.TempPathFactory) -> Iterator[RunnerPool]:
     directory = tmp_path_factory.mktemp("runner-pool")
     (directory / "compose.yaml").write_text(yaml.safe_dump(render_compose(CONFIG, REPOSITORY, RUN, [])))
-    tokens = {runner: secrets.token_urlsafe(32) for runner in list_runner_services(CONFIG)}
-    environment = {
-        **os.environ,
-        API_KEY_VARIABLE: secrets.token_urlsafe(24),
-        TOOLS_GATEWAY_CONFIG_VARIABLE: "unused: the tools gateway is not started",
-        **{token_variable(agent.id): secrets.token_urlsafe(32) for agent in CONFIG.agents},
-        **{identity.variable: secrets.token_urlsafe(32) for identity in issue_identities(CONFIG)},
-        **{runner_token_variable(runner): token for runner, token in tokens.items()},
-    }
-    project = (
-        f"{PROJECT_PREFIX}{secrets.token_hex(3)}"  # named as a stack run's, so the gateway names runners
-    )
+    attack, _ = issue_secrets(CONFIG)
+    tokens = {runner: attack[runner_token_variable(runner)] for runner in list_runner_services(CONFIG)}
+    environment = {**os.environ, API_KEY_VARIABLE: secrets.token_urlsafe(24), **attack}
+    project = f"{PROJECT_PREFIX}{secrets.token_hex(3)}"  # named as a stack run's
     compose = [
         "compose",
         "-p",
@@ -152,7 +154,7 @@ def pool(tmp_path_factory: pytest.TempPathFactory) -> Iterator[RunnerPool]:
         str(directory),
     ]
     try:
-        run_docker(*compose, "build", "gateway", "runner-1", SANDBOX, environment=environment)
+        run_docker(*compose, "build", OWNER, "runner-1", SANDBOX, environment=environment)
         run_docker(
             *compose,
             "up",
@@ -174,6 +176,7 @@ def pool(tmp_path_factory: pytest.TempPathFactory) -> Iterator[RunnerPool]:
                 environment=environment,
             ),
             tokens,
+            functools.partial(read_calls, ["docker", *compose], environment, directory / "calls.jsonl"),
         )
     finally:
         run_docker(*compose, "down", "--volumes", "--remove-orphans", environment=environment)
@@ -226,7 +229,7 @@ def test_the_gateway_names_a_runners_pi_and_refuses_it_a_model_runners_may_not_c
     result = pool.run_on_runner("runner-1", "pi-on-gateway", COSTLY_MODEL, "Summarize.", "hi")
 
     by_runner = {
-        (name_compose_service(call.caller), call.status, call.request["model"])
+        (call.caller, call.status, call.request["model"])
         for call in pool.read_gateway_calls()
         if isinstance(call.request, dict) and call.request["model"] == COSTLY_MODEL
     }
@@ -239,7 +242,7 @@ def test_an_execution_runs_pi_on_a_runner_whose_model_calls_the_gateway_answers(
     execution = json.loads(pool.run_in(SANDBOX, "python", "-c", RUN_AN_AGENT, COSTLY_MODEL, task))
 
     refused_from = {
-        name_compose_service(call.caller)
+        call.caller
         for call in pool.read_gateway_calls()
         if call.status == HTTPStatus.FORBIDDEN and task in json.dumps(call.request)
     }

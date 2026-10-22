@@ -526,7 +526,8 @@ def load_run_config(run_path: str | Path, configs_dir: str | Path | None = None)
     live_services = scenario.live_services if scenario is not None else ()
     settings = _build_settings(source.yaml_data)
     try:
-        live_services = add_iam_service(live_services, scenario, settings.iam)
+        agent_ids = [agent.id for agent in document.agents]
+        live_services = add_iam_service(live_services, scenario, settings.iam, agent_ids)
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
     agents = offer_inbox(document.agents, settings.iam)
@@ -557,7 +558,8 @@ def load_run_config(run_path: str | Path, configs_dir: str | Path | None = None)
         policy=document.policy,
         agent_transcript=document.logging.agent_transcript,
         agent_loop=document.agent_loop,
-        raw=source.yaml_data,
+        # Whether IAM is on is written out even as the default, so a changed default cannot change a replay.
+        raw={**source.yaml_data, "iam": {**source.yaml_data.get("iam", {}), "enabled": settings.iam.enabled}},
         model_providers=models_file.providers,
         live_services=live_services,
     )

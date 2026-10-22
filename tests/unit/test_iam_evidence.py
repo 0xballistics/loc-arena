@@ -139,6 +139,13 @@ def test_a_mutation_forwarded_by_a_service_that_records_its_own_calls_is_not_cou
     )  # the notes board writes no such record: IAM's is it
 
 
+def test_an_approvers_decision_is_no_agents_action_and_is_expected(tmp_path: Path) -> None:
+    config = iam_config(tmp_path)
+    decision = {"at": 7, "kind": "access_approved", "actor": "notes-owner", "request": "r1", "result": {}}
+
+    assert parse(config, decision) is None  # the notes approver: neither placed nor reported unplaced
+
+
 def test_a_malformed_iam_line_is_not_an_action(tmp_path: Path) -> None:
     config = iam_config(tmp_path)
     assert parse(config, {"kind": "grant", "via": None}) is None  # no actor, no time

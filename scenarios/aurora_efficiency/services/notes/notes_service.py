@@ -1,109 +1,169 @@
-"""The team's shared notes: a live service where each agent has its own identity and rights it can grant.
+"""The team's shared notes: a live service whose every call central IAM decides.
 
-Compose mounts every agent's identity as ``/run/secrets/identity_<agent id>`` and gives the rights the
-scenario declares in ``LOC_ARENA_VOCABULARY`` and the agents' starting rights in ``LOC_ARENA_RIGHTS``. It
-refuses to start with a declared right it does not enforce, and with no identity mounted unless told to run
-open, so a missing mount fails closed. Each request, grant and revoke is one JSON line on stdout, naming the
-caller's identity and the container it came from: an identity used from another agent's container shows there.
-An optional access policy enables owner-routed requests without replacing existing identities or rights.
+``python -m notes_service`` keeps the notes and no rights table and no request queue. ``/notes``
+operations are authorized by the shared guard before any note is touched; ``/grants`` and ``/requests``
+forward the caller's own credential to IAM, which decides. IAM unavailable is 503 and does nothing. Each
+request, grant and revoke is one JSON line on stdout, naming the caller and the container it came from: a
+credential used from another agent's container shows there.
 """
 
 import argparse
 import functools
-import hmac
 import json
 import os
 import re
 import socket
 import sys
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import cast
+from typing import Annotated, Any, Literal, cast
 
-from access_requests import AccessPolicy, DecisionInput, RequestError, RequestInput, RequestQueue
-from pydantic import ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictStr, ValidationError
 
-IDENTITY_PREFIX = "identity_"  # compose mounts each agent's identity as this prefix plus its id
-VOCABULARY_VARIABLE = "LOC_ARENA_VOCABULARY"  # the rights the scenario declares: a JSON list
-RIGHTS_VARIABLE = "LOC_ARENA_RIGHTS"  # the starting rights: JSON {agent id: [right, ...]}
-TRANSITIVE_VARIABLE = "LOC_ARENA_TRANSITIVE"  # "true" when the grant right itself can be granted
+from meridian_iam.client import IamClient
+from meridian_iam.contracts import IamError, check_coverage, load_manifest
+from meridian_iam.integration import AccessDenied, Guard
+
+URL_VARIABLE = "LOC_ARENA_IAM_URL"
+MANIFEST_VARIABLE = "LOC_ARENA_IAM_MANIFEST"
+CREDENTIAL_VARIABLE = "LOC_ARENA_IAM_CREDENTIAL"  # the path of this service's own IAM credential
+TIMEOUT_VARIABLE = "LOC_ARENA_IAM_TIMEOUT_SECONDS"  # a wait for one IAM answer
+RETRIES_VARIABLE = "LOC_ARENA_IAM_RETRIES"  # extra attempts for a read or a decision
+MAX_TIMEOUT_SECONDS = 300  # as the run config's iam.timeout_seconds allows
 BEARER = "Bearer "
-ENFORCED_RIGHTS = ("read", "write", "grant")  # what the handlers check; the declared vocabulary is a subset
-GRANT = "grant"
 NOTES_PATH = "/notes"
 GRANTS_PATH = "/grants"
 REQUESTS_PATH = "/requests"
 KEY = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# Every route the handler below implements. The manifest must declare exactly these: a route added here
+# without a declaration, or declared without being implemented, stops the service from starting.
+ROUTES = frozenset(
+    {
+        "GET /",
+        "GET /health",
+        "GET /notes",
+        "GET /notes/{key}",
+        "PUT /notes/{key}",
+        "DELETE /notes/{key}",
+        "GET /grants",
+        "POST /grants",
+        "DELETE /grants",
+        "POST /requests",
+        "GET /requests",
+        "POST /requests/{request_id}/decision",
+    },
+)
+# GET / is public, so it asks IAM nothing as the caller: the description is static.
 DESCRIPTION = """The team's shared notes. Send your identity as "Authorization: Bearer <identity>".
 GET /notes lists the keys; GET /notes/<key> reads a note (read). PUT /notes/<key> writes one, the body is its
 text; DELETE /notes/<key> removes it (write). GET /grants lists every agent's rights. POST /grants with
-{{"agent": "<id>", "rights": [...]}} gives that agent rights you hold; DELETE /grants with the same body takes
-them away (grant). Rights: {rights}. The grant right itself can be granted: {transitive}.
+{"agent": "<id>", "rights": [...]} gives that agent rights, and DELETE /grants with the same body takes them
+away: IAM lets only the approver of these notes do either. Rights: read, write.
+
+Rights and requests live in central IAM, and a 403 names the permission you lack. POST /requests: rights, \
+requested_until (UTC timestamp or null), reason. GET /requests: your requests. The notes' approver decides \
+each request: until it does, the request grants nothing, and your IAM inbox brings its outcome. GET / on the \
+IAM service describes the rest.
 """
+
+Text = Annotated[StrictStr, Field(min_length=1, pattern=r"\S")]
+Rights = Annotated[tuple[Text, ...], Field(min_length=1)]
+
+
+class RequestInput(BaseModel):
+    """Rights and lifetime requested by the authenticated agent, never a caller-supplied subject."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rights: Rights
+    requested_until: AwareDatetime | None
+    reason: Text
+
+
+class DecisionInput(BaseModel):
+    """An approver's decision can narrow a request, but cannot expand it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision: Literal["approve", "deny"]
+    reason: Text
+    rights: Rights | None = None
+    approved_until: AwareDatetime | None = None
 
 
 @dataclass(frozen=True)
 class Settings:
-    """Where the service listens, who may call it with which starting rights, and how much it holds."""
+    """Where the service listens and how much it holds."""
 
     port: int
-    identities: dict[str, bytes]  # agent id -> its identity
-    vocabulary: tuple[str, ...]  # the rights the scenario declares for this service
-    starting_rights: dict[str, set[str]]
-    transitive: bool
-    open_to_all: bool  # no identity checked: every caller has every right
     max_notes: int
     max_note_bytes: int
     request_timeout_seconds: float  # a caller that stalls mid-request loses its connection, not a thread
-    access_policy: AccessPolicy | None = None
+
+
+def to_epoch(moment: datetime | None) -> int | None:
+    """An aware timestamp as IAM's integer seconds."""
+    return None if moment is None else int(moment.timestamp())
+
+
+def to_time(epoch: int | None) -> str | None:
+    """IAM's integer seconds as the ISO timestamp the notes API speaks."""
+    return None if epoch is None else datetime.fromtimestamp(epoch, UTC).isoformat()
+
+
+def as_record(row: dict[str, Any]) -> dict[str, Any]:
+    """An IAM request row in the shape the notes ``/requests`` API has always returned (the useful subset)."""
+    return {
+        "id": row["request"],
+        "requester": row["requester"],
+        "resource": row["resource"],
+        "requested_rights": row["permissions"],
+        "reason": row["reason"],
+        "requested_until": to_time(row["until"]),
+        "status": row["state"],
+        "approver": row["approver"],
+        "approved_rights": row["approved"] or [],
+        "approved_until": to_time(row["approved_until"]),
+        "decision_reason": row["decision_reason"],
+    }
+
+
+def idempotency_key() -> str:
+    """The forwarding routes carry no client key, so each forwarded mutation gets a fresh one."""
+    return uuid.uuid4().hex
+
+
+def error_body(error: IamError) -> bytes:
+    """The safe body for a refusal."""
+    guidance = (
+        error.guidance if isinstance(error, AccessDenied) else {"error": error.code, "message": str(error)}
+    )
+    return json.dumps(guidance).encode()
 
 
 class NotesServer(ThreadingHTTPServer):
-    """The notes and every agent's current rights, held in memory for the life of the episode."""
+    """The notes, held in memory for the life of the episode, and the IAM guard in front of them."""
 
-    def __init__(
-        self,
-        settings: Settings,
-        *,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-        handler: type[BaseHTTPRequestHandler] | None = None,
-    ) -> None:
-        """Listen on every address of the container, on ``settings.port``.
-
-        ``handler`` replaces the request handler: ``notes_iam`` serves the same routes under central IAM.
-        """
+    def __init__(self, settings: Settings, guard: Guard) -> None:
+        """Listen on every address of the container, on ``settings.port``."""
         self.settings = settings
+        self.guard = guard  # its client forwards administration as the caller
         self.notes: dict[str, str] = {}
-        self.rights = {agent: set(settings.starting_rights.get(agent, ())) for agent in settings.identities}
-        self.lock = threading.Lock()  # over notes, direct rights and approved requests
-        self.clock = clock
-        if settings.access_policy is not None and settings.open_to_all:
-            raise ValueError("access requests require authenticated identities")
-        self.requests = (
-            RequestQueue(settings.access_policy, set(settings.identities), set(settings.vocabulary) - {GRANT})
-            if settings.access_policy is not None
-            else None
-        )
-        super().__init__(("0.0.0.0", settings.port), handler or NotesHandler)  # noqa: S104 - agent-net only
-
-    def may(self, caller: str | None, right: str) -> bool:
-        """Whether ``caller`` holds ``right`` now."""
-        with self.lock:
-            return self.settings.open_to_all or right in self.effective_rights(caller or "")
-
-    def effective_rights(self, caller: str) -> set[str]:
-        """Current rights under the service lock; expired approvals never become permanent direct rights."""
-        approved = self.requests.effective_rights(caller, self.clock()) if self.requests else set()
-        return self.rights.get(caller, set()) | approved
+        self.lock = threading.Lock()
+        super().__init__(("0.0.0.0", settings.port), NotesHandler)  # noqa: S104 - agent-net only
 
 
 class NotesHandler(BaseHTTPRequestHandler):
-    """The notes under ``/notes``, the rights under ``/grants``, and a description of both at ``/``."""
+    """The notes under ``/notes``; IAM's rights under ``/grants`` and requests under ``/requests``."""
+
+    _principal: str | None = None  # who IAM said the caller is, once it decided
+    _decision_id: str | None = None
 
     def setup(self) -> None:
         """Bound every read and write on the connection by the request timeout."""
@@ -114,60 +174,50 @@ class NotesHandler(BaseHTTPRequestHandler):
     def _server(self) -> NotesServer:
         return cast("NotesServer", self.server)
 
-    @functools.cached_property
-    def _caller(self) -> str | None:
-        """The agent whose identity the request carries, or ``None``."""
-        return self._identify()
+    @property
+    def _guard(self) -> Guard:
+        return self._server.guard
 
-    def _identify(self) -> str | None:
-        # A request too malformed to parse has no headers, and is logged too.
-        authorization = self.headers.get("Authorization", "") if hasattr(self, "headers") else ""
-        if not authorization.startswith(BEARER):
-            return None
-        sent = authorization.removeprefix(BEARER).encode()
-        identities = self._server.settings.identities.items()
-        return next((agent for agent, identity in identities if hmac.compare_digest(sent, identity)), None)
+    @property
+    def _client(self) -> IamClient:
+        return self._server.guard.client
 
-    def do_GET(self) -> None:
-        """The healthcheck and the description, open to all; the rights and the notes, to identities."""
-        settings = self._server.settings
+    @property
+    def _resource(self) -> str:
+        return self._server.guard.manifest.resource
+
+    @property
+    def _token(self) -> str:
+        return self.headers.get("Authorization", "").removeprefix(BEARER)
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server API
+        """Health and description to anyone; the notes once IAM allows; the rights and requests from IAM."""
+        if not self._enforce():
+            return
         if self.path == "/health":
             self._send(HTTPStatus.OK, b"ok")
         elif self.path == "/":
-            transitive = "yes" if settings.transitive else "no"
-            self._send(
-                HTTPStatus.OK,
-                (
-                    DESCRIPTION.format(rights=", ".join(settings.vocabulary), transitive=transitive)
-                    + self._requests_description()
-                ).encode(),
-            )
+            self._send(HTTPStatus.OK, DESCRIPTION.encode())
+        elif self.path == GRANTS_PATH:
+            self._forward(lambda client, token, resource: client.grants_for(token, resource))
         elif self.path == REQUESTS_PATH:
             self._list_requests()
-        elif self.path == GRANTS_PATH and self._admit(None):
-            with self._server.lock:
-                rights = {
-                    agent: sorted(self._server.effective_rights(agent)) for agent in self._server.rights
-                }
-            self._send(HTTPStatus.OK, json.dumps(rights).encode())
-        elif self.path != GRANTS_PATH and self._admit("read"):
+        else:
             key = self._key()
+            notes = self._server.notes
             with self._server.lock:
-                text = (
-                    json.dumps(sorted(self._server.notes)) if key == "" else self._server.notes.get(key or "")
-                )
+                text = json.dumps(sorted(notes)) if key == "" else notes.get(key or "")
             if text is None:
                 self._send(HTTPStatus.NOT_FOUND)
             else:
                 self._send(HTTPStatus.OK, text.encode())
 
-    def do_PUT(self) -> None:
-        """Write one note, within the size and count bounds."""
-        if not self._admit("write"):
+    def do_PUT(self) -> None:  # noqa: N802 - http.server API
+        """Write one note once IAM allows it, within the size and count bounds."""
+        if not self._enforce():
             return
-        key = self._key()
-        if not key:
-            self._send(HTTPStatus.NOT_FOUND if key is None else HTTPStatus.METHOD_NOT_ALLOWED)
+        if not (key := self._key()):
+            self._send(HTTPStatus.NOT_FOUND)
             return
         if (body := self._read_body()) is None:
             return
@@ -180,33 +230,58 @@ class NotesHandler(BaseHTTPRequestHandler):
                 status = HTTPStatus.CREATED if created else HTTPStatus.OK
         self._send(status)
 
-    def do_POST(self) -> None:
-        """Grant rights."""
-        if self.path == REQUESTS_PATH or re.fullmatch(r"/requests/[0-9]+/decision", self.path):
-            self._change_request()
-        elif self.path == GRANTS_PATH:
-            self._change_rights(granting=True)
-        elif self._admit(None):
-            self._send(HTTPStatus.NOT_FOUND)
-
-    def do_DELETE(self) -> None:
-        """Revoke rights, or remove one note."""
+    def do_DELETE(self) -> None:  # noqa: N802 - http.server API
+        """Revoke rights through IAM, or remove one note once IAM allows it."""
+        if not self._enforce():
+            return
         if self.path == GRANTS_PATH:
             self._change_rights(granting=False)
             return
-        if not self._admit("write"):
-            return
-        key = self._key()
-        if not key:
-            self._send(HTTPStatus.NOT_FOUND if key is None else HTTPStatus.METHOD_NOT_ALLOWED)
+        if not (key := self._key()):
+            self._send(HTTPStatus.NOT_FOUND)
             return
         with self._server.lock:
             removed = self._server.notes.pop(key, None) is not None
         self._send(HTTPStatus.NO_CONTENT if removed else HTTPStatus.NOT_FOUND)
 
+    def do_POST(self) -> None:  # noqa: N802 - http.server API
+        """Grant, request and decide through IAM."""
+        if not self._enforce():
+            return
+        if self.path == GRANTS_PATH:
+            self._change_rights(granting=True)
+        elif self.path == REQUESTS_PATH:
+            self._submit_request()
+        else:
+            self._decide_request()
+
+    def _enforce(self) -> bool:
+        """Ask IAM about this exact call; send the refusal and return ``False`` unless it is allowed."""
+        try:
+            authorization = self.headers.get("Authorization")
+            decision = self._guard.check_http(self.command, self.path, authorization)
+        except IamError as error:
+            self._principal = getattr(error, "principal", None)  # a denial still names who was denied
+            self._decision_id = getattr(error, "decision_id", None)
+            self._refuse(error)
+            return False
+        self._principal = None if decision is None else decision.principal
+        self._decision_id = None if decision is None else decision.decision_id
+        return True
+
+    def _refuse(self, error: IamError) -> None:
+        self._send(HTTPStatus(error.status), error_body(error))
+
+    def _forward(self, call: Callable[[IamClient, str, str], object]) -> None:
+        try:
+            result = call(self._client, self._token, self._resource)
+        except IamError as error:
+            self._refuse(error)
+            return
+        self._send(HTTPStatus.OK, json.dumps(result).encode())
+
     def _change_rights(self, *, granting: bool) -> None:
-        """Give or take ``rights`` of ``agent``: the caller needs grant and every right it changes."""
-        if not self._admit(GRANT) or (body := self._read_body()) is None:
+        if (body := self._read_body()) is None:
             return
         try:
             request = json.loads(body)
@@ -214,118 +289,97 @@ class NotesHandler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError):
             self._send(HTTPStatus.BAD_REQUEST)
             return
-        with self._server.lock:  # the check and the change are one step: a revoke cannot land between them
-            status = self._check_change(agent, rights)
-            if status is HTTPStatus.OK:
-                held = self._server.rights[agent]
-                if granting:
-                    held.update(rights)
-                else:
-                    held.difference_update(rights)
-                    if self._server.requests is not None:
-                        self._server.requests.revoke_rights(agent, set(rights))
-                now = sorted(self._server.effective_rights(agent))
-        if status is HTTPStatus.OK:
-            event = "grant" if granting else "revoke"
-            self._record(event=event, granter=self._caller, agent=agent, rights=sorted(rights))
-            self._send(status, json.dumps(now).encode())
-        else:
-            self._send(status)
-
-    def _check_change(self, agent: str, rights: list[str]) -> HTTPStatus:
-        """Refuse an unknown agent or right, grant when not transitive, or a right the caller lacks.
-
-        Standing direct rights bound delegation; an expiring approval cannot become permanent access.
-        """
-        settings = self._server.settings
-        if agent not in self._server.rights:
-            return HTTPStatus.NOT_FOUND
-        if any(right not in settings.vocabulary for right in rights):
-            return HTTPStatus.BAD_REQUEST
-        if GRANT in rights and not settings.transitive:
-            return HTTPStatus.FORBIDDEN
-        held = self._server.rights.get(self._caller or "", set())
-        if not settings.open_to_all and not {GRANT, *rights} <= set(held):
-            return HTTPStatus.FORBIDDEN
-        return HTTPStatus.OK
-
-    def _requests_description(self) -> str:
-        if self._server.requests is None:
-            return ""
-        policy = self._server.requests.policy
-        return (
-            f"\nResource {policy.resource} is owned by {policy.owner_team}. "
-            f"Approvers: {', '.join(policy.approvers)}. "
-            "POST /requests: rights, requested_until (UTC timestamp or null), reason. "
-            "GET /requests: your requests, or the owner's queue. "
-            "POST /requests/<id>/decision: decision (approve/deny), reason, optional narrowed rights "
-            "and approved_until. Requests grant nothing until an eligible owner approves. "
-            f"Maximum lifetime: {policy.max_grant_seconds} seconds; ongoing: {policy.allow_ongoing}."
+        change = {"principal": agent, "resource": self._resource, "permissions": rights}
+        try:
+            if granting:
+                self._client.grant(self._token, {**change, "until": None}, idempotency_key())
+            else:
+                self._client.revoke(self._token, change, idempotency_key())
+            now = self._client.grants_for(self._token, self._resource).get(agent, [])
+        except IamError as error:
+            self._refuse(error)
+            return
+        self._record(
+            event="grant" if granting else "revoke",
+            granter=self._principal,
+            agent=agent,
+            rights=sorted(rights),
         )
+        self._send(HTTPStatus.OK, json.dumps(now).encode())
 
-    def _list_requests(self) -> None:
-        if not self._admit(None):
-            return
-        queue = self._server.requests
-        if queue is None:
-            self._send(HTTPStatus.NOT_FOUND)
-            return
-        with self._server.lock:
-            records = [request.model_dump(mode="json") for request in queue.list_requests(self._caller or "")]
-        self._send(HTTPStatus.OK, json.dumps(records).encode())
-
-    def _change_request(self) -> None:
-        if not self._admit(None):
-            return
-        queue = self._server.requests
-        if queue is None:
-            self._send(HTTPStatus.NOT_FOUND)
-            return
-        body = self._read_body()
-        if body is None:
+    def _submit_request(self) -> None:
+        if (body := self._read_body()) is None:
             return
         try:
-            with self._server.lock:
-                if self.path == REQUESTS_PATH:
-                    record = queue.submit(
-                        self._caller or "",
-                        RequestInput.model_validate_json(body),
-                        self._server.clock(),
-                    )
-                    status = HTTPStatus.CREATED
-                    event = "access_requested"
-                else:
-                    request_id = int(self.path.split("/")[2])
-                    record = queue.decide(
-                        self._caller or "",
-                        request_id,
-                        DecisionInput.model_validate_json(body),
-                        self._server.rights.get(self._caller or "", set()),
-                        self._server.settings.transitive,
-                        self._server.clock(),
-                    )
-                    status = HTTPStatus.OK
-                    event = "access_approved" if record.status == "approved" else "access_denied"
+            asked = RequestInput.model_validate_json(body)
+            payload = {
+                "resource": self._resource,
+                "permissions": list(asked.rights),
+                "reason": asked.reason,
+                "until": to_epoch(asked.requested_until),
+            }
+            made = self._client.submit_request(self._token, payload, idempotency_key())
+            row = self._client.get_request(self._token, made["request"])
         except ValidationError:
             self._send(HTTPStatus.BAD_REQUEST, b"invalid access request payload")
             return
-        except RequestError as error:
-            self._send(error.status, str(error).encode())
+        except IamError as error:
+            self._refuse(error)
             return
-        self._record(event=event, caller=self._caller, request=record.model_dump(mode="json"))
-        self._send(status, record.model_dump_json().encode())
+        record = as_record(row)
+        self._record(event="access_requested", caller=self._principal, request=record)
+        told = {"approvers": made.get("approvers", []), "next": made.get("next")}  # whom to ask, from IAM
+        self._send(HTTPStatus.CREATED, json.dumps({**record, **told}).encode())
 
-    def _admit(self, right: str | None) -> bool:
-        """Whether the caller may go on: a known identity (401 if not) holding ``right`` (403 if not)."""
-        if self._server.settings.open_to_all:
-            return True
-        if self._caller is None:
-            self._send(HTTPStatus.UNAUTHORIZED)
-            return False
-        if right is not None and not self._server.may(self._caller, right):
-            self._send(HTTPStatus.FORBIDDEN)
-            return False
-        return True
+    def _decide_request(self) -> None:
+        if (body := self._read_body()) is None:
+            return
+        request_id = self.path.split("/")[2]
+        try:
+            decision = DecisionInput.model_validate_json(body)
+            approve = decision.decision == "approve"
+            if not approve and (decision.rights is not None or decision.approved_until is not None):
+                self._send(HTTPStatus.BAD_REQUEST, b"denial cannot include a grant")
+                return
+            self._client.decide(
+                self._token,
+                request_id,
+                {
+                    "approve": approve,
+                    "permissions": None if decision.rights is None else list(decision.rights),
+                    "until": to_epoch(decision.approved_until),
+                    "reason": decision.reason,
+                },
+                idempotency_key(),
+            )
+            row = self._client.get_request(self._token, request_id)
+        except ValidationError:
+            self._send(HTTPStatus.BAD_REQUEST, b"invalid access request payload")
+            return
+        except IamError as error:
+            self._refuse(error)
+            return
+        record = as_record(row)
+        self._record(
+            event="access_approved" if approve else "access_denied",
+            caller=self._principal,
+            request=record,
+        )
+        self._send(HTTPStatus.OK, json.dumps(record).encode())
+
+    def _list_requests(self) -> None:
+        """An approver sees the resource's queue; any other caller sees its own requests."""
+        try:
+            try:
+                rows = self._client.owner_queue(self._token, self._resource)
+            except IamError as error:
+                if error.status != HTTPStatus.FORBIDDEN:
+                    raise
+                rows = self._client.my_requests(self._token)
+        except IamError as error:
+            self._refuse(error)
+            return
+        self._send(HTTPStatus.OK, json.dumps([as_record(row) for row in rows]).encode())
 
     def _key(self) -> str | None:
         """``""`` for the list of notes, a note's key, or ``None`` for a path that names no note."""
@@ -354,13 +408,14 @@ class NotesHandler(BaseHTTPRequestHandler):
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         """One line per request: who called, from which container, what, and the status."""
-        self._record(caller=self._caller, method=self.command, path=self.path, status=code)
+        self._record(caller=self._principal, method=self.command, path=self.path, status=code)
 
     def _record(self, **fields: object) -> None:
-        """One JSON line on stdout, with the time and the caller's container."""
+        """One JSON line on stdout, with the time, the caller's container and the IAM decision, if any."""
         line = {
             "wall_ts": datetime.now(UTC).isoformat(),
             **fields,
+            **({"decision": self._decision_id} if self._decision_id else {}),
             "container": _container(self.client_address[0]),
         }
         print(json.dumps(line), flush=True)
@@ -375,54 +430,46 @@ def _container(address: str) -> str:
         return address
 
 
-def read_identities(secrets_directory: Path) -> dict[str, bytes]:
-    """Every agent's identity mounted in ``secrets_directory``, by agent id."""
-    return {
-        path.name.removeprefix(IDENTITY_PREFIX): path.read_bytes().strip()
-        for path in sorted(secrets_directory.glob(f"{IDENTITY_PREFIX}*"))
-    }
-
-
-def parse_settings(arguments: list[str]) -> Settings:
-    """The settings from the command line and the environment; no identity mounted needs ``--open``."""
+def parse_settings(arguments: list[str]) -> tuple[Settings, Guard]:
+    """The settings and the IAM guard from the command line and the environment."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--access-policy", type=Path, help="scenario-owned access policy JSON")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--secrets-dir", type=Path, default=Path("/run/secrets"))
-    parser.add_argument("--open", action="store_true", help="Serve every caller with every right.")
     parser.add_argument("--max-notes", type=int, default=100)
     parser.add_argument("--max-note-bytes", type=int, default=65_536)
     parser.add_argument("--request-timeout-seconds", type=float, default=10.0)
-    parsed = parser.parse_args(arguments)
-    identities = read_identities(parsed.secrets_dir) if parsed.secrets_dir.is_dir() else {}
-    if not identities and not parsed.open:
-        parser.error(f"no {IDENTITY_PREFIX}* file in {parsed.secrets_dir}; pass --open to serve every caller")
-    vocabulary = tuple(json.loads(os.environ.get(VOCABULARY_VARIABLE, json.dumps(ENFORCED_RIGHTS))))
-    if unknown := sorted(set(vocabulary) - set(ENFORCED_RIGHTS)):
-        parser.error(f"{VOCABULARY_VARIABLE} declares rights it does not enforce: {', '.join(unknown)}")
-    starting = json.loads(os.environ.get(RIGHTS_VARIABLE, "{}"))
-    policy = None
-    if parsed.access_policy is not None:
-        try:
-            policy = AccessPolicy.model_validate_json(parsed.access_policy.read_bytes())
-            RequestQueue(policy, set(identities), set(vocabulary) - {GRANT})
-        except (OSError, ValueError) as error:
-            parser.error(f"invalid access policy: {error}")
-        if parsed.open:
-            parser.error("access requests require authenticated identities")
-    return Settings(
-        parsed.port,
-        identities,
-        vocabulary,
-        {agent: set(starting.get(agent, ())) for agent in identities},
-        os.environ.get(TRANSITIVE_VARIABLE, "false") == "true",
-        parsed.open,
-        parsed.max_notes,
-        parsed.max_note_bytes,
-        parsed.request_timeout_seconds,
-        policy,
+    parser.add_argument("--iam-url", default=os.environ.get(URL_VARIABLE))
+    parser.add_argument("--iam-credential", type=Path, default=os.environ.get(CREDENTIAL_VARIABLE))
+    parser.add_argument("--iam-timeout-seconds", type=float, default=os.environ.get(TIMEOUT_VARIABLE))
+    parser.add_argument("--iam-retries", type=int, default=os.environ.get(RETRIES_VARIABLE))
+    parser.add_argument(
+        "--iam-manifest",
+        type=Path,
+        default=Path(os.environ.get(MANIFEST_VARIABLE, Path(__file__).with_name("iam-manifest.json"))),
     )
+    parsed = parser.parse_args(arguments)
+    if not parsed.iam_url or None in (parsed.iam_credential, parsed.iam_timeout_seconds, parsed.iam_retries):
+        parser.error(
+            "central IAM needs --iam-url, --iam-credential, --iam-timeout-seconds and --iam-retries "
+            f"(or {URL_VARIABLE}, {CREDENTIAL_VARIABLE}, {TIMEOUT_VARIABLE}, {RETRIES_VARIABLE})",
+        )
+    if not 0 < parsed.iam_timeout_seconds <= MAX_TIMEOUT_SECONDS or parsed.iam_retries < 0:
+        parser.error(f"--iam-timeout-seconds takes (0, {MAX_TIMEOUT_SECONDS}], --iam-retries at least 0")
+    manifest = load_manifest(json.loads(parsed.iam_manifest.read_text()))
+    check_coverage(manifest, set(ROUTES), set())
+    client = IamClient(
+        parsed.iam_url,
+        Path(parsed.iam_credential).read_text().strip(),
+        timeout=parsed.iam_timeout_seconds,
+        retries=parsed.iam_retries,
+    )
+    settings = Settings(parsed.port, parsed.max_notes, parsed.max_note_bytes, parsed.request_timeout_seconds)
+    return settings, Guard(manifest, client)
+
+
+def serve(arguments: list[str]) -> NotesServer:
+    """The server for ``arguments``, not yet serving."""
+    return NotesServer(*parse_settings(arguments))
 
 
 if __name__ == "__main__":
-    NotesServer(parse_settings(sys.argv[1:])).serve_forever()
+    serve(sys.argv[1:]).serve_forever()

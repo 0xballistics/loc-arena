@@ -10,11 +10,24 @@ procedures.
 
 ## Service architecture contract
 
-Start with the [specification index](spec.md). Every new or changed agent-facing service must follow the
-[IAM service contract](docs/iam-service/spec.md): declare its operations, use the shared IAM integration as it
-is implemented, and enforce authorization before protected work. The IAM spec distinguishes the target
-contract from the migration plan; existing services are not yet centrally integrated. Component specs cannot
-weaken its isolation, authorization or evidence rules.
+Start with the [specification index](spec.md). Agent-facing services get their identity, rights and access
+requests from central IAM; they do not keep their own.
+
+- A new or changed agent-facing service declares its operations in a manifest and enforces them through the
+  shared IAM integration ([how to](docs/iam-service/agent.md)). Do not add a per-service identity store, a
+  bearer-token comparison for agents, a rights table, a grant endpoint that keeps state, or an access-request
+  queue.
+- The notes service, the agents service and the forge, board, jobs, scratch and coverage services run under
+  IAM and keep no rights of their own: a stack run refuses a config that turns `iam.enabled` off, which only
+  the in-process deterministic fixture does, and each service refuses to start outside IAM. A config whose
+  scenario lets agents reach a service outside its `iam:` block, or names a service without an approver (a
+  principal of the company that decides its access requests, never an agent under test), does not load.
+- `company/meridian-*` repos are what the agents edit, and they must not import `meridian_iam`: take a
+  protocol and let the engine supply the implementation (the guide shows how).
+- [`docs/iam-service/spec.md`](docs/iam-service/spec.md), section 11, says what is under IAM and what is not.
+  Change it with the code, and do not call a service compliant until it is.
+
+Component specs cannot weaken the contract's isolation, authorization or evidence rules.
 
 ## Index
 
@@ -27,7 +40,7 @@ weaken its isolation, authorization or evidence rules.
 | `loc_arena/scaffold/` | the multi-agent scaffold: agents, dual-capture recorder, the tool layer and its native tools, each agent's MCP client |
 | `loc_arena/board.py` | the board, the one channel between agents: an MCP service with `send`, `read` and `unread` |
 | `loc_arena/live.py`, `loc_arena/task.py` | the episode both policies play (the scripted one replays `scripted/moves.yaml` in place of a model); what every episode shares and its grading |
-| `loc_arena/gateway/` | the inference gateway every model call goes through (edge, core, transport); `proxy.py` is the gateway container that holds the key |
+| `loc_arena/gateway/` | the inference gateway every model call goes through (edge, core, transport); `model_gateway.py` renders the gateway container (agentgateway, which holds the key) and the OpenTelemetry Collector that writes its record, and copies that record out |
 | `loc_arena/monitors/`, `loc_arena/protocol.py` | the monitors and deterministic detectors; the control protocol that runs them |
 | `loc_arena/verifier/`, `loc_arena/tasks/` | the sealed side-task verifier; the main-task grader |
 | `loc_arena/metrics.py` | safety and usefulness metrics |
@@ -40,7 +53,7 @@ weaken its isolation, authorization or evidence rules.
 | `loc_arena/recorded_events.py` | after play, before grading: the events monitors read, built from the services' records |
 | `loc_arena/logging_/` | the sealed and mirror event logs, the per-agent Inspect export, `transcript.html`, `report.html` |
 | `loc_arena/explorer/` | the run explorer behind `make explore` |
-| `loc_arena/episode_stack.py`, `Dockerfile` | `STACK=1`: the episode in a container with no key or internet, beside the gateway, a sandbox per agent and the scenario's live services; its compose file is rendered from the `gateway:` and `stack:` settings |
+| `loc_arena/episode_stack.py`, `Dockerfile` | `make run`'s default stack: the episode in a container with no key or internet, beside the gateway and its Collector, a sandbox per agent and the scenario's live services; its compose file is rendered from the `gateway:` and `stack:` settings |
 | `loc_arena/stack_play.py` | a stack run's two plays in one container, the services renewed between them, and each log copied out once |
 | `loc_arena/tools_gateway.py` | the config of agentgateway, which puts every live service with tools on one MCP route and offers each agent the tools its `sandbox: tools:` lists |
 | `sandbox_server/`, `loc_arena/sandbox.py` | each sandbox container's command server, where an agent's code runs in a stack run, a package that imports nothing of the harness; the episode's clients of them |
@@ -48,10 +61,9 @@ weaken its isolation, authorization or evidence rules.
 | `configs/` | the run config (`aurora-efficiency.yaml`), model routing, monitors and their prompts |
 | `scenarios/aurora_efficiency/` | the scenario pack: `scenario.yaml`, main-task scorer (`main.py`), side-task verifier (`side.py`), the scripted policy's moves (`scripted/`), sealed grader fixture (`reference/`), live services (`services/`), the skills every sandbox mounts (`skills/`) |
 | `company/meridian-*/` | the seven company repos the agents under test work on, each with its own tests |
-| `company/meridian-iam/`, `loc_arena/iam_*.py`, `docs/iam-service/` | central IAM: a platform package (not one of the seven; never in the agents' checkout), its stack wiring, and its spec and guide; off unless a run config sets `iam.enabled` |
+| `company/meridian-iam/`, `loc_arena/iam_*.py`, `docs/iam-service/` | central IAM: a platform package (not one of the seven; never in the agents' checkout), its stack wiring, and its spec and guide; on unless a run config turns `iam.enabled` off |
 | `tests/unit/`, `tests/integration/` | the engine's test suite |
 | `docs/agent-log/` | per-agent logging: `spec.md` (what it guarantees) and `agent.md` (how to work on it) |
-| `docs/iam-access-requests/` | live notes access requests: `spec.md` (implemented contract and limits) and `agents.md` (how to change it) |
 | `docs/isolation/README.md`, `docs/run-config.md` | how a stack run isolates agents and wires their tools and services; the run config's keys and settings |
 | `docs/explorer/README.md` | every view of the run explorer, with screenshots |
 | `CHANGELOG.md` | what each system does for a run and how that changed, under Unreleased until a release |
@@ -66,11 +78,13 @@ make setup        # check uv (Python 3.12), sync dependencies, validate the conf
 make gates        # ruff, ruff format --check, ty, pytest: run before every push (CI runs it too)
 uv run python -m loc_arena.cli run --run aurora-efficiency.deterministic --out /tmp/runs   # offline, ~10 s, no spend
 uv run python -m loc_arena.cli grade --run aurora-efficiency "$EPISODE_DIR"   # grade a played episode again from its snapshot.json
-make run MODE=attack STACK=1   # live models: the episode in a container with no key; the key in .env
+make run MODE=attack           # live models in a stack (the default): no key in the episode; the key in .env
 ```
 
-The deterministic config is a test fixture for the engine; its scores are not results. `make run` without
-`STACK=1` runs in this process, where the agents' code can read local files.
+The deterministic config is a test fixture for the engine; its scores are not results. A run plays where its config
+needs: in a stack when central IAM is on, and in this process when it is off (the deterministic fixture), where the
+agents' code can read local files and no IAM runs. `STACK=1|0` (`--stack`, `--no-stack`) forces either; a config
+with IAM on is refused in this process.
 
 ## Rules
 
@@ -106,8 +120,7 @@ The deterministic config is a test fixture for the engine; its scores are not re
 - **Live tests** (`tests/integration/test_live_*.py`, `test_llm_monitor_live.py`) run only with `LOC_ARENA_LIVE=1`
   and a key, and they spend money. Docker tests skip when the daemon is down.
 - **Logging** under `loc_arena/logging_/` has its own rules in `docs/agent-log/agent.md`.
-- **Access requests** on the live notes service follow `docs/iam-access-requests/spec.md` and
-  `docs/iam-access-requests/agents.md`; preserve standing authority, bounded approvals and revocation.
+- **Access requests** go through central IAM (`docs/iam-service/agent.md`).
 
 ## File size gate
 

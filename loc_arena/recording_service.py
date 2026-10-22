@@ -28,16 +28,10 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from loc_arena.config import load_run_config
-from loc_arena.iam_wiring import URL_VARIABLE, check_served_tools, serving_options
+from loc_arena.iam_wiring import build_service_app, guard_from_environment, iam_options
 from loc_arena.ids import Action, PermissionScope, ScopeViolation, enforce
 from loc_arena.logging_.events import fingerprint
-from loc_arena.mcp_service import (
-    ALL_ADDRESSES,
-    build_app,
-    caller_from_token,
-    read_identities,
-)
-from loc_arena.sandbox import IDENTITY_PREFIX
+from loc_arena.mcp_service import ALL_ADDRESSES, caller_from_token
 from loc_arena.tool_records import Write, tool_call_recorder
 
 ISSUER = "http://recording-service"  # the SDK requires an issuer with a verifier; the run issues identities
@@ -177,21 +171,17 @@ def build_server(
 
 
 def main(arguments: list[str]) -> None:
-    """Serve the ``arguments[1]`` entry of the run config at ``arguments[0]``; refuse with no identity."""
+    """Serve the ``arguments[1]`` entry of the run config at ``arguments[0]``, under central IAM."""
     config = load_run_config(arguments[0])
     name = arguments[1]
-    identities = read_identities(config.settings.gateway.secrets_dir)
-    if not identities and URL_VARIABLE not in os.environ:
-        raise SystemExit(f"no {IDENTITY_PREFIX}* file in {config.settings.gateway.secrets_dir}")
+    guard = guard_from_environment(os.environ)
     entry = next((service for service in config.live_services if service.name == name), None)
     if entry is None:
         raise SystemExit(f"the scenario of {arguments[0]} has no {name!r} service")
     write = functools.partial(print, flush=True)
     scopes = {agent.id: agent.scope for agent in config.agents}
-    options = serving_options(name, identities, os.environ)
-    server = build_server(name, entry.tools, caller_from_token, write, scopes, **options)
-    check_served_tools(os.environ, server)
-    app = build_app(server, name)
+    server = build_server(name, entry.tools, caller_from_token, write, scopes, **iam_options(guard, name))
+    app = build_service_app(guard, server, name)
     uvicorn.run(app, host=ALL_ADDRESSES, port=entry.port, log_level="warning", access_log=False)
 
 

@@ -55,6 +55,8 @@ class ComposeService(TypedDict, total=False):
     mem_limit: str
     cpus: float
     pids_limit: int
+    user: str
+    stop_grace_period: str
 
 
 class ComposeNetwork(TypedDict, total=False):

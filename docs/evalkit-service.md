@@ -7,9 +7,10 @@ time. Agents reach it through its MCP tools and its HTTP API. The design is
 [issue #141](https://github.com/SreeSharvesh/loc-arena/issues/141).
 
 Its code is company code in `company/meridian-evalkit/meridian_evalkit/service/`, in every agent's checkout:
-`registry.py` holds the evals, runs, results and leaderboards in memory and what they start with, `access.py`
-who may call, and `service.py` the HTTP API and the MCP tools. A stack run serves the copy from the start of the
-run, as the module `loc_arena.evalkit_service` of the engine image, at `http://evalkit:8000`; agents' edits do
+`registry.py` holds the evals, runs, results and leaderboards in memory and what they start with,
+`authority.py` what the service needs of the central authority that decides its calls, and `service.py` the
+HTTP API and the MCP tools. A stack run serves the copy from the start of the run, as the module
+`loc_arena.evalkit_service` of the engine image, at `http://evalkit:8000`, under central IAM; agents' edits do
 not go live. An in-process run does not serve it, so its tools are offered in a stack run alone.
 
 ## What it holds
@@ -56,10 +57,10 @@ HTTP an unknown identity is a 401, a missing right a 403, an unknown eval or run
 or an unknown model or metric a 422; over MCP a refusal is a tool error. `GET /`, `/health` and `/openapi.json`
 need no identity.
 
-The default run config gives every agent `read`; `agent-main`, `distill-agent` and `eval-agent` `run`;
-`eval-agent` `curate`; and `agent-main` `publish`. Each agent's tools there are the ones its rights allow. In a
-run without central IAM, a tool an agent's `sandbox: tools:` lists grants it the right the tool's route needs,
-as the IAM seed reads it, so a tool and its route agree in every run.
+Central IAM decides every call: the default run config gives every agent `read`; `agent-main`, `distill-agent`
+and `eval-agent` `run`; `eval-agent` `curate`; and `agent-main` `publish`, as baseline grants, and each
+agent's tools there are the ones its rights allow. `evalkit-owner`, the service's approver, decides an agent's
+request for more. The service keeps no identity and no rights of its own.
 
 ## Records
 
@@ -82,7 +83,9 @@ seed, and the honest twin's service is recreated empty before it plays.
 Its manifest is `meridian_evalkit/service/iam-manifest.json`: each operation is bound to its route and its
 tool, and the two a job calls are `authenticated`, so any valid credential reaches them and the registry decides
 by the run's binding. The HTTP API takes the route dependency and the MCP server the middleware through which
-the engine puts it under central IAM; the scenario's `iam:` block names it with its manifest.
+the engine puts it under central IAM, and `iam_wiring.build_service_app` serves both on one port, the API's
+startup check covering the manifest's routes and the server's its tools. The scenario's `iam:` block names it
+with its manifest and its approver, `evalkit-owner`.
 
 ## Not done
 

@@ -14,7 +14,7 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
 | `company/meridian-iam/meridian_iam/integration/` | `Guard` (one decision per call), `asgi.py` (FastAPI dependency), `mcp.py` (verifier and tool middleware) |
 | `loc_arena/iam_service.py`, `iam_bootstrap.py`, `iam_seed.py`, `iam_wiring.py` | the launcher, the per-play seed document, the scenario's `iam:` block, how a service joins by environment |
 | `loc_arena/agents_iam.py` | the engine's implementation of the agents service's `CentralAuthority` |
-| `scenarios/aurora_efficiency/services/notes/notes_iam.py` | the notes service under IAM |
+| `scenarios/aurora_efficiency/services/notes/notes_service.py` | the notes service, under IAM |
 
 ## Rules that are easy to break
 
@@ -23,7 +23,6 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
   engine passes an implementation in instead. A test in the agents' own suite would fail to import it otherwise.
 - **Engine modules the episode imports must not import `meridian_iam`.** The episode container has no company
   packages on its path. Only `loc_arena/iam_wiring.py` reaches them, and only when a service starts.
-- **The legacy path stays byte-identical** when `iam.enabled` is off (`tests/unit/test_episode_stack.py`).
 - **Authority is per resource.** A member's standing authority maps resource to permissions; owning a team that
   owns two resources gives no authority over one by virtue of the other.
 - **A resource service holds a resource-bound credential.** An agent's credential on a managed service has the
@@ -33,11 +32,15 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
   `launch` and an `allow_delegation` for the issuing service. Never widen a delegation for convenience: a
   compromised issuer can mint everything listed for any caller who holds it.
 - **Fail closed.** An unavailable or inconsistent IAM is a 503 that runs nothing, never a missing grant.
+- **A denial records nothing granted.** `decide` stores no permissions or deadline for a denial, and every
+  listing reads an empty decision as nothing approved; that holds only while an approval is never empty.
 
 ## Building a service on IAM
 
-Every agent-facing service must be guarded. Today that holds only in IAM mode (`iam.enabled` in the run
-config); every other run keeps the services' legacy local rights. A service that starts work for its caller (a
+Every agent-facing service must be guarded. `iam.enabled` is on unless a config turns it off, a config with it on
+plays in a stack, a stack run refuses a config with it off, and a config whose scenario lets agents reach a
+service outside its `iam:` block does not load. No service keeps rights of its own, and each refuses to start
+outside IAM. A service that starts work for its caller (a
 job, an eval run, an agent run) also issues that work an identity of its own. A service calling another
 service is not specified yet.
 
@@ -54,36 +57,44 @@ service is not specified yet.
    and each operation is exactly one of: a `permission`, `public: true`, or `authenticated: true` (any valid
    credential, no permission). Bind every MCP tool to a permission: the seed reads each tool's permission. A
    covert or unrequestable capability is `requestable: false`.
-2. **Join.** For a service named in the scenario's `iam:` block, in a run config with `iam: {enabled: true}`,
-   the renderer sets `LOC_ARENA_IAM_URL`, `LOC_ARENA_IAM_MANIFEST` and `LOC_ARENA_IAM_CREDENTIAL`. The last is
-   the service's own credential: it carries the `iam` audience that `authorize` and `issue_workload` need, and
+2. **Join.** For a service named in the scenario's `iam:` block, in a run with IAM on (the default),
+   the renderer sets `LOC_ARENA_IAM_URL`, `LOC_ARENA_IAM_MANIFEST`, `LOC_ARENA_IAM_CREDENTIAL`,
+   `LOC_ARENA_IAM_TIMEOUT_SECONDS` and `LOC_ARENA_IAM_RETRIES` (`iam_wiring.service_environment`); a service
+   missing one, or with a timeout or retries outside the run config's bounds, does not start. The credential is
+   the service's own: it carries the `iam` audience that `authorize` and `issue_workload` need, and
    its principal is bound to the service's resource, so it decides for that resource only. An engine-module
-   service builds its `Guard` with `iam_wiring.guard_from_environment`; a service built from a scenario
-   directory has no `loc_arena` and needs a `Dockerfile.iam` that copies in `meridian_iam`, as notes does.
+   service builds its `Guard` once with `iam_wiring.guard_from_environment` and hands it to both `iam_options`
+   and `build_service_app`; a service built from a scenario directory has no `loc_arena`, so its `Dockerfile`
+   copies in `meridian_iam` from the `meridian-iam` build context the stack passes, as notes' does.
 3. **Check at startup.** FastAPI: `integration.asgi.verify_app(guard, app)`, which also refuses a route
-   without the guard's dependency. MCP: `iam_wiring.check_served_tools`. Stdlib: `Guard.verify_routes(routes)`.
+   without the guard's dependency. MCP: `iam_wiring.build_service_app`. Stdlib: `Guard.verify_routes(routes)`.
    A route you forgot, or one you removed, stops the service. A service that serves both routes and tools
-   (the eval service) runs both checks, each covering its own side of the manifest.
+   (the eval service) hands `build_service_app` its API too: the API's check covers the manifest's routes and
+   the server's its tools.
 4. **Enforce before work.** FastAPI: `integration.asgi.dependency(guard)` on every route; it answers each
-   refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: `iam_wiring.serving_options`, whose
-   middleware turns a refusal or an IAM outage into a tool-error result, with no tool run. Stdlib:
+   refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: IAM verifies the credential of
+   every request, so an outage is a 503 with a JSON-RPC error saying so (`build_service_app`), and a refusal of
+   the tool is a tool-error result (`iam_options`); no tool runs either way. Stdlib:
    `Guard.check_http` raises, so the server maps `Unauthenticated` to 401, `AccessDenied` to 403 with its
    `guidance`, and `Unavailable` to 503 with nothing run. Handlers take the principal from the decision, never
    from the body, and record its `decision_id` beside the outcome.
-5. **Seed.** Name it in the scenario's `iam:` block with its manifest and owner policy (`owner_team`,
-   `approver_role`, `max_seconds`, `allow_ongoing`). Each agent's run-config rights on it (other than `grant`)
-   and the permissions of its tools become baseline grants, so the service's `rights:` must use the manifest's
-   permission names exactly; nothing checks a mismatch, which grants nothing usable. An agent whose rights
-   include `grant` becomes an approver for the permissions it holds there.
+5. **Seed.** Name it in the scenario's `iam:` block with its manifest, owner policy (`owner_team`,
+   `approver_role`, `max_seconds`, `allow_ongoing`) and approver: `approver: {principal: <service>-owner,
+   approves: [...]}`, a principal of the company that IAM makes a member of the owner team. It is required,
+   never an agent under test, and approves only permissions the manifest makes requestable; the config does not
+   load otherwise. Each agent's run-config rights on the service and the permissions of its tools become
+   baseline grants, so the service's `rights:` must use the manifest's permission names exactly; nothing checks
+   a mismatch, which grants nothing usable.
 6. **Let agents ask.** A denied caller's refusal (a 403 body over HTTP, a tool error over MCP) names the
    resource, the permission and `POST /requests` on IAM when the operation is requestable. Filing answers with
    the `approvers` who can decide it now and a `next` step: ask one of them, who decides with
-   `POST /requests/<id>/decision`, and the caller retries and is checked again. If `approvers` is empty,
-   nobody can approve the request now, and `next` says so. A request can be decided only if
-   some agent holds `grant` on the service; if none does, make the operation `requestable: false`. On an MCP
+   `POST /requests/<id>/decision`, and the caller retries and is checked again. The service's approver
+   (`loc_arena.iam_approvers`, running in the IAM service) reads its inbox every `iam.approver_poll_seconds`:
+   it approves a request when it approves every permission asked, and denies the rest, saying what it
+   approves; the requester sees the outcome in its inbox. On an MCP
    tool service an approval makes nothing new callable, because the tools gateway offers each agent exactly its
    `sandbox: tools:`, each already granted. Do not add a local queue.
-7. **Test** the way `tests/unit/test_notes_iam.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM
+7. **Test** the way `tests/unit/test_notes_service.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM
    server, real SQLite, and the cases in spec section 10. Break each new protection once and watch its test fail.
 
 ### A service that launches work
@@ -131,7 +142,7 @@ service is not specified yet.
 7. **Test** the refusals `company/meridian-iam/tests/test_workloads.py` checks on the core (a caller without
    the launch permission, a grant outside the delegation, a grant the caller lacks, a revoked or disabled
    caller, a disabled issuer, a retry under the same key with different content) through a real IAM server, as
-   `tests/unit/test_notes_iam.py` does for guarding.
+   `tests/unit/test_notes_service.py` does for guarding.
 
 ## Checks
 

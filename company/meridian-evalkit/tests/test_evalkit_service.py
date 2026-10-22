@@ -1,14 +1,19 @@
-"""The eval service at its HTTP interface and its MCP tools: its rules, a job's binding, seed and audit."""
+"""The eval service at its HTTP interface and its MCP tools: its rules, a job's binding, seed and audit.
+
+A stand-in for the central authority decides each call by the service's own manifest, as a deployment's does;
+the engine tests the service under the real one.
+"""
 
 from __future__ import annotations
 
+import hmac
 import json
 import socket
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -18,16 +23,12 @@ from typing import Any
 import anyio
 import pytest
 import uvicorn
+from fastapi import FastAPI, HTTPException, Request
 from mcp import Client
 from mcp.types import CallToolResult, TextContent
 
-from meridian_evalkit.service import (
-    Callers,
-    EvalkitRegistry,
-    build_evalkit_server,
-    create_evalkit_api,
-    load_seed,
-)
+from meridian_evalkit import service as service_package
+from meridian_evalkit.service import EvalkitRegistry, build_evalkit_server, create_evalkit_api, load_seed
 
 PRIYA, TOMAS, READER, JOB = "priya", "tomas", "reader", "job-7"
 IDENTITIES = {
@@ -36,11 +37,11 @@ IDENTITIES = {
     READER: b"reader-identity",
     JOB: b"job-7-identity",
 }
-RIGHTS = {PRIYA: ["read", "run", "curate", "publish"], TOMAS: ["read", "run"], READER: ["read"], JOB: []}
+RIGHTS = {PRIYA: ("read", "run", "curate", "publish"), TOMAS: ("read", "run"), READER: ("read",), JOB: ()}
 GUESSED_IDENTITY = "guessed-identity"
 STARTUP_SECONDS = 10.0
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
-MANIFEST = Path(__file__).parents[1] / "meridian_evalkit" / "service" / "iam-manifest.json"
+MANIFEST = json.loads((Path(service_package.__file__).parent / "iam-manifest.json").read_text())
 ARITHMETIC_RUN = {"eval_id": "arithmetic", "model_id": "aurora-7b-v3"}
 RESULTS = {"metrics": {"accuracy": 0.95, "brier": 0.05}, "item_ids": ["ar-001", "ar-002"]}
 SPELLING_ITEM = {
@@ -53,6 +54,36 @@ SPELLING = {"eval_id": "spelling", "items": [SPELLING_ITEM], "metrics": ["accura
 # What the seed holds, read off seed.yaml: its last run, its results versions, and its boards' order.
 LAST_SEEDED_RUN, SEEDED_VERSIONS = "run-0438", 5
 SEEDED_BOARDS = {"arithmetic": ["run-0423", "run-0402"], "general-knowledge": ["run-0417", "run-0391"]}
+
+
+class StandInAuthority:
+    """Each caller's identity and rights, checked against the service's manifest before any handler runs."""
+
+    def __init__(self, identities: dict[str, bytes], rights: dict[str, tuple[str, ...]]) -> None:
+        """Admit ``identities``, each holding its ``rights``."""
+        self._identities = identities
+        self._rights = {caller: set(held) for caller, held in rights.items()}
+        self.dependency: Callable[[Request], Awaitable[None]] = self._decide  # the protocol's attribute
+
+    async def _decide(self, request: Request) -> None:
+        """Name the operation and the caller, as a central authority does, and refuse what is not allowed."""
+        operation = MANIFEST["http"][f"{request.method} {request.scope['route'].path}"]
+        request.state.iam_operation = operation
+        declared = MANIFEST["operations"][operation]
+        if declared.get("public"):
+            return
+        sent = request.headers.get("Authorization", "").removeprefix("Bearer ").encode()
+        known = self._identities.items()
+        caller = next((name for name, identity in known if hmac.compare_digest(sent, identity)), None)
+        if caller is None:
+            raise HTTPException(HTTPStatus.UNAUTHORIZED, "send a known credential")
+        request.state.iam_principal = caller
+        permission = declared.get("permission")
+        if permission is not None and permission not in self._rights.get(caller, ()):
+            raise HTTPException(HTTPStatus.FORBIDDEN, f"needs {permission!r}")
+
+    def verify_routes(self, app: FastAPI) -> None:
+        """The deployment's authority checks the routes against the manifest; the engine tests that."""
 
 
 @dataclass
@@ -101,7 +132,7 @@ def registry() -> EvalkitRegistry:
 @pytest.fixture
 def service(registry: EvalkitRegistry) -> Iterator[RunningService]:
     audit_lines: list[str] = []
-    app = create_evalkit_api(registry, audit_lines.append, callers=Callers(IDENTITIES, RIGHTS))
+    app = create_evalkit_api(registry, audit_lines.append, StandInAuthority(IDENTITIES, RIGHTS))
     server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
     listener = socket.create_server(("127.0.0.1", 0))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
@@ -130,7 +161,7 @@ def test_a_request_without_a_known_identity_is_refused(service: RunningService, 
 
 
 @pytest.mark.parametrize(
-    ("caller", "method", "path", "body", "right"),
+    ("caller", "method", "path", "body", "permission"),
     [
         (READER, "POST", "/runs", ARITHMETIC_RUN, "run"),
         (TOMAS, "POST", "/evals", SPELLING, "curate"),
@@ -138,17 +169,17 @@ def test_a_request_without_a_known_identity_is_refused(service: RunningService, 
         (TOMAS, "POST", "/runs/run-0438/publish", None, "publish"),
     ],
 )
-def test_a_caller_without_the_right_is_refused_by_name(  # noqa: PLR0913 - one refusal per row
+def test_each_route_is_bound_to_the_permission_the_manifest_names(  # noqa: PLR0913 - one refusal per row
     service: RunningService,
     caller: str,
     method: str,
     path: str,
     body: object,
-    right: str,
+    permission: str,
 ) -> None:
     status, reply = service.call_as(caller, method, path, body)
 
-    assert (status, reply["detail"]) == (HTTPStatus.FORBIDDEN, f"needs the {right!r} right")
+    assert (status, reply["detail"]) == (HTTPStatus.FORBIDDEN, f"needs {permission!r}")
 
 
 def test_the_service_starts_with_the_seeds_evals_runs_and_leaderboards(service: RunningService) -> None:
@@ -309,7 +340,7 @@ def test_registering_an_eval_needs_metrics_the_harness_computes_and_a_new_id(ser
 
 
 def test_each_request_is_an_audit_line_naming_its_caller_and_operation(service: RunningService) -> None:
-    service.call_as(READER, "POST", "/runs", ARITHMETIC_RUN)  # refused: no right
+    service.call_as(READER, "POST", "/runs", ARITHMETIC_RUN)  # refused: no permission
     service.call_as(PRIYA, "POST", "/runs", ARITHMETIC_RUN)
     service.call("GET", "/evals", GUESSED_IDENTITY)
 
@@ -332,8 +363,8 @@ def call_tool(
     tool: str,
     arguments: dict[str, Any],
 ) -> CallToolResult:
-    """The result of ``caller`` calling ``tool`` in memory, with the rights ``RIGHTS`` gives."""
-    server = build_evalkit_server(registry, lambda: caller, Callers(IDENTITIES, RIGHTS).holds)
+    """The result of ``caller`` calling ``tool`` in memory; a deployment's middleware decides calls there."""
+    server = build_evalkit_server(registry, lambda: caller)
 
     async def call() -> CallToolResult:
         async with Client(server) as client:
@@ -353,12 +384,11 @@ def test_a_tool_runs_its_operation_as_its_caller(registry: EvalkitRegistry) -> N
 @pytest.mark.parametrize(
     ("caller", "tool", "arguments", "why"),
     [
-        (READER, "start_run", ARITHMETIC_RUN, "needs the 'run' right"),
         (None, "list_evals", {}, "no identity"),
         (PRIYA, "get_run", {"run_id": "run-9999"}, "no run 'run-9999'"),
         (PRIYA, "start_run", {"eval_id": "arithmetic", "model_id": "aurora-70b"}, "no model 'aurora-70b'"),
     ],
-    ids=["a missing right", "no identity", "an unknown run", "an unknown model"],
+    ids=["no identity", "an unknown run", "an unknown model"],
 )
 def test_a_refused_tool_call_is_a_tool_error_naming_why(
     registry: EvalkitRegistry,
@@ -380,4 +410,4 @@ def test_the_tools_are_the_manifests_tools_by_name(registry: EvalkitRegistry) ->
 
     tools = {tool.name for tool in anyio.run(server.list_tools)}
 
-    assert tools == set(json.loads(MANIFEST.read_text())["tools"])
+    assert tools == set(MANIFEST["tools"])

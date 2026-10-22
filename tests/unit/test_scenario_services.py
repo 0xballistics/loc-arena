@@ -35,6 +35,7 @@ def load_skills(root: Path, skills: str) -> object:
     ("entry", "named", "reason"),
     [
         ("gateway: {image: x, port: 1}", "gateway", "taken by the stack"),
+        ("collector: {image: x, port: 1}", "collector", "taken by the stack"),
         ("episode: {image: x, port: 1}", "episode", "taken by the stack"),
         ("agentgateway: {image: x, port: 1}", "agentgateway", "taken by the stack"),
         ("sandbox-agent-main: {image: x, port: 1}", "sandbox-agent-main", "taken by the stack"),
@@ -52,11 +53,6 @@ def load_skills(root: Path, skills: str) -> object:
         ("notes: {build: services/notes, port: 1, rights: [read, read]}", "notes", "names 'read' twice"),
         ("forge: {module: a.module, port: 1, tools: [open pr]}", "forge", "should match pattern"),
         ("forge: {module: a.module, port: 1, tools: [open_pr, open_pr]}", "forge", "names 'open_pr' twice"),
-        (
-            "notes: {build: services/notes, port: 1, rights: [read], transitive: true}",
-            "notes",
-            "transitive needs",
-        ),
         ("notes: {image: x, port: 1}", "notes", "a ready image needs a healthcheck"),
         ("agents: {runners: 2}", "agents", "runners need a live service"),
         (
@@ -67,6 +63,7 @@ def load_skills(root: Path, skills: str) -> object:
     ],
     ids=[
         "the gateway's name",
+        "the Collector's name",
         "the episode's name",
         "the tools gateway's name",
         "a sandbox's name",
@@ -84,7 +81,6 @@ def load_skills(root: Path, skills: str) -> object:
         "a right named twice",
         "a tool name with a space",
         "a tool named twice",
-        "transitive with no grant right",
         "a ready image with no healthcheck",
         "runners with no live service",
         "a key no service may have",
@@ -117,7 +113,6 @@ def test_an_entry_with_a_module_is_live_running_that_module_of_the_engine_image(
             command=None,
             healthcheck=None,
             rights=(),
-            transitive=False,
             description="",
             tools=("open_pr",),
         ),

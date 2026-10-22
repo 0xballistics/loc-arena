@@ -33,7 +33,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    StrictBool,
     StrictInt,
     StrictStr,
     StringConstraints,
@@ -48,13 +47,12 @@ SCENARIOS_ROOT = Path(__file__).resolve().parent
 # A host name label (RFC 1123) in lower case alone: what names a compose service and its host on agent-net.
 DNS_LABEL: Final = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 # The stack's own services (loc_arena.episode_stack): a live service may not take their names.
-STACK_SERVICES: Final = frozenset({"gateway", "episode", "agentgateway"})
+STACK_SERVICES: Final = frozenset({"gateway", "collector", "episode", "agentgateway"})
 SANDBOX_PREFIX: Final = "sandbox-"
 RUNNER_PREFIX: Final = "runner-"  # runner-1 to runner-<n>: the runners of the one service with runners
 # Never in a service's build context: the sealed answer and the scripted moves, which agents must not reach.
 SEALED_DIRECTORIES: Final = ("reference", "scripted")
 PACK_DIRECTORY: Final = "pack_directory"  # the validation context key: the pack a build path resolves in
-GRANT: Final = "grant"  # the right to give or take rights; itself grantable only on a transitive service
 Right = Annotated[str, StringConstraints(strict=True, pattern=r"^[a-z0-9-]+$")]
 # The characters and length the MCP specification allows in a tool name.
 Tool = Annotated[str, StringConstraints(strict=True, pattern=r"^[A-Za-z0-9_.-]{1,128}$")]
@@ -135,10 +133,6 @@ class ScenarioService(BaseModel):
         "tools gateway, and each agent gets its own identity on it, which only the service and the tools "
         "gateway hold.",
     )
-    transitive: StrictBool = Field(
-        default=False,
-        description=f"Whether {GRANT!r} itself may be granted; only rights other than it when false.",
-    )
     description: StrictStr = Field(default="", description="What the agents of a stack run are told it is.")
     runners: StrictInt = Field(
         default=0,
@@ -167,7 +161,7 @@ class ScenarioService(BaseModel):
 
         That is more than one of build, image and module, a live entry with no port, a ready image with no
         healthcheck (the default probe runs python, which a ready image need not hold; a build or the engine
-        image is ours to give it), or transitivity with no right to grant.
+        image is ours to give it), or runners with nothing to hand them work.
         """
         sources = [source for source in (self.build, self.image, self.module) if source is not None]
         if len(sources) > 1:
@@ -176,8 +170,6 @@ class ScenarioService(BaseModel):
             raise ValueError("a live service (build, image or module) needs a port")
         if self.image is not None and self.healthcheck is None:
             raise ValueError("a ready image needs a healthcheck: the default probe runs python")
-        if self.transitive and GRANT not in self.rights:
-            raise ValueError(f"transitive needs {GRANT!r} in rights: there is nothing to grant on")
         if self.runners and not sources:
             raise ValueError("runners need a live service (build, image or module) to hand them work")
         return self
@@ -199,8 +191,7 @@ class LiveService:
     port: int
     command: tuple[str, ...] | None
     healthcheck: tuple[str, ...] | None
-    rights: tuple[str, ...]  # the vocabulary it enforces; none: open, and no identity is issued
-    transitive: bool  # whether GRANT itself may be granted
+    rights: tuple[str, ...]  # the permissions agents hold on it, through IAM; none: no identity is issued
     description: str
     tools: tuple[str, ...] = ()  # the MCP tools it serves, reached through the tools gateway alone
     runners: int = 0  # how many runners it hands work to, runner-1 to runner-<n>
@@ -281,7 +272,6 @@ def _parse_live_services(directory: Path, declared: object) -> tuple[LiveService
                     command=service.command,
                     healthcheck=service.healthcheck,
                     rights=service.rights,
-                    transitive=service.transitive,
                     description=service.description,
                     tools=service.tools,
                     runners=service.runners,

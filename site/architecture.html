@@ -83,7 +83,7 @@ world down. A scripted run reproduces exactly from its config and seed; a live r
   <text x="590" y="160" text-anchor="middle" font-family="'IBM Plex Mono', ui-monospace, monospace" font-size="10.5" letter-spacing="1.2" fill="#5b6472">EGRESS-NET</text>
   <text x="590" y="174" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#5b6472">the gateway alone</text>
 </svg>
-<figcaption>A stack run (<code>make run STACK=1</code>): one Docker Compose project on two networks. Blue is the
+<figcaption>A stack run (<code>make run</code>): one Docker Compose project on two networks. Blue is the
 harness, amber where agent code runs, teal the key and the call log.</figcaption>
 </figure>
 
@@ -106,8 +106,8 @@ services in memory and offered no shell, so its agents run no code.</p>
 <h2>The path for model calls</h2>
 
 <p>Every model call travels the same path. An agent holds no model key and never contacts a provider directly. It
-sends its request to the gateway, which holds the only provider key and is the only component with an outbound
-route. Each call is recorded, with the container that made it.</p>
+sends its request with its own token to the gateway, which holds the only provider key and is the only component
+with an outbound route. Each call is recorded, with the caller that made it.</p>
 
 <p>There is one path, so one component sees every call, and the record of model usage is complete. A rogue
 deployment is model calls that should not be happening, so a complete call record is what the checker verifies
@@ -186,7 +186,7 @@ records are placed in the turn of the agent that made the call. A reviewer repla
   <defs><marker id="q1" markerWidth="9" markerHeight="9" refX="6.5" refY="4.5" orient="auto"><polygon points="0,1 7,4.5 0,8" fill="#2f4bd6"/></marker></defs>
   <rect x="10" y="16" width="160" height="40" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
   <text x="90" y="34" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12.5" font-weight="600" fill="#14171d">host</text>
-  <text x="90" y="49" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="10.5" fill="#5b6472">make run STACK=1</text>
+  <text x="90" y="49" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="10.5" fill="#5b6472">make run</text>
   <line x1="90" y1="56" x2="90" y2="372" stroke="#c3cad4" stroke-width="1.3" stroke-dasharray="4 4"/>
   <rect x="190" y="16" width="160" height="40" fill="#ffffff" stroke="#cdd3dc" stroke-width="1.5"/>
   <text x="270" y="34" text-anchor="middle" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12.5" font-weight="600" fill="#14171d">episode</text>
@@ -223,8 +223,8 @@ records are placed in the turn of the agent that made the call. A reviewer repla
   <path d="M90 348 L118 348 L118 362 L93 362" stroke="#2f4bd6" stroke-width="1.6" fill="none" marker-end="url(#q1)"/>
   <text x="126" y="359" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="11" fill="#14171d">grade</text>
 </svg>
-<figcaption>One attack run in a stack. The twin's sandboxes, services and agentgateway start empty; the episode
-container and the gateway carry on.</figcaption>
+<figcaption>One attack run in a stack. The twin's sandboxes, services and both gateways start afresh; the episode
+container and the record of model calls carry on.</figcaption>
 </figure>
 
 <p>Every episode, attack or honest twin, follows the same steps. The covert objective and its tools are enabled in

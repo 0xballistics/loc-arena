@@ -1,9 +1,9 @@
 """The agents service as a stack run's live service: Meridian's agent registry, which is company code.
 
 A stack run starts it as the scenario's ``agents`` entry: ``python -m loc_arena.agents_service <run config>
-<entry name>``. It serves ``meridian_controlplane.agents`` with every agent's identity mounted in the secrets
-directory and the starting rights the run config gives each agent, runs executions on the runners the entry
-declares (``loc_arena.runner_pool``), and writes the audit record to stdout.
+<entry name>``. It serves ``meridian_controlplane.agents`` under central IAM, which decides every call, runs
+executions on the runners the entry declares (``loc_arena.runner_pool``), and writes the audit record to
+stdout.
 """
 
 from __future__ import annotations
@@ -20,11 +20,10 @@ from sandbox_server.wire import CommandRequest
 
 from loc_arena.config import RunConfig, load_run_config
 from loc_arena.iam_wiring import guard_from_environment, load_iam_authority
-from loc_arena.mcp_service import ALL_ADDRESSES, read_identities
+from loc_arena.mcp_service import ALL_ADDRESSES
 from loc_arena.runner_pool import RUNNER_WORKSPACE, list_runner_services, runner_token_secret
 from loc_arena.sandbox import SandboxClient, SandboxError
 from meridian_controlplane.agents import (
-    AccessControl,
     AgentRegistry,
     Executions,
     RunnerResult,
@@ -83,7 +82,7 @@ def write_audit_line(line: str) -> None:
 
 
 def main(arguments: list[str]) -> None:
-    """Serve entry ``arguments[1]`` of the run config at ``arguments[0]``, once an identity is mounted."""
+    """Serve entry ``arguments[1]`` of the run config at ``arguments[0]``, under central IAM."""
     run_config = load_run_config(arguments[0])
     service_entry = next(service for service in run_config.live_services if service.name == arguments[1])
     registry = AgentRegistry(load_seeded_agents())
@@ -93,29 +92,8 @@ def main(arguments: list[str]) -> None:
         run_config.settings.stack.runner_timeout_seconds,
         write_audit_line,
     )
-    guard = guard_from_environment(os.environ)
-    if guard is not None:  # central IAM decides every call: no identity or rights table is kept here
-        app = create_agents_service_app(
-            registry,
-            None,
-            write_audit_line,
-            authority=load_iam_authority(guard),
-            executions=executions,
-        )
-        uvicorn.run(app, host=ALL_ADDRESSES, port=service_entry.port, log_level="warning", access_log=False)
-        return
-    identities_by_agent = read_identities(run_config.settings.gateway.secrets_dir)
-    if not identities_by_agent:
-        raise SystemExit(f"no identity in {run_config.settings.gateway.secrets_dir}")
-    access_control = AccessControl(
-        identities_by_caller=identities_by_agent,
-        declared_rights=service_entry.rights,
-        starting_rights_by_caller={
-            agent.id: agent.sandbox.rights.get(service_entry.name, ()) for agent in run_config.agents
-        },
-        grant_right_is_grantable=service_entry.transitive,
-    )
-    app = create_agents_service_app(registry, access_control, write_audit_line, executions=executions)
+    guard = guard_from_environment(os.environ)  # IAM decides every call: no identity or rights table here
+    app = create_agents_service_app(registry, write_audit_line, load_iam_authority(guard), executions)
     uvicorn.run(app, host=ALL_ADDRESSES, port=service_entry.port, log_level="warning", access_log=False)
 
 

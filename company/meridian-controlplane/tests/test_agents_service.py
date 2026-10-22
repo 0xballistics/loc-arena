@@ -1,30 +1,35 @@
 """The agents service at its HTTP interface: who may call it, its registry and executions, its audit record.
 
-Executions run on a runner that holds each command until the test releases it or a reset ends it, so a test
-decides when a run ends; a stack run's real runners are tested with the engine.
+A stand-in for the central authority decides each call by the service's own manifest, as a deployment's does;
+the engine tests the service under the real one. Executions run on a runner that holds each command until the
+test releases it or a reset ends it, so a test decides when a run ends; a stack run's real runners are tested
+with the engine.
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 import socket
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 
 import pytest
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 
+from meridian_controlplane import agents
 from meridian_controlplane.agents import (
-    AccessControl,
     AgentRegistry,
     Executions,
+    RightsChange,
     RunnerResult,
     create_agents_service_app,
     load_seeded_agents,
@@ -33,8 +38,8 @@ from meridian_controlplane.agents import (
 LEAD, READER, NOBODY = "lead", "reader", "nobody"
 IDENTITIES = {LEAD: b"lead-identity", READER: b"reader-identity", NOBODY: b"nobody-identity"}
 GUESSED_IDENTITY = b"guessed-identity"
-DECLARED_RIGHTS = ("read", "register", "run", "grant")
-STARTING_RIGHTS = {LEAD: DECLARED_RIGHTS, READER: ("read",)}
+STARTING_RIGHTS = {LEAD: ("read", "register", "run"), READER: ("read",)}
+MANIFEST = json.loads((Path(agents.__file__).parent / "iam-manifest.json").read_text())
 TRIAGER = {"name": "triager", "model": "provider/model", "system_prompt": "Triage the new tickets."}
 TRIAGER_UPDATE = {"model": "provider/model", "system_prompt": "Triage and label the new tickets."}
 SEEDED_AGENT_NAMES = ["eval-summarizer", "ticket-triager"]  # as listed in seed.yaml
@@ -55,7 +60,7 @@ class RunningService:
         headers = {"content-type": "application/json"}
         if identity is not None:
             headers["authorization"] = f"Bearer {identity.decode()}"
-        data = None if body is None else json.dumps(body).encode()
+        data = None if body is None else body if isinstance(body, bytes) else json.dumps(body).encode()
         request = urllib.request.Request(f"{self.url}{path}", data, headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=STARTUP_SECONDS) as response:
@@ -68,6 +73,45 @@ class RunningService:
     def call_as(self, caller: str, method: str, path: str, body: object = None) -> tuple[int, Any]:
         """``call`` with the identity of ``caller``."""
         return self.call(method, path, IDENTITIES[caller], body)
+
+
+class StandInAuthority:
+    """Each caller's identity and rights, checked against the service's manifest before any handler runs."""
+
+    def __init__(self, identities: dict[str, bytes], rights: dict[str, tuple[str, ...]]) -> None:
+        """Admit ``identities``, each holding its ``rights``."""
+        self._identities = identities
+        self._rights = {caller: set(held) for caller, held in rights.items()}
+        self.dependency: Callable[[Request], Awaitable[None]] = self._decide  # the protocol's attribute
+
+    async def _decide(self, request: Request) -> None:
+        """Name the operation and the caller, as a central authority does, and refuse what is not allowed."""
+        operation = MANIFEST["http"][f"{request.method} {request.scope['route'].path}"]
+        request.state.iam_operation = operation
+        permission = MANIFEST["operations"][operation].get("permission")
+        if MANIFEST["operations"][operation].get("public"):
+            return
+        sent = request.headers.get("Authorization", "").removeprefix("Bearer ").encode()
+        known = self._identities.items()
+        caller = next((name for name, identity in known if hmac.compare_digest(sent, identity)), None)
+        if caller is None:
+            raise HTTPException(HTTPStatus.UNAUTHORIZED, "send a known credential")
+        request.state.iam_principal = caller
+        if permission is not None and permission not in self._rights.get(caller, ()):
+            raise HTTPException(HTTPStatus.FORBIDDEN, f"needs {permission!r}")
+
+    def verify_routes(self, app: FastAPI) -> None:
+        """The deployment's authority checks the routes against the manifest; the engine tests that."""
+
+    async def list_rights(self, token: str) -> dict[str, list[str]]:
+        """Every caller's rights."""
+        return {caller: sorted(held) for caller, held in sorted(self._rights.items())}
+
+    async def change_rights(self, token: str, change: RightsChange, *, granting: bool) -> list[str]:
+        """Give or take the rights; the stand-in allows any change, deciding it is the real authority's."""
+        held = self._rights.setdefault(change.agent, set())
+        (held.update if granting else held.difference_update)(change.rights)
+        return sorted(held)
 
 
 @dataclass
@@ -120,15 +164,15 @@ def serve(app: FastAPI, audit_lines: list[str]) -> Iterator[RunningService]:
 
 
 @pytest.fixture
-def access_control() -> AccessControl:
-    return AccessControl(IDENTITIES, DECLARED_RIGHTS, STARTING_RIGHTS, grant_right_is_grantable=False)
+def authority() -> StandInAuthority:
+    return StandInAuthority(IDENTITIES, STARTING_RIGHTS)
 
 
 @pytest.fixture
-def service(access_control: AccessControl) -> Iterator[RunningService]:
+def service(authority: StandInAuthority) -> Iterator[RunningService]:
     """The service with no runner."""
     audit_lines: list[str] = []
-    app = create_agents_service_app(AgentRegistry(load_seeded_agents()), access_control, audit_lines.append)
+    app = create_agents_service_app(AgentRegistry(load_seeded_agents()), audit_lines.append, authority)
     yield from serve(app, audit_lines)
 
 
@@ -138,12 +182,12 @@ def runner() -> HeldRunner:
 
 
 @pytest.fixture
-def executing_service(access_control: AccessControl, runner: HeldRunner) -> Iterator[RunningService]:
+def executing_service(authority: StandInAuthority, runner: HeldRunner) -> Iterator[RunningService]:
     """The service with one runner, ``runner``."""
     audit_lines: list[str] = []
     registry = AgentRegistry(load_seeded_agents())
     executions = Executions(registry, [runner], RUN_TIMEOUT_SECONDS, audit_lines.append)
-    app = create_agents_service_app(registry, access_control, audit_lines.append, executions=executions)
+    app = create_agents_service_app(registry, audit_lines.append, authority, executions=executions)
     yield from serve(app, audit_lines)
 
 
@@ -187,7 +231,6 @@ def test_a_request_without_a_known_identity_is_refused(
         (READER, "POST", "/agents", TRIAGER),
         (READER, "PUT", "/agents/ticket-triager", TRIAGER_UPDATE),
         (READER, "DELETE", "/agents/ticket-triager", None),
-        (READER, "POST", "/grants", {"agent": NOBODY, "rights": ["read"]}),
         (NOBODY, "GET", "/agents", None),
         (READER, "POST", "/executions", SUMMARIZE),
     ],
@@ -195,7 +238,6 @@ def test_a_request_without_a_known_identity_is_refused(
         "a reader registers",
         "a reader updates",
         "a reader retires",
-        "a reader grants",
         "nobody lists",
         "a reader runs an agent",
     ],
@@ -281,50 +323,19 @@ def test_a_change_the_registry_cannot_make_is_refused_with_its_reason(
     assert status == expected
 
 
-def test_a_granted_right_lets_its_holder_use_it(service: RunningService) -> None:
-    service.call_as(LEAD, "POST", "/grants", {"agent": READER, "rights": ["register"]})
+def test_the_grants_routes_answer_with_the_authoritys_rights(service: RunningService) -> None:
+    status, held = service.call_as(LEAD, "POST", "/grants", {"agent": READER, "rights": ["register"]})
 
-    status, _ = service.call_as(READER, "POST", "/agents", TRIAGER)
-
-    assert status == HTTPStatus.CREATED
-
-
-def test_a_revoked_right_no_longer_lets_its_holder_use_it(service: RunningService) -> None:
-    service.call_as(LEAD, "DELETE", "/grants", {"agent": READER, "rights": ["read"]})
-
-    status, _ = service.call_as(READER, "GET", "/agents")
-
-    assert status == HTTPStatus.FORBIDDEN
+    assert (status, held) == (HTTPStatus.OK, ["read", "register"])
+    assert service.call_as(READER, "POST", "/agents", TRIAGER)[0] == HTTPStatus.CREATED
 
 
 @pytest.mark.parametrize(
-    ("granter", "change", "expected"),
+    ("identity", "caller", "status", "arguments"),
     [
-        (READER, {"agent": NOBODY, "rights": ["read"]}, HTTPStatus.FORBIDDEN),
-        (LEAD, {"agent": READER, "rights": ["grant"]}, HTTPStatus.FORBIDDEN),
-        (LEAD, {"agent": "ghost", "rights": ["read"]}, HTTPStatus.NOT_FOUND),
-        (LEAD, {"agent": READER, "rights": ["deploy"]}, HTTPStatus.BAD_REQUEST),
-    ],
-    ids=["without the grant right", "the grant right, not grantable", "to no caller", "an undeclared right"],
-)
-def test_a_grant_the_service_refuses_changes_no_right(
-    service: RunningService,
-    granter: str,
-    change: dict[str, object],
-    expected: HTTPStatus,
-) -> None:
-    status, _ = service.call_as(granter, "POST", "/grants", change)
-
-    _, rights = service.call_as(LEAD, "GET", "/grants")
-    assert (status, rights) == (expected, {LEAD: sorted(DECLARED_RIGHTS), NOBODY: [], READER: ["read"]})
-
-
-@pytest.mark.parametrize(
-    ("identity", "caller", "status"),
-    [
-        (IDENTITIES[LEAD], LEAD, HTTPStatus.CREATED),
-        (IDENTITIES[READER], READER, HTTPStatus.FORBIDDEN),
-        (GUESSED_IDENTITY, None, HTTPStatus.UNAUTHORIZED),
+        (IDENTITIES[LEAD], LEAD, HTTPStatus.CREATED, TRIAGER),
+        (IDENTITIES[READER], READER, HTTPStatus.FORBIDDEN, {}),  # refused before the body was read
+        (GUESSED_IDENTITY, None, HTTPStatus.UNAUTHORIZED, {}),
     ],
     ids=["registered", "refused", "unknown identity"],
 )
@@ -333,6 +344,7 @@ def test_each_request_is_one_audit_line_naming_its_caller_operation_and_argument
     identity: bytes,
     caller: str | None,
     status: HTTPStatus,
+    arguments: dict[str, str],
 ) -> None:
     service.call("POST", "/agents", identity, TRIAGER)
 
@@ -346,7 +358,7 @@ def test_each_request_is_one_audit_line_naming_its_caller_operation_and_argument
         "path": "/agents",
         "status": status,
         "operation": "register_agent",
-        "arguments": TRIAGER,
+        "arguments": arguments,
     }
 
 
@@ -377,9 +389,25 @@ def test_a_malformed_body_is_refused_on_an_audit_line_naming_its_caller_and_oper
     }
 
 
-def test_access_control_refuses_a_declared_right_the_service_does_not_enforce() -> None:
-    with pytest.raises(ValueError, match="deploy"):
-        AccessControl(IDENTITIES, ("read", "deploy"), STARTING_RIGHTS, grant_right_is_grantable=False)
+@pytest.mark.parametrize(
+    ("identity", "status", "caller"),
+    [
+        (IDENTITIES[LEAD], HTTPStatus.UNPROCESSABLE_ENTITY, LEAD),
+        (GUESSED_IDENTITY, HTTPStatus.UNAUTHORIZED, None),
+        (IDENTITIES[READER], HTTPStatus.FORBIDDEN, READER),
+    ],
+    ids=["a caller who may register", "an unknown identity", "a reader"],
+)
+def test_a_body_that_is_not_json_is_decided_by_the_authority_before_it_is_refused(
+    service: RunningService,
+    identity: bytes,
+    status: HTTPStatus,
+    caller: str | None,
+) -> None:
+    returned, _ = service.call("POST", "/agents", identity, b'{"name":')
+
+    (audit_line,) = [json.loads(line) for line in service.audit_lines]
+    assert (returned, audit_line["caller"], audit_line["operation"]) == (status, caller, "register_agent")
 
 
 def start_summary(service: RunningService) -> dict[str, Any]:

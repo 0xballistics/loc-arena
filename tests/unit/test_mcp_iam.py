@@ -18,19 +18,21 @@ import uvicorn
 from loc_arena.board import SERVICE, Board, build_server
 from loc_arena.config import load_run_config
 from loc_arena.iam_bootstrap import manifest_path
-from loc_arena.iam_wiring import iam_options
+from loc_arena.iam_wiring import build_service_app, guard_from_environment, iam_options
 from loc_arena.mcp_service import build_app, caller_from_token
 from loc_arena.recording_service import build_server as build_recording_server
 from loc_arena.tool_records import ToolRecord
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, TextContent
+from starlette.applications import Starlette
 
 from meridian_iam.client import IamClient
-from meridian_iam.contracts import Invalid, check_coverage, load_manifest
+from meridian_iam.contracts import Invalid, ManifestError, Unavailable, check_coverage, load_manifest
 from meridian_iam.core import Iam
 from meridian_iam.integration import Guard
 from meridian_iam.service import create_app
+from tests.unit._failing_iam import failing_iam
 from tests.unit._iam_waits import wait_until_refused
 
 CFG = load_run_config("configs/aurora-efficiency.deterministic.yaml")
@@ -93,8 +95,13 @@ def world(tmp_path: Path) -> Iterator[World]:
 
 
 @asynccontextmanager
-async def served(app_server: Any, headers: dict[str, str], name: str) -> AsyncIterator[httpx2.AsyncClient]:  # noqa: ANN401
-    app = build_app(app_server, name)
+async def served(
+    app_server: Any,  # noqa: ANN401
+    headers: dict[str, str],
+    name: str,
+    app: Starlette | None = None,
+) -> AsyncIterator[httpx2.AsyncClient]:
+    app = app or build_app(app_server, name)
     async with (
         app_server.session_manager.run(),
         httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), headers=headers) as http,
@@ -131,22 +138,26 @@ def grant(world: World, agent: str, resource: str, perms: list[str]) -> None:
     world.iam.grant(world.tokens[ADMIN], agent, resource, perms, None, f"{agent}-{resource}-{perms}")
 
 
-async def initialize_status(server: Any, name: str, headers: dict[str, str]) -> int:  # noqa: ANN401
-    async with served(server, headers, name) as http:
-        reply = await http.post(
+async def initialize(
+    server: Any,  # noqa: ANN401
+    name: str,
+    headers: dict[str, str],
+    app: Starlette | None = None,
+) -> httpx2.Response:
+    async with served(server, headers, name, app) as http:
+        return await http.post(
             f"http://{name}:8000/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
             headers={"Accept": "application/json, text/event-stream"},
         )
-    return reply.status_code
 
 
 def test_unknown_credentials_are_refused_before_any_tool(world: World) -> None:
     server, _ = board_server(world)
     for headers in ({}, {"Authorization": "Bearer junk"}, {"Authorization": f"Bearer {world.tokens[ADMIN]}"}):
-        assert (
-            anyio.run(initialize_status, server, SERVICE, headers) == HTTPStatus.UNAUTHORIZED
-        )  # admin: wrong audience
+        app = build_service_app(world.guard("board"), server, SERVICE)  # with its outage answer, as served
+        reply = anyio.run(initialize, server, SERVICE, headers, app)
+        assert reply.status_code == HTTPStatus.UNAUTHORIZED  # admin: wrong audience
 
 
 def test_a_call_without_the_grant_is_refused_recorded_and_changes_nothing(world: World) -> None:
@@ -216,22 +227,24 @@ def test_revocation_denies_the_next_call(world: World) -> None:
     assert anyio.run(call, server, SERVICE, world.tokens["datapipe-agent"], "read", {}).is_error
 
 
-def test_iam_outage_runs_no_tool(world: World) -> None:
-    server, board = board_server(world)
-    grant(world, "serving-agent", "board", ["send"])
+def test_an_iam_outage_is_answered_503_with_a_json_rpc_error_naming_it(world: World) -> None:
+    server, _ = board_server(world)
+    app = build_service_app(
+        world.guard("board"),
+        server,
+        SERVICE,
+    )  # as the service builds it, while IAM is up
     world.server.should_exit = True
     wait_until_refused(world.iam_url)
-    # the connection itself is refused (IAM cannot verify the credential): nothing runs
-    assert (
-        anyio.run(
-            initialize_status,
-            server,
-            SERVICE,
-            {"Authorization": f"Bearer {world.tokens['serving-agent']}"},
-        )
-        == 401
+    headers = {"Authorization": f"Bearer {world.tokens['serving-agent']}"}
+
+    reply = anyio.run(initialize, server, SERVICE, headers, app)
+
+    # IAM cannot verify the credential: the connection is refused as an outage an MCP client can show
+    assert (reply.status_code, reply.json()["error"]["message"]) == (
+        503,
+        "unavailable: IAM unavailable; nothing ran",
     )
-    assert board.read("agent-main") == []
 
 
 def test_recording_services_check_iam_and_covert_tools_are_not_requestable(world: World) -> None:
@@ -304,25 +317,64 @@ def environment_for(tmp_path: Path, world: World, resource: str, manifest: dict[
         "LOC_ARENA_IAM_URL": world.iam_url,
         "LOC_ARENA_IAM_MANIFEST": str(manifest_file),
         "LOC_ARENA_IAM_CREDENTIAL": str(credential_file),
+        "LOC_ARENA_IAM_TIMEOUT_SECONDS": "1",
+        "LOC_ARENA_IAM_RETRIES": "0",
     }
 
 
 def test_a_service_starts_only_if_its_tools_are_exactly_the_manifests(world: World, tmp_path: Path) -> None:
-    from loc_arena.iam_wiring import check_served_tools  # noqa: PLC0415
-
-    from meridian_iam.contracts import ManifestError  # noqa: PLC0415
-
     server, _ = board_server(world)
+
+    def start(manifest: dict[str, Any]) -> None:
+        guard = guard_from_environment(environment_for(tmp_path, world, "board", manifest))
+        build_service_app(guard, server, SERVICE)
+
     declared = json.loads((MANIFESTS / "board.json").read_text())
-    check_served_tools(environment_for(tmp_path, world, "board", declared), server)  # exact: fine
-    check_served_tools({}, server)  # a service not under IAM is not checked
+    start(declared)  # exact: fine
     dropped = {**declared, "tools": {k: v for k, v in declared["tools"].items() if k != "unread"}}
     dropped["operations"] = {k: v for k, v in declared["operations"].items() if k != "unread"}
     with pytest.raises(ManifestError, match="undeclared tool unread"):  # a tool the manifest no longer binds
-        check_served_tools(environment_for(tmp_path, world, "board", dropped), server)
+        start(dropped)
     extra = {**declared, "tools": {**declared["tools"], "purge": "send"}}
-    with pytest.raises(
-        ManifestError,
-        match="declared but unregistered tool purge",
-    ):  # a binding with no tool behind it
-        check_served_tools(environment_for(tmp_path, world, "board", extra), server)
+    with pytest.raises(ManifestError, match="declared but unregistered tool purge"):  # a binding with no tool
+        start(extra)
+
+
+def test_a_service_asks_iam_as_often_and_as_long_as_its_environment_says(
+    world: World,
+    tmp_path: Path,
+) -> None:
+    board = json.loads((MANIFESTS / "board.json").read_text())
+    with failing_iam(stall_seconds=3) as (url, asked):
+        limits = {"LOC_ARENA_IAM_TIMEOUT_SECONDS": "0.2", "LOC_ARENA_IAM_RETRIES": "1"}
+        environ = environment_for(tmp_path, world, "board", board) | {"LOC_ARENA_IAM_URL": url} | limits
+        guard = guard_from_environment(environ)
+        assert guard is not None
+        started = time.monotonic()
+        with pytest.raises(Unavailable):
+            guard.check(world.tokens["serving-agent"], "read")
+        waited = time.monotonic() - started
+    assert asked == ["/authorize"] * 2  # the first ask and one retry
+    assert waited < 2  # each gave up at 0.2 s, never waiting out the 3 s stall
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"LOC_ARENA_IAM_TIMEOUT_SECONDS": "inf"},
+        {"LOC_ARENA_IAM_TIMEOUT_SECONDS": "0"},
+        {"LOC_ARENA_IAM_RETRIES": "-1"},
+        {"LOC_ARENA_IAM_RETRIES": None},
+    ],
+    ids=["an infinite timeout", "no timeout", "negative retries", "no retries given"],
+)
+def test_a_service_with_an_invalid_iam_timeout_or_retries_does_not_start(
+    world: World,
+    tmp_path: Path,
+    change: dict[str, str | None],
+) -> None:
+    environ = environment_for(tmp_path, world, "board", json.loads((MANIFESTS / "board.json").read_text()))
+    environ = {key: value for key, value in (environ | change).items() if value is not None}
+
+    with pytest.raises(SystemExit, match="central IAM needs a valid"):
+        guard_from_environment(environ)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import asdict
 from http import HTTPStatus
 from typing import Any
 
@@ -86,17 +87,32 @@ def test_a_requester_hears_the_outcome_once_its_request_is_decided(
     assert iam.inbox(mailbox["lead"]) == []  # decided, so nothing left for the approver
 
 
-def test_a_denial_reaches_the_requester_with_nothing_approved(
+@pytest.mark.parametrize(
+    "read",
+    [
+        pytest.param(lambda iam, t, m, request: iam.my_requests(t["alice"])[0], id="requester's requests"),
+        pytest.param(lambda iam, t, m, request: iam.get_request(t["alice"], request), id="the request"),
+        pytest.param(lambda iam, t, m, request: iam.owner_queue(t["lead"], "notes")[0], id="owner's queue"),
+        pytest.param(lambda iam, t, m, request: asdict(iam.inbox(m["alice"])[0]), id="requester's inbox"),
+    ],
+)
+def test_a_denial_shows_nothing_approved_wherever_it_is_read(
     iam: Iam,
     tokens: dict[str, str],
     mailbox: dict[str, str],
+    read: Callable[[Iam, dict[str, str], dict[str, str], str], dict[str, Any]],
 ) -> None:
-    request = ask(iam, tokens["alice"], ["write"], "a")
+    request = ask(iam, tokens["alice"], ["write"], "a")  # asks until 2000
     iam.decide(tokens["lead"], request, approve=False, key="d", reason="not this sprint")
 
-    (outcome,) = iam.inbox(mailbox["alice"])
+    seen = read(iam, tokens, mailbox, request)
 
-    assert (outcome.state, outcome.approved, outcome.decision_reason) == ("denied", None, "not this sprint")
+    assert (seen["state"], seen["approved"], seen["approved_until"], seen["decision_reason"]) == (
+        "denied",
+        None,
+        None,
+        "not this sprint",
+    )
 
 
 def test_an_approver_sees_the_longest_waiting_request_first(

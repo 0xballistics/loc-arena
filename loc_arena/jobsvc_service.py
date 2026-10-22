@@ -5,8 +5,9 @@ A stack run starts it as the scenario's ``jobsvc`` entry: ``python -m loc_arena.
 and its MCP tools and issues each job, and each schedule, a workload of its own, runs each job as a real
 process on a node of the fleet (``loc_arena.node_pool``) through that node's daemon, keeps a pass over the
 fleet going in the background, and writes its record of requests and of each job's state to stdout. The
-cluster's policy is the run config's (``stack``), its teams the company's own seed, and it runs the run
-config's ``scope`` check on each submission, as every service does.
+cluster's policy is the run config's (``stack``); its teams, and the other teams' jobs and schedules it starts
+with, the company's own seed, applied before it takes a call, so the honest twin's recreated service starts
+from the same; and it runs the run config's ``scope`` check on each submission, as every service does.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from starlette.applications import Starlette
 from loc_arena.config import RunConfig, load_run_config
 from loc_arena.iam_seed import load_seed
 from loc_arena.iam_wiring import build_service_app, guard_from_environment, http_dependency, iam_options
-from loc_arena.ids import Action, PermissionScope, ScopeViolation, enforce
+from loc_arena.ids import Action, ScopeViolation, enforce
 from loc_arena.mcp_service import ALL_ADDRESSES, caller_from_token
 from loc_arena.node_pool import list_node_services, node_token_secret
 from loc_arena.settings import StackSettings
@@ -39,7 +40,7 @@ from meridian_jobsvc.api import SERVICE, build_jobsvc_server, create_jobsvc_api
 from meridian_jobsvc.authority import JobIdentity
 from meridian_jobsvc.errors import CredentialRefused, CredentialUnavailable, SubmissionRefused
 from meridian_jobsvc.fleet import NodeUnavailable, ProcessOutput, ProcessStatus
-from meridian_jobsvc.seed import load_teams
+from meridian_jobsvc.seed import load_cluster_seed, load_teams
 from meridian_jobsvc.service import ClusterPolicy, JobService
 from meridian_jobsvc.types import Node
 
@@ -208,14 +209,18 @@ def cluster_policy(stack: StackSettings) -> ClusterPolicy:
 def admit_by_scope(run_config: RunConfig) -> Callable[[str], None]:
     """The run config's ``scope`` check on submitting jobs, as every service runs its own on its callers.
 
-    The job service asks it of the agent a job works for, so a job submits only what its agent's scope allows;
-    a principal the run config does not name may submit nothing, as on every other service.
+    The job service asks it of the agent a job works for, so an agent under test submits only what its scope
+    allows. It bounds the agents of the run alone: a company principal the run config does not name, such as a
+    seeded service account an agent submits under, is the company's own and governed by IAM, which has already
+    decided its submit; its scope is not the run's to set.
     """
     scopes = {agent.id: agent.scope for agent in run_config.agents}
 
     def admit(submitter: str) -> None:
+        if submitter not in scopes:
+            return
         try:
-            enforce(scopes.get(submitter, PermissionScope()), Action("submit_job"))
+            enforce(scopes[submitter], Action("submit_job"))
         except ScopeViolation as violation:
             raise SubmissionRefused(violation.reason, path=submitter) from violation
 
@@ -274,6 +279,7 @@ def main(arguments: list[str]) -> None:
         load_teams(),
         admit_submitter=admit_by_scope(run_config),
     )
+    service.seed(load_cluster_seed())
     threading.Thread(
         target=service.run,
         args=(run_config.settings.stack.job_poll_seconds,),

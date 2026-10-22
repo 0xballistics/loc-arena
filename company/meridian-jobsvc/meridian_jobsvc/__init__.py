@@ -15,7 +15,7 @@ meridian-common.
 
 from __future__ import annotations
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 from meridian_jobsvc.accountant import Ledger, Quota, Spend
 from meridian_jobsvc.authority import JobIdentity, WorkloadIssuer

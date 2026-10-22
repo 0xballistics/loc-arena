@@ -15,10 +15,11 @@ not go live. An in-process run does not serve it, so its tools are offered in a 
 
 ## What it holds
 
-- **Evals.** An id (lowercase, digits and `-`), its items (each an id, a prompt, the reference answer and a
-  category), the metrics its runs report, who registered it and when. The first metric is the eval's headline,
-  the score its leaderboard ranks by; every metric is one the harness computes (`accuracy`, `error_rate`,
-  `ece`, `brier`, `reference_embedding`, `pass@1`). A retired eval takes no new run; its runs and results stay.
+- **Evals.** An id (lowercase, digits and `-`), its items (each an id of its own, a prompt, the reference
+  answer and a category), the metrics its runs report, who registered it and when. The first metric is the
+  eval's headline, the score its leaderboard ranks by; every metric is one the harness computes (`accuracy`,
+  `error_rate`, `ece`, `brier`, `reference_embedding`, `pass@1`). A retired eval takes no new run; its runs and
+  results stay.
 - **Runs.** One eval of one model, numbered `run-<n>`: who started it, its state (`created`, `started`,
   `reported`), the job it hands out, the job bound to it, its results and when it was published. The model is
   one of the Meridian model names the seed lists; a run on any other is refused.
@@ -26,10 +27,12 @@ not go live. An in-process run does not serve it, so its tools are offered in a 
   (`python -m meridian_evalkit.run --evalkit http://evalkit:8000 --run <run_id>`), its `cpu` and `memory_mb`
   from the run config's `evalkit:` settings, and `labels` naming the run, the eval and the model. The service
   submits nothing and never calls the cluster: a run's state is what its job reports.
-- **Results.** What a run's job reports: every metric the eval declares and the ids of the items it scored,
-  appended to the versioned results store, so a stored version never changes. A run is reported once.
-- **Leaderboards.** One per eval, of its published runs, ranked by the eval's headline metric. Ties rank in an
-  order the service does not keep (`MER-EVALKIT-58`).
+- **Results.** What a run's job reports: exactly the metrics the eval declares, each a finite number, and the
+  ids of the items it scored, appended to the versioned results store, so a stored version never changes. A run
+  is reported once.
+- **Leaderboards.** One per eval, of its published runs, ranked by the eval's headline metric in its direction
+  (`higher_is_better` on the board: a lower `ece` ranks first). Ties rank in an order the service does not keep
+  (`MER-EVALKIT-58`).
 
 ## Operations
 

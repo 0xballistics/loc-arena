@@ -10,6 +10,7 @@ concern.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -18,10 +19,10 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt
 
 from meridian_common.jobclient import JobSpec
-from meridian_evalkit.leaderboard import Leaderboard
+from meridian_evalkit.leaderboard import Leaderboard, LeaderboardEntry
 from meridian_evalkit.metrics import default_registry
 from meridian_evalkit.store import EvalRun, ResultsStore, diff_runs
 
@@ -40,7 +41,7 @@ class EvalServiceError(Exception):
 
 
 class _Body(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
 
 class TextItem(_Body):
@@ -52,11 +53,22 @@ class TextItem(_Body):
     category: str = "default"
 
 
+def _distinct_items(items: list[TextItem]) -> list[TextItem]:
+    """``items``, each with an id of its own, so a result's item ids name one item each."""
+    counted = Counter(item.item_id for item in items)
+    if repeated := sorted(item_id for item_id, count in counted.items() if count > 1):
+        raise ValueError(f"items repeat the ids {repeated}")
+    return items
+
+
+_Items = Annotated[list[TextItem], Field(min_length=1), AfterValidator(_distinct_items)]
+
+
 class EvalRegistration(_Body):
     """A new eval: its id, its items and the metrics its runs report, the first being the headline."""
 
     eval_id: Annotated[str, Field(pattern=EVAL_ID_PATTERN)]
-    items: Annotated[list[TextItem], Field(min_length=1)]
+    items: _Items
     metrics: Annotated[list[str], Field(min_length=1)]
 
 
@@ -193,12 +205,13 @@ class RankedRun(BaseModel):
 
 
 class Board(BaseModel):
-    """An eval's leaderboard: its published runs ranked by the eval's headline metric."""
+    """An eval's leaderboard: its published runs ranked by the eval's headline metric, in its direction."""
 
     model_config = ConfigDict(frozen=True)
 
     eval_id: str
     metric: str
+    higher_is_better: bool
     ranking: list[RankedRun]
 
 
@@ -209,7 +222,7 @@ class SeededEval(_Body):
     registered_by: str
     registered_at: AwareDatetime
     metrics: Annotated[list[str], Field(min_length=1)]
-    items: Annotated[list[TextItem], Field(min_length=1)]
+    items: _Items
     retired_at: AwareDatetime | None = None
 
 
@@ -257,7 +270,7 @@ class EvalkitRegistry:
         self._url = url
         self._resources = resources or JobResources()
         self._clock = clock
-        self._metric_names = frozenset(default_registry().names())
+        self._metrics = default_registry()
         self._models = tuple(seed.models)
         self._evals: dict[str, Eval] = {}
         self._runs: dict[str, Run] = {}
@@ -365,17 +378,6 @@ class EvalkitRegistry:
                 HTTPStatus.CONFLICT,
                 f"run {run_id!r} is reported: version {run.results_version}",
             )
-        found = self._evals[run.eval_id]
-        if missing := sorted(set(found.metrics) - set(results.metrics)):
-            raise EvalServiceError(
-                HTTPStatus.UNPROCESSABLE_ENTITY,
-                f"results lack the eval's metrics {missing}",
-            )
-        if unknown := sorted(set(results.item_ids) - {item.item_id for item in found.items}):
-            raise EvalServiceError(
-                HTTPStatus.UNPROCESSABLE_ENTITY,
-                f"results score items the eval has not: {unknown}",
-            )
         return self._record_results(run, results.metrics, results.item_ids, self._clock())
 
     def diff_runs(self, left_id: str, right_id: str) -> Diff:
@@ -409,19 +411,27 @@ class EvalkitRegistry:
         for found_id, board in sorted(self._boards.items()):
             if eval_id is not None and found_id != eval_id:
                 continue
+            metric = self._evals[found_id].headline_metric
+            higher_is_better = self._metrics.get(metric).higher_is_better
             ranking = [
-                RankedRun(rank=rank, run_id=entry.run_id, model_id=entry.model, score=entry.score)
+                RankedRun(
+                    rank=rank,
+                    run_id=entry.run_id,
+                    model_id=entry.model,
+                    score=entry.score if higher_is_better else -entry.score,
+                )
                 for rank, entry in enumerate(board.ranking(), start=1)
             ]
-            metric = self._evals[found_id].headline_metric
-            boards.append(Board(eval_id=found_id, metric=metric, ranking=ranking))
+            boards.append(
+                Board(eval_id=found_id, metric=metric, higher_is_better=higher_is_better, ranking=ranking),
+            )
         return boards
 
     def _require_known_metrics(self, metrics: Iterable[str]) -> None:
-        if unknown := sorted(set(metrics) - self._metric_names):
+        if unknown := sorted(set(metrics) - set(self._metrics.names())):
             raise EvalServiceError(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
-                f"no metric {unknown}: the harness computes {', '.join(sorted(self._metric_names))}",
+                f"no metric {unknown}: the harness computes {', '.join(self._metrics.names())}",
             )
 
     def _add_eval(self, found: Eval) -> Eval:
@@ -440,7 +450,6 @@ class EvalkitRegistry:
         found = self.get_eval(seeded.eval_id)
         if seeded.model_id not in self._models:
             raise ValueError(f"seeded run {seeded.run_id!r} names no seeded model: {seeded.model_id!r}")
-        self._require_known_metrics(seeded.metrics)
         run = self._add_run(
             Run(
                 run_id=seeded.run_id,
@@ -460,6 +469,18 @@ class EvalkitRegistry:
             self._publish(reported, self._results_of(reported.run_id), seeded.published_at)
 
     def _record_results(self, run: Run, metrics: dict[str, float], item_ids: list[str], at: datetime) -> Run:
+        """Append ``metrics``, exactly the eval's, over ``item_ids``, the eval's items, as a new version."""
+        found = self._evals[run.eval_id]
+        if set(metrics) != set(found.metrics):
+            raise EvalServiceError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                f"results report the metrics {sorted(metrics)}; the eval's are {found.metrics}",
+            )
+        if unknown := sorted(set(item_ids) - {item.item_id for item in found.items}):
+            raise EvalServiceError(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                f"results score items the eval has not: {unknown}",
+            )
         results = EvalRun(
             run_id=run.run_id,
             model=run.model_id,
@@ -477,8 +498,15 @@ class EvalkitRegistry:
         return reported
 
     def _publish(self, run: Run, results: EvalRun, at: datetime) -> Run:
-        board = self._boards.setdefault(run.eval_id, Leaderboard())
-        board.add_run(results, metric=self._evals[run.eval_id].headline_metric)
+        """Rank the run on its eval's board by its headline score, negated where a lower score is better."""
+        metric = self._evals[run.eval_id].headline_metric
+        score = results.metrics[metric]
+        entry = LeaderboardEntry(
+            run_id=run.run_id,
+            model=run.model_id,
+            score=score if self._metrics.get(metric).higher_is_better else -score,
+        )
+        self._boards.setdefault(run.eval_id, Leaderboard()).add(entry)
         self._runs[run.run_id] = published = run.model_copy(update={"published_at": at})
         return published
 

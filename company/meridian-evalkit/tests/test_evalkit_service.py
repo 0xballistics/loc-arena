@@ -275,11 +275,18 @@ def test_only_the_job_bound_to_a_run_reports_it_and_only_once(service: RunningSe
     "results",
     [
         {"metrics": {"accuracy": 0.9}, "item_ids": ["ar-001"]},
+        {"metrics": {"accuracy": 0.9, "brier": 0.1, "ece": 0.0}, "item_ids": ["ar-001"]},
+        {"metrics": {"accuracy": float("nan"), "brier": 0.1}, "item_ids": ["ar-001"]},
         {"metrics": {"accuracy": 0.9, "brier": 0.1}, "item_ids": ["ar-001", "gk-001"]},
     ],
-    ids=["a missing metric", "an item of another eval"],
+    ids=[
+        "a missing metric",
+        "a metric the eval has not",
+        "a metric that is not a number",
+        "an item of another eval",
+    ],
 )
-def test_results_must_cover_the_evals_metrics_and_score_its_items(
+def test_results_must_report_the_evals_metrics_as_numbers_and_score_its_items(
     service: RunningService,
     results: dict[str, Any],
 ) -> None:
@@ -312,6 +319,29 @@ def test_publishing_ranks_a_reported_run_by_the_headline_metric_once(service: Ru
     assert service.call_as(PRIYA, "POST", f"/runs/{run_id}/publish")[0] == HTTPStatus.CONFLICT
 
 
+def test_a_leaderboard_ranks_a_lower_is_better_headline_from_the_lowest_score(
+    service: RunningService,
+) -> None:
+    calibration = {**SPELLING, "eval_id": "calibration", "metrics": ["ece", "accuracy"]}
+    assert service.call_as(PRIYA, "POST", "/evals", calibration)[0] == HTTPStatus.CREATED
+    for ece in (0.2, 0.1):
+        start = {"eval_id": "calibration", "model_id": "aurora-7b-v3"}
+        run_id = service.call_as(TOMAS, "POST", "/runs", start)[1]["run_id"]
+        results = {"metrics": {"ece": ece, "accuracy": 0.5}, "item_ids": ["sp-001"]}
+        service.call_as(JOB, "POST", f"/runs/{run_id}/start")
+        assert service.call_as(JOB, "POST", f"/runs/{run_id}/results", results)[0] == HTTPStatus.CREATED
+        assert service.call_as(PRIYA, "POST", f"/runs/{run_id}/publish")[0] == HTTPStatus.OK
+
+    _, boards = service.call_as(READER, "GET", "/leaderboard?eval_id=calibration")
+
+    (board,) = boards["boards"]
+    assert (board["metric"], board["higher_is_better"]) == ("ece", False)
+    assert [(row["rank"], row["run_id"], row["score"]) for row in board["ranking"]] == [
+        (1, "run-0440", 0.1),
+        (2, "run-0439", 0.2),
+    ]
+
+
 def test_a_diff_gives_the_metric_deltas_between_two_reported_runs(service: RunningService) -> None:
     status, diff = service.call_as(READER, "GET", "/runs/run-0402/diff/run-0423")
 
@@ -324,12 +354,14 @@ def test_a_diff_gives_the_metric_deltas_between_two_reported_runs(service: Runni
     assert service.call_as(READER, "GET", f"/runs/run-0402/diff/{LAST_SEEDED_RUN}")[0] == HTTPStatus.OK
 
 
-def test_registering_an_eval_needs_metrics_the_harness_computes_and_a_new_id(service: RunningService) -> None:
+def test_registering_an_eval_needs_distinct_items_known_metrics_and_a_new_id(service: RunningService) -> None:
     unknown_metric = service.call_as(PRIYA, "POST", "/evals", {**SPELLING, "metrics": ["bleu"]})[0]
+    repeated_item = service.call_as(PRIYA, "POST", "/evals", {**SPELLING, "items": [SPELLING_ITEM] * 2})[0]
     status, registered = service.call_as(PRIYA, "POST", "/evals", SPELLING)
     again = service.call_as(PRIYA, "POST", "/evals", SPELLING)[0]
 
-    assert (unknown_metric, status, again) == (
+    assert (unknown_metric, repeated_item, status, again) == (
+        HTTPStatus.UNPROCESSABLE_ENTITY,
         HTTPStatus.UNPROCESSABLE_ENTITY,
         HTTPStatus.CREATED,
         HTTPStatus.CONFLICT,

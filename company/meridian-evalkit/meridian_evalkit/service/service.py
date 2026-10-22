@@ -20,7 +20,6 @@ from http import HTTPStatus
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Query, Request, Response
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from mcp.server import MCPServer
@@ -62,9 +61,10 @@ POST /runs with {"eval_id", "model_id"} starts a run (run): the answer carries t
 cluster, which runs the eval and reports back. GET /runs lists the runs, GET /runs/<run_id> reads one and
 GET /runs/<a>/diff/<b> gives the metric deltas between two reported runs (read).
 POST /runs/<run_id>/publish puts a reported run on its eval's leaderboard (publish); GET /leaderboard, with
-?eval_id=<eval_id> for one eval, ranks the published runs (read).
+?eval_id=<eval_id> for one eval, ranks the published runs by the headline metric, best first (read).
 A run's job alone calls POST /runs/<run_id>/start, which binds it to the run, and POST /runs/<run_id>/results
-with {"metrics", "item_ids"}, which reports. The schema is at /openapi.json.
+with {"metrics": exactly the eval's, "item_ids": the eval's items it scored}, which reports. The schema is at
+/openapi.json.
 """
 
 
@@ -105,21 +105,30 @@ def create_evalkit_api(
     )
     record_each_request(app, write_audit_line)
 
-    def audit_call(request: Request, arguments: Mapping[str, JsonValue]) -> str:
-        """Name the route's operation, its arguments and its caller on the audit line; returns the caller.
-
-        The authority has already decided the call: its principal is the caller.
-        """
+    def name_call(request: Request, arguments: Mapping[str, JsonValue]) -> str | None:
+        """Name the route's operation and its arguments on the audit line; the caller if the authority ran."""
         request.state.operation = request.scope["route"].name
         request.state.arguments = dict(arguments)
         request.state.caller = getattr(request.state, "iam_principal", None)
-        return request.state.caller or ""
+        return request.state.caller
+
+    def audit_call(request: Request, arguments: Mapping[str, JsonValue]) -> str:
+        """``name_call`` on a route, where the authority has decided the call and named its caller."""
+        caller = name_call(request, arguments)
+        if caller is None:
+            raise RuntimeError(f"the authority named no caller for {request.state.operation}")
+        return caller
 
     @app.exception_handler(RequestValidationError)
     async def refuse_malformed_request(request: Request, error: RequestValidationError) -> Response:
-        """Refused before the route runs, a malformed request's audit line still names the operation."""
-        audit_call(request, request.path_params)
-        return await request_validation_exception_handler(request, error)
+        """Refused before the route runs, a malformed request's audit line still names the operation.
+
+        A body that is not JSON is refused before the authority runs, so that line may name no caller. The
+        answer says where and why, never echoing the input, which may not be JSON (a NaN metric is not).
+        """
+        name_call(request, request.path_params)
+        wrong = [{key: found[key] for key in ("loc", "msg", "type")} for found in error.errors()]
+        return JSONResponse({"detail": wrong}, HTTPStatus.UNPROCESSABLE_ENTITY)
 
     @app.exception_handler(EvalServiceError)
     async def refuse(_: Request, error: EvalServiceError) -> Response:
@@ -190,7 +199,7 @@ def create_evalkit_api(
 
     @app.get("/leaderboard")
     async def leaderboard(request: Request, eval_id: Annotated[str | None, Query()] = None) -> Boards:
-        audit_call(request, dict(request.query_params))
+        audit_call(request, {} if eval_id is None else {"eval_id": eval_id})
         return Boards(boards=registry.leaderboards(eval_id))
 
     authority.verify_routes(app)

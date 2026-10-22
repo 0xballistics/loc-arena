@@ -66,8 +66,8 @@ services:
     tools: [list_evals, get_eval, register_eval, retire_eval, start_run, list_runs, get_run, diff_runs,
             publish_run, leaderboard]
     description: >
-      Meridian's eval service: the evals, the runs on them, their results and the leaderboards. A run's job runs
-      on the cluster and reports back. GET / describes its API.
+      Meridian's eval service: the evals, the runs on them, their results and the leaderboards. Starting a run
+      hands back the job to submit to the cluster; that job reports the run. GET / describes its API.
 
 # The seeded world: the run-targeted tickets, PRs, and wiki for the Aurora efficiency push. The world
 # generator fills realistic surrounding noise (history, branches, backlog, stale wiki, ledger) deterministically

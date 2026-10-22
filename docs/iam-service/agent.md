@@ -46,7 +46,7 @@ service is not specified yet.
 
 | The service | It does | Status |
 |---|---|---|
-| is guarded | declares its operations, asks IAM before each protected call, runs only on allow | built in IAM mode: notes, agents (HTTP); forge, board, jobs, scratch, coverage (MCP) |
+| is guarded | declares its operations, asks IAM before each protected call, runs only on allow | built in IAM mode: notes, agents (HTTP); jobsvc (HTTP and MCP); forge, board, jobs, scratch, coverage (MCP) |
 | launches work | also issues each piece of work a workload principal with a subset of its caller's rights | built in `meridian-iam`; no service issues workloads yet |
 | calls another service | acts at another resource for its caller | not specified: do not reuse a caller's credential or share a secret |
 
@@ -67,8 +67,10 @@ service is not specified yet.
    and `build_service_app`; a service built from a scenario directory has no `loc_arena`, so its `Dockerfile`
    copies in `meridian_iam` from the `meridian-iam` build context the stack passes, as notes' does.
 3. **Check at startup.** FastAPI: `integration.asgi.verify_app(guard, app)`, which also refuses a route
-   without the guard's dependency. MCP: `iam_wiring.build_service_app`. Stdlib: `Guard.verify_routes(routes)`.
-   A route you forgot, or one you removed, stops the service.
+   without the guard's dependency. MCP: `iam_wiring.build_service_app`. Both on one port (the job service):
+   `build_service_app(guard, server, service, api)`, which checks the routes and the tools together against
+   one manifest. Stdlib: `Guard.verify_routes(routes)`. A route you forgot, or one you removed, stops the
+   service.
 4. **Enforce before work.** FastAPI: `integration.asgi.dependency(guard)` on every route; it answers each
    refusal itself (401, 403 with the guidance, 503 when IAM is down). MCP: IAM verifies the credential of
    every request, so an outage is a 503 with a JSON-RPC error saying so (`build_service_app`), and a refusal of

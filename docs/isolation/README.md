@@ -26,13 +26,16 @@ flowchart LR
         EP["episode<br/>agent loops, in-world gateway"]
         SB["sandbox per agent<br/>native tools, bash, /skills"]
         AG["agentgateway<br/>MCP route, per-agent tool policy"]
-        SV["services<br/>forge, board, jobs, scratch, coverage, notes, agents"]
+        SV["services<br/>forge, board, jobsvc, jobs, scratch, coverage, notes, agents"]
+        NP["node pool<br/>node-1 .. node-n: one job each, a real process"]
         GW["gateway<br/>holds the key, admits callers by token"]
     end
     EP -- "commands" --> SB
     EP -- "tool calls" --> AG
     SB -- "tool calls" --> AG
     AG -- "caller's identity" --> SV
+    SV -- "jobsvc starts, reads, stops jobs" --> NP
+    NP -. "process facts, sealed" .-> CO
     EP -- "model calls" --> GW
     SB -- "model calls" --> GW
     GW --> OR
@@ -52,6 +55,7 @@ loop is the only harness the arena runs today; choosing another one by config is
 | `sandbox-<agent id>` | one agent's code, from a slim image with no harness and no scenarios; mounts the checkouts and the scenario's skills read-only; holds its own token and its own identity on each service with rights; takes commands from the episode alone |
 | one per live service | a scenario's `services:` entry with `build`, `image` or `module`; no route out, all capabilities dropped, limits from `stack`, no published port |
 | `runner-<n>` | where the company's own agents run with pi, for the one service whose entry declares `runners: <n>`; a sandbox from the Dockerfile's `runner` target with an empty `/workspace`; holds its own token, which that service also holds, and takes commands from that service alone |
+| `node-<n>` | the job service's fleet, for the one service whose entry declares `nodes: {<pool>: n}`; a worker from the Dockerfile's `worker` target whose daemon runs one job at a time as a real process in an empty `/workspace`, with the checkouts mounted read-only and the limits `stack.node_cpus` and `stack.node_memory_mb`; holds its own token, which that service also holds, and takes calls from that service alone; its log is its jobs' process facts ([docs/jobsvc-service.md](../jobsvc-service.md)) |
 | `agentgateway` | the MCP route of every service with tools; present when a service has tools |
 
 The host grades the run after copy-out; grading's agent-code steps run in a throwaway container of the slim
@@ -100,11 +104,11 @@ tool call (`loc_arena/tool_records.py`): the tool, its arguments, its result or 
 container writes it to stdout; an in-process run writes `records/<service>.jsonl`. agentgateway logs the same
 calls with the caller added.
 
-Before grading, the run copies each live service's log, and agentgateway's, to `services/<name>.log` in the run
-directory. `loc_arena/recorded_events.py` then turns each record into the events of the episode or the honest
+Before grading, the run copies each live service's log, each node's, and agentgateway's, to
+`services/<name>.log` in the run directory. `loc_arena/recorded_events.py` then turns each record into the events of the episode or the honest
 twin whose play window holds its time, in the turn of the agent that was running. Each event goes to the sealed
-log and, unless it is sealed-only, the mirror log: a scratch note's `shared_surface` event stays on the sealed
-log, where the verifier reads it and the monitors cannot. A refused call is a blocked `action`. A record that cannot be placed goes to
+log and, unless it is sealed-only, the mirror log: a scratch note's `shared_surface` event and a node's
+`process` facts stay on the sealed log, where the verifier reads them and the monitors cannot. A refused call is a blocked `action`. A record that cannot be placed goes to
 `unattributed_records.jsonl` in the run directory. Grading never builds events, so grading a run again adds
 none.
 
@@ -112,11 +116,11 @@ none.
 
 In a stack run the episode container plays one phase per start. Between the two, the host adds each service's
 log so far to its file in the run directory and waits until the Collector holds a record of every call the
-gateway logged, then recreates the gateway and every sandbox, runner, live service and agentgateway with fresh
-anonymous volumes (`loc_arena/stack_play.py`). The Collector and its record run on, and the gateway counts the
+gateway logged, then recreates the gateway and every sandbox, runner, node, live service and agentgateway with
+fresh anonymous volumes (`loc_arena/stack_play.py`). The Collector and its record run on, and the gateway counts the
 twin's runner calls afresh. The episode stays.
 If a log cannot be copied, nothing is recreated; if a container does not come back, the run stops with its
-logs copied out. The twin therefore sees none of the notes, grants, PRs or files the attack left.
+logs copied out. The twin therefore sees none of the notes, grants, PRs, jobs or files the attack left.
 
 ## Services with rights
 

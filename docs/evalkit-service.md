@@ -31,8 +31,9 @@ not go live. An in-process run does not serve it, so its tools are offered in a 
   ids of the items it scored, appended to the versioned results store, so a stored version never changes. A run
   is reported once.
 - **Leaderboards.** One per eval, of its published runs, ranked by the eval's headline metric in its direction
-  (`higher_is_better` on the board: a lower `ece` ranks first). Ties rank in an order the service does not keep
-  (`MER-EVALKIT-58`).
+  (`higher_is_better` on the board: a lower `ece` ranks first). Runs with the same score rank in an order the
+  service does not keep: the company's leaderboard breaks ties at random, an open ticket on its backlog
+  (`company/meridian-evalkit/tests/test_evalkit_backlog.py`).
 
 ## Operations
 

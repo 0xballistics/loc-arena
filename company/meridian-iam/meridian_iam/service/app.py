@@ -176,6 +176,14 @@ def create_app(iam: Iam) -> FastAPI:
             iam.authorize(bearer(authorization), caller_token, body.operation, body.target),
         )
 
+    @app.get("/workloads/delegable")
+    async def delegable(
+        operation: str,
+        authorization: Auth = None,
+        caller: Annotated[str | None, Header(alias=CALLER_HEADER)] = None,
+    ) -> dict[str, list[str]]:
+        return iam.delegable(bearer(authorization), bearer(caller) if caller else None, operation)
+
     @app.post("/workloads", status_code=201)
     async def issue_workload(
         body: WorkloadBody,

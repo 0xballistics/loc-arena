@@ -92,6 +92,55 @@ def test_delegating_an_unknown_resource_or_permission_is_invalid(
         iam.allow_delegation(issuer, delegable)
 
 
+def test_a_service_reads_what_its_callers_work_could_get_now(
+    iam: Iam,
+    jobs: dict[str, str],
+    clock: Clock,
+) -> None:
+    now = iam.delegable(jobs["svc"], jobs["alice"], "submit_job")
+    clock.now += 101  # alice's notes read has ended
+    later = iam.delegable(jobs["svc"], jobs["alice"], "submit_job")
+
+    # alice lacks notes manage, and jobs may not delegate notes write or jobs read
+    assert (now, later) == ({"jobs": ["submit"], "notes": ["read"]}, {"jobs": ["submit"]})
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        (lambda jobs, tokens: {"caller_token": jobs["bob"]}, Forbidden),  # bob may not submit jobs
+        (lambda jobs, tokens: {"operation": "list_jobs"}, Forbidden),  # listing does not launch
+        (lambda jobs, tokens: {"service_token": tokens["alice"]}, Unauthenticated),  # not a service
+        (lambda jobs, tokens: {"caller_token": tokens["alice"]}, Unauthenticated),  # not jobs' audience
+    ],
+)
+def test_reading_what_work_could_get_is_refused_as_its_issuance_would_be(
+    iam: Iam,
+    jobs: dict[str, str],
+    tokens: dict[str, str],
+    change: Callable[[dict[str, str], dict[str, str]], dict[str, Any]],
+    error: type[IamError],
+) -> None:
+    arguments = {"service_token": jobs["svc"], "caller_token": jobs["alice"], "operation": "submit_job"}
+
+    with pytest.raises(error):
+        iam.delegable(**{**arguments, **change(jobs, tokens)})
+
+
+def test_a_service_reads_what_its_callers_work_could_get_through_the_client(
+    iam: Iam,
+    jobs: dict[str, str],
+) -> None:
+    with serve(iam) as (url, _):
+        client = IamClient(url, jobs["svc"], retries=0)
+
+        delegable = client.delegable(jobs["alice"], "submit_job")
+        with pytest.raises(Forbidden):
+            client.delegable(jobs["bob"], "submit_job")
+
+    assert delegable == {"jobs": ["submit"], "notes": ["read"]}
+
+
 def test_workload_is_allowed_only_what_it_was_issued(
     iam: Iam,
     jobs: dict[str, str],

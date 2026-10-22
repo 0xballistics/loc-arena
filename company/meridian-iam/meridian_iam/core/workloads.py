@@ -15,6 +15,39 @@ from meridian_iam.core.lifecycle import REPLACEMENT
 class Workloads(Base):
     """Runtime issuance of execution principals: the one way a principal is created after the seed."""
 
+    def delegable(self, service_token: str, caller_token: str | None, operation: str) -> dict[str, list[str]]:
+        """What work the caller launches through ``operation`` could be given now, by resource.
+
+        Each permission this service may delegate (``allow_delegation``) that the caller holds now: exactly
+        what ``issue_workload`` would grant it, so the service can ask for that. The gate is issuance's: the
+        service holds a binding, the caller's credential carries the binding's audience, and ``operation`` is
+        one the service's manifest marks ``launch`` whose permission the caller holds; otherwise
+        ``Unauthenticated`` or ``Forbidden``. It changes nothing.
+        """
+        with self._tx() as db:
+            binding = self._binding(db, self._auth(db, service_token, IAM_AUDIENCE))
+            sponsor = self._auth(db, caller_token, binding["audience"])
+            self._launch_permission(db, sponsor, binding["resource"], operation)
+            held: dict[str, list[str]] = {}
+            for row in db.execute(
+                "SELECT resource, permission FROM delegations WHERE issuer = ? ORDER BY resource, permission",
+                (binding["resource"],),
+            ):
+                if self._holds(db, sponsor, row["resource"], row["permission"]):
+                    held.setdefault(row["resource"], []).append(row["permission"])
+            return held
+
+    def _launch_permission(self, db: sqlite3.Connection, sponsor: str, resource: str, operation: str) -> None:
+        """``Forbidden`` unless ``operation`` is a launch operation whose permission ``sponsor`` holds."""
+        launch = json.loads(self._resource(db, resource)["operations"]).get(operation)
+        if not (launch and launch.get("launch")) or not self._holds(
+            db,
+            sponsor,
+            resource,
+            launch["permission"],
+        ):
+            raise Forbidden("not allowed to launch work through this service")
+
     def issue_workload(  # noqa: PLR0913
         self,
         service_token: str,
@@ -83,14 +116,7 @@ class Workloads(Base):
                 raise Invalid("a workload needs at least one grant")
             if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
                 raise Invalid("a positive ttl is required")
-            launch = json.loads(self._resource(db, binding["resource"])["operations"]).get(operation)
-            if not (launch and launch.get("launch")) or not self._holds(
-                db,
-                sponsor,
-                binding["resource"],
-                launch["permission"],
-            ):
-                raise Forbidden("not allowed to launch work through this service")
+            self._launch_permission(db, sponsor, binding["resource"], operation)
             now = self._now()
             ends: dict[tuple[str, str], int] = {}
             for resource, permissions in wanted.items():

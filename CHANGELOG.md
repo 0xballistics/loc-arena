@@ -8,6 +8,10 @@ log has the details.
 
 ### Changed
 
+- **The main-task grader runs the company suites once per distinct checkout.** The suites' verdict depends on
+  the checkout's files alone, so a checkout a process has graded byte for byte keeps its verdict: a run and its
+  honest twin hold the same files, as do a test session's graded episodes, and the suites took 23 of the 24
+  seconds a graded episode cost. An edit after a grade changes the digest, so it is graded afresh.
 - **CI runs the unit and company tests, not `tests/integration`.** Each graded episode there reruns the seven
   company suites, so the suite outgrew the job's timeout and every push to `main` was cut off. `make gates` still
   runs every suite locally; `make gates PYTEST_PATHS=...` runs the paths given, as CI does.

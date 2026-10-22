@@ -6,7 +6,9 @@ running and how it ended, serves the tails of its output, and writes each proces
 exit) as a JSON line on its own stdout, which the host copies out and the sealed log alone keeps. It takes
 calls from the job service alone, holding the node's token, and runs the job in an empty workspace with the
 checkouts mounted read-only, so a job runs the code an agent put in the shared checkout and cannot change what
-another job runs. It imports nothing of the harness.
+another job runs. The job's process gets the job's own credentials the service sends, and where the inference
+gateway is with the key to call it: the node's token, until the gateway admits a job's own credential. It
+imports nothing of the harness.
 """
 
 from __future__ import annotations
@@ -45,6 +47,8 @@ from sandbox_server.server import CONTAINER_MARKER
 from sandbox_server.trusted import ALL_INTERFACES, ServerToken, admit_trusted_caller, authenticate_token
 
 STOP_GRACE_SECONDS = 5.0  # a stopped process is waited for this long so a following status sees it exited
+GATEWAY_URL_VARIABLE = "MERIDIAN_GATEWAY_URL"  # the inference gateway's API, as a job calls it
+GATEWAY_TOKEN_VARIABLE = "MERIDIAN_GATEWAY_TOKEN"  # its key: the node's token, unless the job brings its own
 
 
 class NodeServerSettings(BaseModel):
@@ -58,6 +62,10 @@ class NodeServerSettings(BaseModel):
     output_limit_bytes: PositiveInt = Field(description="Bytes of the job's stdout and of its stderr kept.")
     secrets_dir: Path = Field(description="Where compose mounts this node's token, named sandbox_token.")
     trusted_caller: str = Field(description="The one caller served, the job service: any other is refused.")
+    gateway_url: str = Field(
+        description="The inference gateway's API as a job calls it, on the runners' route: a job calls it as "
+        "its node, with the node's token, until the gateway admits a job's own credential.",
+    )
 
 
 class NodeSecrets(BaseSettings):
@@ -71,10 +79,19 @@ class NodeSecrets(BaseSettings):
 class NodeProcess:
     """The one job a node runs at a time, as a long-lived process in the node's workspace."""
 
-    def __init__(self, settings: NodeServerSettings, write_fact: Callable[[str], None]) -> None:
-        """Run jobs in ``settings.workspace_directory`` and write each process fact with ``write_fact``."""
+    def __init__(
+        self,
+        settings: NodeServerSettings,
+        write_fact: Callable[[str], None],
+        node_token: SecretStr,
+    ) -> None:
+        """Run jobs in ``settings.workspace_directory`` and write each process fact with ``write_fact``.
+
+        Each job is given ``node_token`` as its key to the gateway unless it brings its own.
+        """
         self._settings = settings
         self._write_fact = write_fact
+        self._node_token = node_token
         self._lock = threading.Lock()
         self._job_id: str | None = None
         self._owner: str | None = None  # the principal whose job it is, named on every fact of that job
@@ -90,6 +107,9 @@ class NodeProcess:
                 raise HTTPException(HTTPStatus.CONFLICT, f"the node already holds job {self._job_id!r}")
             workspace = self._empty_workspace()
             environment = {
+                GATEWAY_URL_VARIABLE: self._settings.gateway_url,
+                GATEWAY_TOKEN_VARIABLE: self._node_token.get_secret_value(),
+                **{name: secret.get_secret_value() for name, secret in job.environment.items()},
                 "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                 "HOME": str(workspace),
                 "TMPDIR": str(workspace),
@@ -246,7 +266,7 @@ def main() -> None:
     environment.pop(API_KEY_VARIABLE, None)  # the provider key never reaches a job
     os.environ.clear()
     os.environ.update(environment)
-    process = NodeProcess(settings, lambda line: print(line, flush=True))
+    process = NodeProcess(settings, lambda line: print(line, flush=True), token)
     # No access log: the job service polls every second, and the log is the node's record of process facts.
     app = create_node_app(settings, token, process)
     uvicorn.run(app, host=ALL_INTERFACES, port=settings.port, log_level="warning", access_log=False)

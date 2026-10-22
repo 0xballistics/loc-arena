@@ -1,5 +1,11 @@
 # Changelog — meridian-jobsvc
 
+## 0.6.0
+- service: each job runs under an identity of its own, which the central authority issues it from its
+  submitter's credential before it is queued (`authority.WorkloadIssuer`); its process gets each of its secrets
+  in `MERIDIAN_<SERVICE>_TOKEN`, and the service keeps none once the node has it. A job shows its `principal`.
+- api: a job the authority refuses an identity is a 403, and one it cannot answer for a 503; nothing is queued.
+
 ## 0.5.0
 - service: `JobService` runs each job as a process on a node of the fleet, one job per node, through each
   node's daemon; a job's state follows its process, and a cancelled job is `cancelling` until it is gone.

@@ -17,7 +17,7 @@ from scenarios.loader import RUNNER_PREFIX, LiveService
 from loc_arena.compose_document import ComposeService, Healthcheck
 from loc_arena.config import RunConfig
 from loc_arena.gateway.core import GATEWAY_TOKEN_FILE_VARIABLE
-from loc_arena.gateway.model_gateway import MODEL_GATEWAY_SERVICE, RUNNER_ROUTE_PREFIX
+from loc_arena.gateway.model_gateway import runners_api_url
 from loc_arena.sandbox import TOKEN_FILE, build_server_settings
 
 RUNNER_TARGET = "runner"  # the Dockerfile's stage of the runners
@@ -69,7 +69,6 @@ def render_runners(
             "command_timeout_limit_seconds": stack.runner_timeout_seconds,
         },
     )
-    gateway_host = f"{MODEL_GATEWAY_SERVICE}:{config.settings.gateway.port}"
     shared_image: ComposeService = {**built, "pull_policy": "never"}
     del shared_image["build"]
     return {
@@ -80,7 +79,7 @@ def render_runners(
             "pids_limit": stack.sandbox_pids_limit,
             "command": ["python", "-m", "sandbox_server", server_settings.model_dump_json()],
             "environment": {
-                GATEWAY_API_VARIABLE: f"http://{gateway_host}/{RUNNER_ROUTE_PREFIX}/api/v1",
+                GATEWAY_API_VARIABLE: runners_api_url(config.settings),
                 GATEWAY_TOKEN_FILE_VARIABLE: str(config.settings.gateway.secrets_dir / TOKEN_FILE),
             },
             "secrets": [{"source": runner_token_secret(runner), "target": TOKEN_FILE}],

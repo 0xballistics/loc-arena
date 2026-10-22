@@ -21,6 +21,7 @@ from sandbox_server.command import API_KEY_VARIABLE
 from sandbox_server.node import NodeProcess, NodeServerSettings, create_node_app
 
 TOKEN = "a-node-token-of-at-least-thirty-two-characters"
+GATEWAY = "http://gateway:8080/runner/api/v1"
 TRUSTED_CALLER = "127.0.0.1"
 OTHER_CALLER = "192.0.2.7"  # an address reserved for documentation: no name resolves to it here
 OWNER = "serving-agent"
@@ -39,8 +40,13 @@ class Node:
             output_limit_bytes=10_000,
             secrets_dir=workspace.parent / "secrets",
             trusted_caller=TRUSTED_CALLER,
+            gateway_url=GATEWAY,
         )
-        self.process = NodeProcess(settings, lambda line: self.facts.append(json.loads(line)["process"]))
+        self.process = NodeProcess(
+            settings,
+            lambda line: self.facts.append(json.loads(line)["process"]),
+            SecretStr(TOKEN),
+        )
         self.app = create_node_app(settings, SecretStr(TOKEN), self.process)
 
     def call(self, method: str, path: str, body: object = None, *, caller: str = TRUSTED_CALLER) -> Any:  # noqa: ANN401
@@ -48,8 +54,9 @@ class Node:
         response = client.request(method, path, json=body, headers={"Authorization": f"Bearer {TOKEN}"})
         return response.status_code, response.json()
 
-    def start(self, job_id: str, *argv: str) -> int:
-        return self.call("POST", "/jobs", {"job_id": job_id, "argv": list(argv), "owner": OWNER})[0]
+    def start(self, job_id: str, *argv: str, environment: dict[str, str] | None = None) -> int:
+        job = {"job_id": job_id, "argv": list(argv), "owner": OWNER, "environment": environment or {}}
+        return self.call("POST", "/jobs", job)[0]
 
     def wait_until_exited(self, timeout: float = 10.0) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
@@ -118,6 +125,18 @@ def test_a_node_holding_a_job_takes_no_other_until_it_is_reset_and_a_reset_empti
     assert node.start("job-2", "true") == HTTPStatus.ACCEPTED
 
 
+def test_a_job_gets_its_own_credentials_and_its_nodes_key_to_the_gateway_and_no_fact_holds_them(
+    node: Node,
+) -> None:
+    secret = "the-jobs-own-secret-on-the-notes-service"
+    variables = "$MERIDIAN_NOTES_TOKEN $MERIDIAN_GATEWAY_URL $MERIDIAN_GATEWAY_TOKEN"
+    node.start("job-1", "sh", "-c", f'echo "{variables}"', environment={"MERIDIAN_NOTES_TOKEN": secret})
+    node.wait_until_exited()
+
+    assert node.call("GET", "/output")[1]["stdout"] == f"{secret} {GATEWAY} {TOKEN}\n"
+    assert secret not in json.dumps(node.facts)
+
+
 def test_a_job_gets_no_provider_key_from_the_daemons_environment(
     node: Node,
     monkeypatch: pytest.MonkeyPatch,
@@ -141,7 +160,7 @@ def test_the_daemon_serves_its_trusted_caller_alone_holding_its_token(
     refused: HTTPStatus,
 ) -> None:
     client = TestClient(node.app, client=(caller, 50000))
-    body = {"job_id": "job-1", "argv": ["true"], "owner": OWNER}
+    body = {"job_id": "job-1", "argv": ["true"], "owner": OWNER, "environment": {}}
 
     response = client.post("/jobs", json=body, headers={"Authorization": f"Bearer {token}"})
 

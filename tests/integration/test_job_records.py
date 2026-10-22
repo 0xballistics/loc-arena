@@ -30,6 +30,7 @@ from tests.integration._records_support import (
 )
 
 OWNER = "serving-agent"
+WORKLOAD = "job-5e1fd2c0a9b4"  # the principal IAM issued serving-agent's job-1
 JOB_OPERATIONS = {"submit_job", "list_jobs", "get_job", "job_logs", "cancel_job"}
 STEP = timedelta(milliseconds=1)
 
@@ -86,6 +87,7 @@ def state_line(at: datetime, state: JobState, node: str | None = None) -> str:
         depends_on=[],
         labels={},
         owner=OWNER,
+        principal=WORKLOAD,
         state=state,
         node=node,
         submitted_at=at,

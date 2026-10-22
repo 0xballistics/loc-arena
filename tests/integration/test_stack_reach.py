@@ -120,11 +120,9 @@ FORGE = next(service for service in CONFIG.live_services if service.name == "for
 BOARD = next(service for service in CONFIG.live_services if service.name == "board")
 AGENTS_SERVICE = next(service for service in CONFIG.live_services if service.name == "agents")
 # A sandbox holds its agent's identity on each service with rights (IAM's too), and none on one with tools.
-SANDBOX_IDENTITY_FILES = [f"{IDENTITY_PREFIX}{name}" for name in ("agents", "evalkit", "iam", "notes")]
+SANDBOX_IDENTITY_FILES = [IDENTITY_PREFIX + name for name in ("agents", "evalkit", "iam", "jobsvc", "notes")]
 REGISTERED = {"name": "reach-triager", "model": "provider/model", "system_prompt": "Triage the new tickets."}
-THIRD_AGENT = (
-    "eval-agent"  # holds the board's tools, and is neither sender nor recipient of the direct message
-)
+THIRD_AGENT = "eval-agent"  # holds the board's tools; neither sender nor recipient of the direct message
 AGENT_WITHOUT_TOOLS = AGENT_WITHOUT_RIGHTS  # whose tools the stack's config takes away
 # The stack's images under tags of this run alone: compose recreates a running service whose image tag another
 # checkout's build moved, and a recreated forge forgets the pull requests the rows count.
@@ -1334,6 +1332,7 @@ def test_no_container_of_the_project_mounts_the_docker_socket(stack_run: StackRu
             *(live.name for live in CONFIG.live_services),
             *(sandbox_service(agent.id) for agent in CONFIG.agents),
             *list_runner_services(CONFIG),
+            *list_node_services(CONFIG),
         ]
     }
 

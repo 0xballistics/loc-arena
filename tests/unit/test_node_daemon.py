@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import signal
+import sys
 import time
 from collections.abc import Iterator
 from http import HTTPStatus
@@ -25,22 +26,30 @@ GATEWAY = "http://gateway:8080/runner/api/v1"
 TRUSTED_CALLER = "127.0.0.1"
 OTHER_CALLER = "192.0.2.7"  # an address reserved for documentation: no name resolves to it here
 OWNER = "serving-agent"
+# A job writing one line at a time, each its own write, so reads of its output overlap its writes.
+COUNTER = """
+import sys
+for number in range(1, 20_001):
+    sys.stdout.write(f"{number}\\n")
+    sys.stdout.flush()
+"""
 
 
 class Node:
     """The daemon of one node, as its trusted caller reaches it, and the process facts it wrote."""
 
-    def __init__(self, workspace: Path) -> None:
-        """Serve a daemon over ``workspace``."""
+    def __init__(self, workspace: Path, output_limit_bytes: int = 10_000) -> None:
+        """Serve a daemon over ``workspace``, keeping ``output_limit_bytes`` of each stream."""
         self.facts: list[dict[str, Any]] = []
         settings = NodeServerSettings(
             port=8090,
             node_id="node-1",
             workspace_directory=workspace,
-            output_limit_bytes=10_000,
+            output_limit_bytes=output_limit_bytes,
             secrets_dir=workspace.parent / "secrets",
             trusted_caller=TRUSTED_CALLER,
             gateway_url=GATEWAY,
+            checkouts_directory=workspace.parent / "checkouts",
         )
         self.process = NodeProcess(
             settings,
@@ -98,6 +107,29 @@ def test_a_job_runs_as_a_process_until_it_exits_and_its_exit_and_output_are_kept
     ]
 
 
+def test_a_jobs_output_read_while_it_writes_is_whole_once_it_exits(tmp_path: Path) -> None:
+    node = Node(tmp_path / "workspace", output_limit_bytes=10_000_000)  # the tail is all of it
+    node.start("job-1", sys.executable, "-c", COUNTER)
+
+    while node.call("GET", "/status")[1]["state"] != "exited":
+        node.call("GET", "/output")  # as the job service polls a running job's logs
+    whole = node.call("GET", "/output")[1]["stdout"]
+
+    assert whole == "".join(f"{number}\n" for number in range(1, 20_001))  # every line, in order, once
+
+
+def test_a_command_that_cannot_start_is_refused_with_its_reason_and_the_node_takes_the_next_job(
+    node: Node,
+) -> None:
+    body = {"job_id": "job-1", "argv": ["no-such-command"], "owner": OWNER, "environment": {}}
+    refused = node.call("POST", "/jobs", body)
+
+    taken = node.start("job-2", "true")
+
+    detail = "cannot start 'no-such-command': No such file or directory"
+    assert (refused, taken) == ((HTTPStatus.UNPROCESSABLE_ENTITY, {"detail": detail}), HTTPStatus.ACCEPTED)
+
+
 def test_a_job_runs_until_it_is_stopped_and_stopping_ends_every_process_it_started(node: Node) -> None:
     node.start("job-1", "sh", "-c", "echo $$; sleep 60 & sleep 60")  # the shell leads the job's own session
     time.sleep(0.5)  # longer than any command server would let it run: no timeout applies
@@ -123,6 +155,17 @@ def test_a_node_holding_a_job_takes_no_other_until_it_is_reset_and_a_reset_empti
     assert (refused, node.call("GET", "/status")[1]["state"]) == (HTTPStatus.CONFLICT, "idle")
     assert list((tmp_path / "workspace").iterdir()) == []
     assert node.start("job-2", "true") == HTTPStatus.ACCEPTED
+
+
+def test_a_job_imports_the_company_code_of_the_checkout_its_node_mounts(node: Node, tmp_path: Path) -> None:
+    package = tmp_path / "checkouts" / "tmp2a7f" / "checkout" / "meridian-probe" / "meridian_probe"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text('ANSWER = "from the checkout"\n')
+
+    node.start("job-1", sys.executable, "-c", "import meridian_probe; print(meridian_probe.ANSWER)")
+    status = node.wait_until_exited()
+
+    assert (status["exit_code"], node.call("GET", "/output")[1]["stdout"]) == (0, "from the checkout\n")
 
 
 def test_a_job_gets_its_own_credentials_and_its_nodes_key_to_the_gateway_and_no_fact_holds_them(

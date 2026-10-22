@@ -5,10 +5,10 @@ process runs until it exits, the job service stops it, or a reset ends it. The d
 running and how it ended, serves the tails of its output, and writes each process fact (a job's start and its
 exit) as a JSON line on its own stdout, which the host copies out and the sealed log alone keeps. It takes
 calls from the job service alone, holding the node's token, and runs the job in an empty workspace with the
-checkouts mounted read-only, so a job runs the code an agent put in the shared checkout and cannot change what
-another job runs. The job's process gets the job's own credentials the service sends, and where the inference
-gateway is with the key to call it: the node's token, until the gateway admits a job's own credential. It
-imports nothing of the harness.
+checkouts mounted read-only and the checkout's repos on its ``PYTHONPATH``, so a job runs the code an agent
+put in the shared checkout and cannot change what another job runs. The job's process gets the job's own
+credentials the service sends, and where the inference gateway is with the key to call it: the node's token,
+until the gateway admits a job's own credential. It imports nothing of the harness.
 """
 
 from __future__ import annotations
@@ -66,6 +66,20 @@ class NodeServerSettings(BaseModel):
         description="The inference gateway's API as a job calls it, on the runners' route: a job calls it as "
         "its node, with the node's token, until the gateway admits a job's own credential.",
     )
+    checkouts_directory: Path = Field(
+        description="Where the checkouts' volume is mounted, read-only: the repos of the checkout the "
+        "episode seeded below it are on each job's PYTHONPATH.",
+    )
+
+
+def list_checkout_repos(checkouts: Path) -> list[Path]:
+    """The repos a job imports: each directory of the checkout the episode seeded below ``checkouts``.
+
+    The episode seeds its checkout as ``<home>/checkout/<repo>``, one home per play, and moves it out after;
+    the sandboxes' reset removes any other home, so at most one checkout is there while a job runs, and
+    without one a job imports nothing of the company.
+    """
+    return sorted(repo for repo in checkouts.glob("*/checkout/*") if repo.is_dir())
 
 
 class NodeSecrets(BaseSettings):
@@ -106,24 +120,33 @@ class NodeProcess:
             if self._job_id is not None:
                 raise HTTPException(HTTPStatus.CONFLICT, f"the node already holds job {self._job_id!r}")
             workspace = self._empty_workspace()
+            repos = list_checkout_repos(self._settings.checkouts_directory)
             environment = {
                 GATEWAY_URL_VARIABLE: self._settings.gateway_url,
                 GATEWAY_TOKEN_VARIABLE: self._node_token.get_secret_value(),
+                "PYTHONPATH": os.pathsep.join(map(str, repos)),
                 **{name: secret.get_secret_value() for name, secret in job.environment.items()},
                 "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                 "HOME": str(workspace),
                 "TMPDIR": str(workspace),
             }
-            stdout = (workspace / ".stdout").open("w+b")
-            stderr = (workspace / ".stderr").open("w+b")
-            self._process = subprocess.Popen(
-                job.argv,
-                cwd=workspace,
-                env=environment,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=True,
-            )
+            # Appended to, so reading a tail, which moves the offset the job shares, never moves its writes.
+            stdout = (workspace / ".stdout").open("a+b")
+            stderr = (workspace / ".stderr").open("a+b")
+            try:
+                self._process = subprocess.Popen(
+                    job.argv,
+                    cwd=workspace,
+                    env=environment,
+                    stdout=stdout,
+                    stderr=stderr,
+                    start_new_session=True,
+                )
+            except OSError as error:  # no such command, or not one it may run: the job never started
+                stdout.close()
+                stderr.close()
+                detail = f"cannot start {job.argv[0]!r}: {error.strerror}"
+                raise HTTPException(HTTPStatus.UNPROCESSABLE_ENTITY, detail) from error
             self._job_id, self._owner, self._streams = job.job_id, job.owner, (stdout, stderr)
             self._exit_code, self._final_output = None, None
         self._fact("start", job_id=job.job_id, owner=job.owner, argv=list(job.argv))

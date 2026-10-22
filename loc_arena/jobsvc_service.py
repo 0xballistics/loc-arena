@@ -99,6 +99,8 @@ class NodeDaemonClient:
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
+        except httpx2.HTTPStatusError as error:  # it answered, and refused: its reason is the job's
+            raise NodeUnavailable(f"{self.node.node_id} refused: {error.response.text}") from error
         except httpx2.HTTPError as error:
             raise NodeUnavailable(
                 f"{self.node.node_id} did not answer: {type(error).__name__}: {error}",

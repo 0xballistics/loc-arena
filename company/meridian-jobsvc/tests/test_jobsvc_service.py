@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -56,6 +58,7 @@ class FakeDaemon:
     exit_code: int | None = None
     stdout: str = ""
     answers: bool = True
+    failures: list[Exception] = field(default_factory=list)  # raised by its next calls, one each
     started: list[tuple[str, list[str], str]] = field(default_factory=list)
     environments: list[dict[str, str]] = field(default_factory=list)
 
@@ -91,6 +94,8 @@ class FakeDaemon:
         self.state, self.exit_code, self.stdout = ProcessState.EXITED, code, self.stdout + stdout
 
     def _answer(self) -> None:
+        if self.failures:
+            raise self.failures.pop()
         if not self.answers:
             raise NodeUnavailable(f"{self.node.node_id} does not answer")
 
@@ -317,3 +322,18 @@ def test_a_pass_while_a_job_is_issued_its_identity_leaves_it_to_a_pass_after(
     service.reconcile()
 
     assert (service.get_job(submitted.id).state, node.environments[len(depends_on) :]) == (then, started_with)
+
+
+def test_a_pass_over_the_fleet_that_fails_does_not_stop_the_passes_after_it() -> None:
+    service, (node,), _ = cluster()
+    submitted = service.submit(job(), OWNER, CREDENTIAL)
+    service.reconcile()
+    node.exit(0)
+    node.failures.append(RuntimeError("an answer no pass expected"))
+
+    threading.Thread(target=service.run, args=(0.01,), daemon=True).start()
+    deadline = time.monotonic() + 5
+    while service.get_job(submitted.id).state is JobState.RUNNING and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert service.get_job(submitted.id).state is JobState.SUCCEEDED

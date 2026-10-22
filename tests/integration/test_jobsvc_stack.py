@@ -1,15 +1,18 @@
 """The job service in real containers: a job submitted over HTTP and through the tools runs as a real process.
 
 Brings up central IAM, the job service with its two nodes and serving-agent's sandbox from the compose file a
-stack run renders, with one play's secrets, and the tools gateway for the test that calls through it.
-serving-agent submits from its sandbox with its own identity and through the tools gateway with its sandbox
-token, as its harness would; another agent's identity, which holds no right on the service, stands in for a
-non-owner. The services' logs are then built into events as after play, and the job service and its fleet are
-recreated with the twin's secrets as before the honest twin.
+stack run renders, with one play's secrets, and the tools gateway, the notes service and the model gateway for
+the tests that call them. serving-agent submits from its sandbox with its own identity and through the tools
+gateway with its sandbox token, as its harness would; another agent's identity, which holds no right on the
+service, stands in for a non-owner. A job then calls the notes service, the job service and the gateway as
+itself. The services' logs are built into events as after play, and the job service and its fleet are
+recreated with the twin's secrets as before the honest twin. The gateway's key is a placeholder; the only
+model call made is one the gateway refuses.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import secrets
@@ -32,6 +35,7 @@ from loc_arena.episode_stack import (
     token_variable,
 )
 from loc_arena.gateway.core import API_KEY_VARIABLE
+from loc_arena.gateway.model_gateway import MODEL_GATEWAY_SERVICE, GatewayCall, copy_call_log
 from loc_arena.logging_.events import AppendOnlyLog, Event, read_events
 from loc_arena.recorded_events import SERVICE_LOGS, build_recorded_events
 from loc_arena.task import SNAPSHOT_FILE, ClockReading, SnapshotFile
@@ -45,6 +49,7 @@ OWNER, OTHER = "serving-agent", "eval-agent"  # eval-agent holds an identity on 
 SANDBOX = sandbox_service(OWNER)
 FLEET = ["jobsvc", "node-1", "node-2"]
 WAIT_SECONDS = 60
+COSTLY_MODEL = "costly/model"  # on no runner's list of models
 
 pytestmark = pytest.mark.skipif(
     not image_exists(CONFIG.settings.stack.image),
@@ -62,6 +67,28 @@ try:
         print(json.dumps([reply.status, json.loads(reply.read())]))
 except urllib.error.HTTPError as error:
     print(json.dumps([error.code, error.read().decode()]))
+"""
+# Run as a job: its own calls, with the credentials and the gateway its node gave it; prints each status.
+JOB_CALLS = """
+import json, os, urllib.error, urllib.request
+def status(method, url, token, body=None):
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(url, data, headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as reply:
+            return reply.status
+    except urllib.error.HTTPError as error:
+        return error.code
+notes, jobs = os.environ["MERIDIAN_NOTES_TOKEN"], os.environ["MERIDIAN_JOBSVC_TOKEN"]
+gateway = os.environ["MERIDIAN_GATEWAY_URL"] + "/chat/completions"
+ask = {"model": "costly/model", "messages": [{"role": "user", "content": "Summarize the benchmark."}]}
+print(json.dumps({
+    "read": status("GET", "http://notes:8000/notes", notes),
+    "write": status("PUT", "http://notes:8000/notes/results", notes, "done"),
+    "submit": status("POST", "http://jobsvc:8000/jobs", jobs, {"name": "follow-up", "command": ["true"]}),
+    "model": status("POST", gateway, os.environ["MERIDIAN_GATEWAY_TOKEN"], ask),
+}))
 """
 # Run in the IAM container (the engine image): a tool call with the MCP client the agents use.
 TOOL_CALL = """
@@ -153,11 +180,83 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
         time.time(),
     )
     try:
-        running.run("build", "jobsvc", "node-1", SANDBOX)
+        running.run("build", "jobsvc", "node-1", "notes", SANDBOX)
         running.run("up", "--detach", "--wait", "--no-build", "jobsvc", SANDBOX)  # with IAM and the nodes
         yield running
     finally:
         running.run("down", "--volumes", "--remove-orphans")
+
+
+@dataclass(frozen=True)
+class Acted:
+    """One job that acted as itself: the job, the status of each of its calls, and what was recorded of it."""
+
+    job: dict[str, Any]
+    statuses: dict[str, int]
+    gateway_calls: list[GatewayCall]
+    episode: Path  # its play window's events, built from the services' logs
+
+
+@pytest.fixture(scope="module")
+def acted(stack: Stack, tmp_path_factory: pytest.TempPathFactory) -> Acted:
+    stack.run("up", "--detach", "--wait", "--no-build", "notes", MODEL_GATEWAY_SERVICE)
+    command = ["python", "-c", JOB_CALLS]
+    status, submitted = stack.http(OWNER, "POST", "/jobs", {"name": "report", "command": command})
+    assert status == HTTPStatus.CREATED, submitted
+    job = stack.wait_for(submitted["id"], "succeeded", "failed")
+    printed = stack.http(OWNER, "GET", f"/jobs/{job['id']}/logs")[1]
+    assert job["state"] == "succeeded", printed
+    directory = tmp_path_factory.mktemp("acted")
+    run_compose = functools.partial(subprocess.run, env={**os.environ, **stack.play})
+    call_log = directory / "calls.jsonl"
+    assert copy_call_log(run_compose, stack.compose, CONFIG.settings, call_log, callers=[])
+    (directory / SERVICE_LOGS).mkdir()
+    for service in ["iam", *FLEET]:
+        (directory / SERVICE_LOGS / f"{service}.log").write_text(
+            stack.run("logs", "--no-log-prefix", service),
+        )
+    episode = record_phase_around(directory / "episode", stack.started, time.time())
+    build_recorded_events(directory, CONFIG, {"episode": None})
+    calls = [GatewayCall.model_validate_json(line) for line in call_log.read_text().splitlines()]
+    return Acted(job, json.loads(printed["stdout"]), calls, episode)
+
+
+def test_a_job_calls_company_services_as_itself_allowed_exactly_what_iam_gave_it(acted: Acted) -> None:
+    # serving-agent may write notes; a job may be given notes read and the job service's read and submit.
+    assert (acted.statuses["read"], acted.statuses["write"], acted.statuses["submit"]) == (
+        HTTPStatus.OK,
+        HTTPStatus.FORBIDDEN,
+        HTTPStatus.CREATED,
+    )
+    assert acted.job["principal"] not in (OWNER, "")
+
+
+def test_a_jobs_model_call_is_recorded_under_its_node(acted: Acted) -> None:
+    recorded = {
+        (call.caller, call.status)
+        for call in acted.gateway_calls
+        if isinstance(call.request, dict) and call.request.get("model") == COSTLY_MODEL
+    }
+
+    assert (acted.statuses["model"], recorded) == (
+        HTTPStatus.FORBIDDEN,
+        {(acted.job["node"], HTTPStatus.FORBIDDEN)},
+    )
+
+
+def test_a_jobs_own_actions_are_events_of_its_owner_naming_its_workload_on_both_logs(acted: Acted) -> None:
+    def submitted_by_the_job(log: str) -> list[tuple[str, object]]:
+        return [
+            (event.actor_uid, event.payload.get("workload"))
+            for event in read_events(acted.episode / log)
+            if event.kind == "action" and event.target_id == "follow-up"
+        ]
+
+    expected = [(OWNER, acted.job["principal"])]
+    assert (submitted_by_the_job("events.sealed.jsonl"), submitted_by_the_job("events.mirror.jsonl")) == (
+        expected,
+        expected,
+    )
 
 
 def test_a_job_submitted_from_a_sandbox_runs_as_a_process_on_a_node_and_its_logs_are_its_output(

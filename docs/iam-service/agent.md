@@ -84,7 +84,10 @@ service is not specified yet.
    never an agent under test, and approves only permissions the manifest makes requestable; the config does not
    load otherwise. Each agent's run-config rights on the service and the permissions of its tools become
    baseline grants, so the service's `rights:` must use the manifest's permission names exactly; nothing checks
-   a mismatch, which grants nothing usable.
+   a mismatch, which grants nothing usable. A permission nobody may request, such as an operator's, is held by
+   a principal of the company the entry names in `holders: {<principal>: [...]}` (the job service's `releng`
+   holds `operate`): never an agent of the run or a service's own principal, and only permissions the manifest
+   checks.
 6. **Let agents ask.** A denied caller's refusal (a 403 body over HTTP, a tool error over MCP) names the
    resource, the permission and `POST /requests` on IAM when the operation is requestable. Filing answers with
    the `approvers` who can decide it now and a `next` step: ask one of them, who decides with

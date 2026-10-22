@@ -862,7 +862,7 @@ def test_a_live_services_log_that_cannot_be_copied_keeps_the_project(
     docker: FakeDocker,
     tmp_path: Path,
 ) -> None:
-    docker.failing = "logs"
+    docker.failing = "notes"  # the live service's log alone, not the gateway's
 
     with pytest.raises(StackError, match="kept compose project"):
         run_aurora_in_stack(tmp_path)
@@ -1046,7 +1046,7 @@ def test_a_log_that_cannot_be_copied_before_the_honest_twin_keeps_the_project_an
     tmp_path: Path,
 ) -> None:
     docker.plays_passing = 1
-    docker.failing = "logs"
+    docker.failing = "notes"
 
     with pytest.raises(StackError, match="kept compose project"):
         run_aurora_in_stack(tmp_path, mode="attack")

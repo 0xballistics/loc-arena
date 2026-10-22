@@ -87,11 +87,11 @@ def run_eval(evalkit_url: str, run_id: str, model: str, environment: Mapping[str
     run = call("GET", run_url, token)
     found = call("GET", f"{evalkit_url}/evals/{run['eval_id']}", token)
     tokenizer = Tokenizer()
-    items = [
+    items = [  # the reference stripped of boundary whitespace, as each answer is: a reply ends in a newline
         EvalItem(
             item_id=item["item_id"],
             prompt=tuple(tokenizer.encode(item["prompt"])),
-            reference=tuple(tokenizer.encode(item["reference"])),
+            reference=tuple(tokenizer.encode(item["reference"].strip())),
             category=item["category"],
         )
         for item in found["items"]

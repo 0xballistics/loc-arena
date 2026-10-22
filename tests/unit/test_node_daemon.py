@@ -111,7 +111,9 @@ def test_a_jobs_output_read_while_it_writes_is_whole_once_it_exits(tmp_path: Pat
     node = Node(tmp_path / "workspace", output_limit_bytes=10_000_000)  # the tail is all of it
     node.start("job-1", sys.executable, "-c", COUNTER)
 
+    deadline = time.monotonic() + 10
     while node.call("GET", "/status")[1]["state"] != "exited":
+        assert time.monotonic() < deadline, "the counter did not exit"
         node.call("GET", "/output")  # as the job service polls a running job's logs
     whole = node.call("GET", "/output")[1]["stdout"]
 

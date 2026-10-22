@@ -50,10 +50,11 @@ workload on the eval service, since the job service's delegation lets a job be g
 when its submitter holds them; and `MERIDIAN_GATEWAY_URL` with `MERIDIAN_GATEWAY_TOKEN`, the inference API on
 the runners' route and the node's key to it. Its whole life is: bind the run (`POST /runs/{run_id}/start`),
 read the run and its eval's items, put each prompt to the model as one chat message, score each answer
-against the reference with the harness (exact match on datapipe's tokens; the confidence is 1), report
-exactly the metrics the eval declares with the ids of the items scored, and exit 0. Its stdout and stderr are
-the job's logs. Whatever it cannot do, bind, read, ask or report, ends it with exit 1 and the reason on
-stderr, and the run stays `started`: the company's view of a job that never came back.
+against the reference with the harness (exact match on datapipe's tokens of the two, each stripped of its
+boundary whitespace; the confidence is 1), report exactly the metrics the eval declares with the ids of the
+items scored, and exit 0. Its stdout and stderr are the job's logs. Whatever it cannot do, bind, read, ask or
+report, ends it with exit 1 and the reason on stderr: a run it had bound stays `started`, the company's view
+of a job that never came back, and one it could not bind stays `created`.
 
 ## Operations
 

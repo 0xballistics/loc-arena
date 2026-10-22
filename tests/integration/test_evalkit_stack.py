@@ -31,10 +31,11 @@ STARTER = "agent-main"  # holds run on the eval service; serving-agent, which su
 START = {"eval_id": "arithmetic", "model_id": "aurora-7b-v3"}
 HOME = f"{CONFIG.settings.stack.checkouts_directory}/evalkit-stack"  # the episode's home for its checkout
 
-# Run in a container with python: one call of the eval service's API, as the holder of ``sys.argv[3]``.
+# Run in a container with python: one call of the eval service's API, as the holder of the token on stdin.
 EVALKIT_CALL = """
 import json, sys, urllib.error, urllib.request
-method, path, token, body = sys.argv[1:5]
+method, path, body = sys.argv[1:4]
+token = sys.stdin.read()
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 request = urllib.request.Request(f"http://evalkit:8000{path}", body.encode() or None, headers, method=method)
 try:
@@ -58,8 +59,8 @@ def call_evalkit(running: Stack, agent: str, method: str, path: str, body: objec
         EVALKIT_CALL,
         method,
         path,
-        found.variable and running.play[found.variable],
         payload,
+        standard_input=running.play[found.variable],
     )
     status, reply = json.loads(output.strip().splitlines()[-1])
     return status, reply

@@ -50,10 +50,13 @@ DNS_LABEL: Final = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 STACK_SERVICES: Final = frozenset({"gateway", "collector", "episode", "agentgateway"})
 SANDBOX_PREFIX: Final = "sandbox-"
 RUNNER_PREFIX: Final = "runner-"  # runner-1 to runner-<n>: the runners of the one service with runners
+NODE_PREFIX: Final = "node-"  # node-1 to node-<n>: the fleet of the one service with nodes
 # Never in a service's build context: the sealed answer and the scripted moves, which agents must not reach.
 SEALED_DIRECTORIES: Final = ("reference", "scripted")
 PACK_DIRECTORY: Final = "pack_directory"  # the validation context key: the pack a build path resolves in
 Right = Annotated[str, StringConstraints(strict=True, pattern=r"^[a-z0-9-]+$")]
+PoolName = Annotated[StrictStr, StringConstraints(pattern=r"^[a-z0-9-]+$")]
+PoolSize = Annotated[StrictInt, Field(ge=1)]
 # The characters and length the MCP specification allows in a tool name.
 Tool = Annotated[str, StringConstraints(strict=True, pattern=r"^[A-Za-z0-9_.-]{1,128}$")]
 
@@ -84,10 +87,10 @@ def _require_a_service_name(name: str) -> str:
     """Refuse a name that is no host name, or that would take the place of one of the stack's services."""
     if not DNS_LABEL.fullmatch(name):
         raise ValueError("it must be a DNS label: at most 63 lower-case letters, digits and inner hyphens")
-    if name in STACK_SERVICES or name.startswith((SANDBOX_PREFIX, RUNNER_PREFIX)):
+    if name in STACK_SERVICES or name.startswith((SANDBOX_PREFIX, RUNNER_PREFIX, NODE_PREFIX)):
         raise ValueError(
-            f"it is taken by the stack: {sorted(STACK_SERVICES)}, {SANDBOX_PREFIX}<agent id> and "
-            f"{RUNNER_PREFIX}<n>",
+            f"it is taken by the stack: {sorted(STACK_SERVICES)}, {SANDBOX_PREFIX}<agent id>, "
+            f"{RUNNER_PREFIX}<n> and {NODE_PREFIX}<n>",
         )
     return name
 
@@ -141,6 +144,12 @@ class ScenarioService(BaseModel):
         "each a sandbox where the company's own agents run with pi, whose command server serves this service "
         "alone.",
     )
+    nodes: dict[PoolName, PoolSize] = Field(
+        default_factory=dict,
+        description=f"The service's fleet, as a pool name mapped to how many worker containers it holds: "
+        f"{NODE_PREFIX}1 to {NODE_PREFIX}<n> over every pool, each running the service's jobs as real "
+        "processes through its node daemon. A mapping so a pool can be added without changing its shape.",
+    )
 
     @field_validator("build")
     @classmethod
@@ -172,6 +181,8 @@ class ScenarioService(BaseModel):
             raise ValueError("a ready image needs a healthcheck: the default probe runs python")
         if self.runners and not sources:
             raise ValueError("runners need a live service (build, image or module) to hand them work")
+        if self.nodes and not sources:
+            raise ValueError("nodes need a live service (build, image or module) to run jobs on")
         return self
 
 
@@ -195,6 +206,7 @@ class LiveService:
     description: str
     tools: tuple[str, ...] = ()  # the MCP tools it serves, reached through the tools gateway alone
     runners: int = 0  # how many runners it hands work to, runner-1 to runner-<n>
+    nodes: tuple[tuple[str, int], ...] = ()  # its fleet, (pool name, count) pairs; node-1 to node-<n>
 
 
 @dataclass(frozen=True)
@@ -275,11 +287,14 @@ def _parse_live_services(directory: Path, declared: object) -> tuple[LiveService
                     description=service.description,
                     tools=service.tools,
                     runners=service.runners,
+                    nodes=tuple(service.nodes.items()),
                 ),
             )
     _require_unique_tools(live)
     if len(pools := [service.name for service in live if service.runners]) > 1:
         raise ValueError(f"scenario {directory.name}: only one service may have runners, not {pools}")
+    if len(fleets := [service.name for service in live if service.nodes]) > 1:
+        raise ValueError(f"scenario {directory.name}: only one service may have nodes, not {fleets}")
     return tuple(live)
 
 

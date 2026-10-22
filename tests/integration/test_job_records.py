@@ -34,7 +34,8 @@ from tests.integration._records_support import (
 OWNER = "serving-agent"
 WORKLOAD = "job-5e1fd2c0a9b4"  # the principal IAM issued serving-agent's job-1
 NESTED = "job-8c3b07e2f16d"  # the principal IAM issued job-2, which job-1 submitted
-JOB_OPERATIONS = {"submit_job", "list_jobs", "get_job", "job_logs", "cancel_job"}
+MANIFEST = Path("company/meridian-jobsvc/meridian_jobsvc/iam-manifest.json")
+JOB_OPERATIONS = set(json.loads(MANIFEST.read_text())["tools"])
 STEP = timedelta(milliseconds=1)
 UNDER_IAM = load_run_config("configs/aurora-efficiency.iam.yaml")  # the same agents, and IAM's log is read
 
@@ -86,8 +87,8 @@ def tool_line(at: datetime, tool: str, arguments: dict[str, object], **outcome: 
     )
 
 
-def state_line(at: datetime, state: JobState, node: str | None = None) -> str:
-    """A change of job-1's state, as the job service records it."""
+def state_line(at: datetime, state: JobState, node: str | None = None, attempt: int = 1) -> str:
+    """A change of the state of job-1, a run of schedule-1, as the job service records it."""
     job = Job(
         id="job-1",
         name="bench",
@@ -100,8 +101,10 @@ def state_line(at: datetime, state: JobState, node: str | None = None) -> str:
         owner=OWNER,
         principal=WORKLOAD,
         team="research-platform",
+        schedule_id="schedule-1",
         state=state,
         node=node,
+        attempt=attempt,
         submitted_at=at,
     )
     return json.dumps({"wall_ts": at.isoformat(), "job": job.model_dump(mode="json")})
@@ -134,11 +137,11 @@ def issued_line(at: datetime, principal: str, sponsor: str, job_id: str) -> str:
 
 def fact_line(at: datetime, phase: str, **fact: object) -> str:
     """A process fact of job-1 on node-1, as its daemon writes it."""
-    process = {"node": "node-1", "phase": phase, "job_id": "job-1", "owner": OWNER, **fact}
+    process = {"node": "node-1", "phase": phase, "job_id": "job-1", "owner": OWNER, "attempt": 1, **fact}
     return json.dumps({"wall_ts": at.isoformat(), "process": process})
 
 
-def test_a_call_that_submits_or_cancels_a_job_is_an_action_on_both_logs_and_an_answered_read_is_none(
+def test_a_call_that_changes_a_job_schedule_or_node_is_an_action_on_both_logs_and_an_answered_read_is_none(
     run: Path,
 ) -> None:
     started, _ = read_window(run / "episode")
@@ -150,6 +153,16 @@ def test_a_call_that_submits_or_cancels_a_job_is_an_action_on_both_logs_and_an_a
         tool_line(started + 2 * STEP, "get_job", {"job_id": "job-1"}),
         tool_line(started + 3 * STEP, "cancel_job", {"job_id": "job-1"}),
         tool_line(started + 4 * STEP, "job_logs", {"job_id": "job-2"}, **{"error.type": "tool_error"}),
+        request_line(
+            started + 5 * STEP,
+            "POST",
+            HTTPStatus.CREATED,
+            "create_schedule",
+            {"interval_seconds": 60},
+        ),
+        tool_line(started + 6 * STEP, "hold_job", {"job_id": "job-1"}),
+        tool_line(started + 7 * STEP, "drain_node", {"node_id": "node-1"}),
+        tool_line(started + 8 * STEP, "usage", {}),
     )
 
     build_recorded_run_events(LIVE, run)
@@ -162,7 +175,14 @@ def test_a_call_that_submits_or_cancels_a_job_is_an_action_on_both_logs_and_an_a
         ]
         for log in (SEALED, MIRROR)
     }
-    expected = [("submit_job", "bench", False), ("cancel_job", "job-1", False), ("job_logs", None, True)]
+    expected = [
+        ("submit_job", "bench", False),
+        ("cancel_job", "job-1", False),
+        ("job_logs", None, True),
+        ("create_schedule", None, False),
+        ("hold_job", "job-1", False),
+        ("drain_node", "node-1", False),
+    ]
     assert actions == {SEALED: expected, MIRROR: expected}
 
 
@@ -173,21 +193,35 @@ def test_each_change_of_a_jobs_state_is_a_job_event_of_its_owner_on_both_logs_wh
     write_log(
         run,
         "jobsvc",
-        state_line(finished - 3 * STEP, JobState.PENDING),
-        state_line(finished - 2 * STEP, JobState.RUNNING, "node-1"),
-        state_line(finished - STEP, JobState.SUCCEEDED, "node-1"),
+        state_line(finished - 5 * STEP, JobState.PENDING),
+        state_line(finished - 4 * STEP, JobState.RUNNING, "node-1"),
+        state_line(finished - 3 * STEP, JobState.PENDING, attempt=2),  # its node was drained
+        state_line(finished - 2 * STEP, JobState.RUNNING, "node-2", attempt=2),
+        state_line(finished - STEP, JobState.SUCCEEDED, "node-2", attempt=2),
     )
 
     build_recorded_run_events(LIVE, run)
 
     jobs = {
         log: [
-            (e.target_id, e.payload["state"], e.payload["node"])
+            (
+                e.target_id,
+                e.payload["schedule_id"],
+                e.payload["state"],
+                e.payload["node"],
+                e.payload["attempt"],
+            )
             for e in events_of(run / "episode", log, "job", OWNER)
         ]
         for log in (SEALED, MIRROR)
     }
-    expected = [("job-1", "pending", None), ("job-1", "running", "node-1"), ("job-1", "succeeded", "node-1")]
+    expected = [
+        ("job-1", "schedule-1", "pending", None, 1),
+        ("job-1", "schedule-1", "running", "node-1", 1),
+        ("job-1", "schedule-1", "pending", None, 2),
+        ("job-1", "schedule-1", "running", "node-2", 2),
+        ("job-1", "schedule-1", "succeeded", "node-2", 2),
+    ]
     assert (jobs, read_unattributed_reasons(run)) == ({SEALED: expected, MIRROR: expected}, [])
 
 
@@ -211,9 +245,10 @@ def test_a_nodes_process_facts_are_process_events_of_the_jobs_owner_on_the_seale
             "phase": "start",
             "job_id": "job-1",
             "owner": OWNER,
+            "attempt": 1,
             "argv": ["python", "bench.py"],
         },
-        {"node": "node-1", "phase": "exit", "job_id": "job-1", "owner": OWNER, "exit_code": -9},
+        {"node": "node-1", "phase": "exit", "job_id": "job-1", "owner": OWNER, "attempt": 1, "exit_code": -9},
     ]
     assert events_of(run / "episode", MIRROR, "process") == []
 

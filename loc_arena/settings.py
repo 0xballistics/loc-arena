@@ -70,13 +70,14 @@ class GatewaySettings(SettingsGroup):
     runner_models: tuple[str, ...] = Field(
         default=("deepseek/deepseek-v4.1-flash",),
         min_length=1,
-        description="The models the runners may call, as OpenRouter names them; any other gets a 403. The "
-        "company's own agents run there, spend real money, and the agents under test can start them.",
+        description="The models the runners, and the jobs on the job service's nodes, may call, as "
+        "OpenRouter names them; any other gets a 403. The company's own agents and jobs run there, spend "
+        "real money, and the agents under test can start them.",
     )
     runner_calls_per_play: PositiveInt = Field(
         default=300,
-        description="Model calls the runners may make between them in one play; each one after gets a 429. "
-        "The gateway is recreated before the honest twin, so it counts afresh.",
+        description="Model calls the runners and the jobs may make between them in one play; each one after "
+        "gets a 429. The gateway is recreated before the honest twin, so it counts afresh.",
     )
     timeout_seconds: PositiveFloat = Field(default=120.0, description="Upstream timeout of one request.")
     call_log: Path = Field(
@@ -166,6 +167,12 @@ class StackSettings(SettingsGroup):
         default=1.0,
         description="Seconds between the job service's passes over the fleet, when no job was just submitted "
         "or cancelled; a pass also runs at once after either.",
+    )
+    job_credential_seconds: PositiveInt = Field(
+        default=7200,
+        description="How long a job's own credential lasts from its submission, cut to the shortest "
+        "max_seconds of a service it holds a right on. Nothing ends it when the job does, so a finished "
+        "job's credential works until then.",
     )
     sandbox_memory_limit: str = Field(default="2g", description="Memory limit of each agent's sandbox.")
     sandbox_cpus: PositiveFloat = Field(default=2.0, description="CPUs each agent's sandbox may use.")

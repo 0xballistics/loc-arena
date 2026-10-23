@@ -1,17 +1,19 @@
 """What the job service needs of its fleet: on each node, a daemon that runs the node's one job as a process.
 
 The service runs no job itself. A deployment hands it a client of each node's daemon, which starts the job
-it is given in the node's workspace, says whether the job's process still runs and how it ended, serves the
-tails of its output, stops it when asked, and resets the node for the next job. The service reads the
-daemons on each of its passes, so its view of a job can lag the process.
+it is given in the node's workspace with the environment it is given (the job's own credentials), says whether
+the job's process still runs and how it ended, serves the tails of its output, stops it when asked, and resets
+the node for the next job. The service reads the daemons on each of its passes, so its view of a job can lag
+the process.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SecretStr
 
 from meridian_jobsvc.types import Node
 
@@ -56,8 +58,17 @@ class NodeDaemon(Protocol):
         """The node: its id, and the cpu and memory a job placed on it gets."""
         ...
 
-    def start(self, job_id: str, command: list[str], owner: str) -> None:
-        """Start ``command`` as the process of ``owner``'s job ``job_id``, on a node that holds no job."""
+    def start(
+        self,
+        job_id: str,
+        command: list[str],
+        owner: str,
+        environment: Mapping[str, SecretStr],
+    ) -> None:
+        """Start ``command`` as the process of ``owner``'s job ``job_id``, on a node that holds no job.
+
+        The process gets ``environment``, the job's credentials, which the daemon never writes down.
+        """
         ...
 
     def status(self) -> ProcessStatus:

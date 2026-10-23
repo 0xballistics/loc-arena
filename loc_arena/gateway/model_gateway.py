@@ -2,11 +2,12 @@
 
 agentgateway forwards a request on an allowed path to the one upstream in ``settings.gateway`` under the key,
 and returns the reply unchanged. It admits callers by the SHA-256 of their token, so it never holds one: the
-episode, the host's monitors, each agent's sandbox and each runner. Runners call on their own route, which
-holds their model allowlist and their calls per play. Every request leaves an access-log record (caller,
-request and reply, refusals and failures included), tagged with its play and exported over OTLP to an
-OpenTelemetry Collector on a network only the two share; the Collector appends it to the sealed record, in a
-volume only it mounts.
+episode, the host's monitors, each agent's sandbox, each runner and each node of the job service's fleet.
+Runners call on their own route, which holds their model allowlist and their calls per play, and so do the
+jobs on a node, as that node: the gateway admits no job's own credential yet. Every request leaves an
+access-log record (caller, request and reply, refusals and failures included), tagged with its play and
+exported over OTLP to an OpenTelemetry Collector on a network only the two share; the Collector appends it to
+the sealed record, in a volume only it mounts.
 
 agentgateway exports in batches, and a batch still pending when it stops can be lost. So a stack run drains
 the record before the gateway stops (waits until the Collector holds a record of every request the gateway
@@ -354,25 +355,30 @@ def issue_gateway_secrets(
     settings: LocArenaSettings,
     held: Mapping[str, str],
     sandboxes: Mapping[str, str],
-    runners: Mapping[str, str],
+    compute: Mapping[str, str],
     play: Play,
 ) -> dict[str, str]:
     """One play's gateway secrets by host variable: the ``held`` tokens and configs admitting its callers.
 
-    The callers are the episode and the host, each sandbox in ``sandboxes`` and each runner in ``runners``
-    (compose service to token).
+    The callers are the episode and the host, each sandbox in ``sandboxes``, and on the runners' route each
+    runner and each node of the job service's fleet in ``compute`` (compose service to token).
     """
     callers = [
         Caller(EPISODE_CALLER, held[EPISODE_TOKEN_VARIABLE], "caller"),
         Caller(HOST_CALLER, held[HOST_TOKEN_VARIABLE], "caller"),
         *(Caller(name, token, "caller") for name, token in sandboxes.items()),
-        *(Caller(name, token, "runner") for name, token in runners.items()),
+        *(Caller(name, token, "runner") for name, token in compute.items()),
     ]
     return {
         **held,
         MODEL_GATEWAY_CONFIG_VARIABLE: render_model_gateway_config(settings, callers, play),
         COLLECTOR_CONFIG_VARIABLE: render_collector_config(settings),
     }
+
+
+def runners_api_url(settings: LocArenaSettings) -> str:
+    """The gateway's API on the runners' route, OpenRouter's passed through, as runners and jobs call it."""
+    return f"http://{MODEL_GATEWAY_SERVICE}:{settings.gateway.port}/{RUNNER_ROUTE_PREFIX}/api/v1"
 
 
 def render_episode_environment(settings: LocArenaSettings) -> dict[str, str]:

@@ -13,7 +13,8 @@
     },
     "submit_job": {
       "permission": "submit",
-      "requestable": true
+      "requestable": true,
+      "launch": true
     },
     "list_jobs": {
       "permission": "read",

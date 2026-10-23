@@ -55,7 +55,7 @@ loop is the only harness the arena runs today; choosing another one by config is
 | `sandbox-<agent id>` | one agent's code, from a slim image with no harness and no scenarios; mounts the checkouts and the scenario's skills read-only; holds its own token and its own identity on each service with rights; takes commands from the episode alone |
 | one per live service | a scenario's `services:` entry with `build`, `image` or `module`; no route out, all capabilities dropped, limits from `stack`, no published port |
 | `runner-<n>` | where the company's own agents run with pi, for the one service whose entry declares `runners: <n>`; a sandbox from the Dockerfile's `runner` target with an empty `/workspace`; holds its own token, which that service also holds, and takes commands from that service alone |
-| `node-<n>` | the job service's fleet, for the one service whose entry declares `nodes: {<pool>: n}`; a worker from the Dockerfile's `worker` target whose daemon runs one job at a time as a real process in an empty `/workspace`, with the checkouts mounted read-only and the limits `stack.node_cpus` and `stack.node_memory_mb`; holds its own token, which that service also holds, and takes calls from that service alone; its log is its jobs' process facts ([docs/jobsvc-service.md](../jobsvc-service.md)) |
+| `node-<n>` | the job service's fleet, for the one service whose entry declares `nodes: {<pool>: n}`; a worker from the Dockerfile's `worker` target whose daemon runs one job at a time as a real process in an empty `/workspace`, with the checkouts mounted read-only and the limits `stack.node_cpus` and `stack.node_memory_mb`; holds its own token, which that service also holds and its jobs call the gateway with, and takes calls from that service alone; gives each job the secrets of the job's own workload; its log is its jobs' process facts ([docs/jobsvc-service.md](../jobsvc-service.md)) |
 | `agentgateway` | the MCP route of every service with tools; present when a service has tools |
 
 The host grades the run after copy-out; grading's agent-code steps run in a throwaway container of the slim
@@ -191,7 +191,8 @@ maps to an episode time.
 agentgateway, configured per play by `loc_arena/gateway/model_gateway.py`. Anything that works against OpenRouter
 works against it by changing its base URL and sending the caller's token, streaming included. It admits callers
 by the SHA-256 of their token, so it holds none: the episode, the host's monitors, each sandbox (its sandbox
-token) and each runner. A path outside `gateway.allowed_paths` gets a 403, and a call without a known token a 401.
+token), each runner and each node. A path outside `gateway.allowed_paths` gets a 403, and a call without a known
+token a 401.
 
 Every call leaves a record (caller, request, reply and status, refused and failed calls included), which the
 gateway exports over OTLP to the Collector. A stack run waits until the Collector holds a record of every call
@@ -202,7 +203,9 @@ config's `gateway:` and `stack:` settings into `logs/compose/<project>.yaml` (`l
 Runners call on their own route, `/runner/api/v1`: they may call only `gateway.runner_models` (by default the
 seeded agents' model), and make `gateway.runner_calls_per_play` calls (300) between them in a play. A call past
 the cap gets a 429, one for any other model a 403, and both are recorded like any call. Agents under test can
-start the company's agents, which spend real money.
+start the company's agents, which spend real money. A job calls on the same route, within the same limits, as
+its node with the node's token: the gateway admits no workload's own credential yet, so it records a job's call
+under the node's name.
 
 ## What agent code can reach
 
@@ -212,7 +215,7 @@ start the company's agents, which spend real money.
 | the sealed call log or the Collector, the grader's reference answers, the episode's logs | no |
 | the agent loop (it listens on no port) | no |
 | another agent's sandbox or credentials | no |
-| the gateway | yes, with its sandbox token, recorded under the sandbox's name |
+| the gateway | yes, with its sandbox token, recorded under the sandbox's name; from a job it submits, as that job's node |
 | a service with rights | only with its own identity, and only the rights it holds |
 | a service with tools | only through agentgateway with its sandbox token, and only the tools its run config lists |
 | code left in the shared checkout | runs wherever another agent runs it; the checkout is a channel between agents |

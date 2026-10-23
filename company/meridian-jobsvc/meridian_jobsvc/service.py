@@ -8,6 +8,11 @@ poll of the service. A job runs until its process exits, then has ``succeeded`` 
 ``failed`` otherwise; a cancelled job is ``cancelling`` until its process is gone, then ``cancelled``; a job
 waiting on one that did not succeed fails. Only a job's owner may cancel it. Each change of a job's state is
 one JSON line of the service's record, holding the job as it is then.
+
+Every job runs as an identity of its own, never as its submitter: before a job is queued, the central
+authority issues it one from the credential its submitter presented (``meridian_jobsvc.authority``). Its
+process gets each of its secrets in an environment variable (``credential_variable``), and the service keeps
+them only until the process has them; no record or answer holds one.
 """
 
 from __future__ import annotations
@@ -20,9 +25,10 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr
 
 from meridian_common.jobclient.models import JobSpec, JobState
+from meridian_jobsvc.authority import JobIdentity, WorkloadIssuer
 from meridian_jobsvc.errors import JobNotFound, JobStateConflict, NotJobOwner, SchedulingError
 from meridian_jobsvc.fleet import NodeDaemon, NodeUnavailable, ProcessOutput, ProcessState
 from meridian_jobsvc.queue.jobqueue import JobQueue
@@ -66,7 +72,7 @@ class JobRequest(BaseModel):
 
 
 class Job(BaseModel):
-    """One job: what it asked for, whose it is, the node it was placed on, and how it went."""
+    """One job: what it asked for, whose it is, the identity it runs as, where it was placed, how it went."""
 
     id: str
     name: str
@@ -77,6 +83,7 @@ class Job(BaseModel):
     depends_on: list[str]
     labels: dict[str, str]
     owner: str
+    principal: str  # the job's own identity, which its calls carry: never its owner's
     state: JobState
     node: str | None = None
     submitted_at: datetime
@@ -103,22 +110,34 @@ class JobLogs(BaseModel):
 class JobService:
     """Every job by id, the queue of those waiting to start, and the fleet that runs them."""
 
-    def __init__(self, daemons: Sequence[NodeDaemon], write_record: Callable[[str], None]) -> None:
-        """Run jobs on the nodes of ``daemons``, first free one first, and record each change of state."""
+    def __init__(
+        self,
+        daemons: Sequence[NodeDaemon],
+        write_record: Callable[[str], None],
+        issuer: WorkloadIssuer,
+    ) -> None:
+        """Run jobs on the nodes of ``daemons``, first free one first, each as an identity from ``issuer``.
+
+        Each change of a job's state is written with ``write_record``.
+        """
         self._daemons = {daemon.node.node_id: daemon for daemon in daemons}
         self._write_record = write_record
+        self._issuer = issuer
         self._queue = JobQueue()
         self._jobs: dict[str, Job] = {}
+        self._identities: dict[str, JobIdentity] = {}  # each queued job's, until its process has it
         self._placed: dict[str, str] = {}  # the id of the job on each node that holds one
         self._outputs: dict[str, ProcessOutput] = {}  # each ended job's output, kept once its node is reset
         self._lock = threading.Lock()  # never held while a node's daemon is called
         self._changed = threading.Event()  # a job was submitted or cancelled: the next pass comes at once
 
-    def submit(self, request: JobRequest, owner: str) -> Job:
+    def submit(self, request: JobRequest, owner: str, credential: str | None) -> Job:
         """Queue ``request`` as ``owner``'s job: it starts once its dependencies succeed and a node is free.
 
-        Raises ``SchedulingError`` for a job larger than every node, and ``DependencyError`` for a dependency
-        that is no job.
+        It runs as the identity the authority issues it, under its id and its name, from ``credential``: the
+        one ``owner`` presented. Raises ``SchedulingError`` for a job larger than every node,
+        ``DependencyError`` for a dependency that is no job, and ``CredentialRefused`` or
+        ``CredentialUnavailable`` when it could not be issued its identity; a refused job is not queued.
         """
         spec = JobSpec(
             name=request.name,
@@ -136,11 +155,21 @@ class JobService:
                 path=request.name,
             )
         with self._lock:
-            job_id = self._queue.submit(spec)
+            job_id = self._queue.submit(spec)  # no pass places it until it is in the registry, once issued
+        try:
+            identity = self._issuer.issue(credential, job_id, request.name)
+        except Exception:
+            with self._lock:
+                self._queue.dispatch(job_id)
+                self._queue.notify_failed(job_id)
+            raise
+        with self._lock:
+            self._identities[job_id] = identity
             job = Job(
                 id=job_id,
                 **request.model_dump(),
                 owner=owner,
+                principal=identity.principal,
                 state=JobState.PENDING,
                 submitted_at=datetime.now(UTC),
             )
@@ -186,6 +215,7 @@ class JobService:
             if job.state is JobState.PENDING:
                 self._queue.dispatch(job_id)
                 self._queue.notify_failed(job_id)
+                self._identities.pop(job_id, None)
                 job = self._record(job, state=JobState.CANCELLED, ended_at=datetime.now(UTC))
             elif job.state is JobState.RUNNING:
                 job = self._record(job, state=JobState.CANCELLING)
@@ -205,9 +235,9 @@ class JobService:
             if job is not None:
                 with contextlib.suppress(NodeUnavailable):
                     self._follow(daemon, job)
-        for daemon, job in self._place_ready_jobs():
+        for daemon, job, identity in self._place_ready_jobs():
             try:
-                daemon.start(job.id, job.command, job.owner)
+                daemon.start(job.id, job.command, job.owner, job_environment(identity))
             except NodeUnavailable as error:
                 with contextlib.suppress(NodeUnavailable):
                     daemon.reset()  # in case it started the job but the answer was lost
@@ -241,12 +271,19 @@ class JobService:
             state = JobState.SUCCEEDED if status.exit_code == 0 else JobState.FAILED
             self._end(job.id, state, status.exit_code, "")
 
-    def _place_ready_jobs(self) -> list[tuple[NodeDaemon, Job]]:
-        """Fail the jobs waiting on one that failed; place each ready job on the first free node it fits."""
+    def _place_ready_jobs(self) -> list[tuple[NodeDaemon, Job, JobIdentity]]:
+        """Fail the jobs waiting on one that failed; place each ready job on the first free node it fits.
+
+        Each placed job comes with its identity, which the service forgets once handed over. A job still being
+        issued its identity is not in the registry yet, and is left to a later pass.
+        """
         with self._lock:
             for blocked in self._queue.blocked():
+                if blocked.job_id not in self._jobs:
+                    continue
                 self._queue.dispatch(blocked.job_id)
                 self._queue.notify_failed(blocked.job_id)
+                self._identities.pop(blocked.job_id, None)
                 self._record(
                     self._jobs[blocked.job_id],
                     state=JobState.FAILED,
@@ -256,6 +293,8 @@ class JobService:
             free = [node_id for node_id in self._daemons if node_id not in self._placed]
             placed = []
             for ready in self._queue.ready():
+                if ready.job_id not in self._jobs:
+                    continue
                 fitting = (node_id for node_id in free if _fits(ready.spec, self._daemons[node_id].node))
                 node_id = next(fitting, None)
                 if node_id is None:
@@ -269,7 +308,7 @@ class JobService:
                     node=node_id,
                     started_at=datetime.now(UTC),
                 )
-                placed.append((self._daemons[node_id], job))
+                placed.append((self._daemons[node_id], job, self._identities.pop(ready.job_id)))
         return placed
 
     def _end(self, job_id: str, state: JobState, exit_code: int | None, message: str) -> None:
@@ -300,6 +339,16 @@ class JobService:
         line = {"wall_ts": datetime.now(UTC).isoformat(), "job": job.model_dump(mode="json")}
         self._write_record(json.dumps(line))
         return job
+
+
+def credential_variable(service: str) -> str:
+    """The environment variable holding a job's secret on ``service``: ``MERIDIAN_NOTES_TOKEN`` for notes."""
+    return f"MERIDIAN_{service.upper().replace('-', '_')}_TOKEN"
+
+
+def job_environment(identity: JobIdentity) -> dict[str, SecretStr]:
+    """What a job's process gets of its identity: each secret in its service's variable."""
+    return {credential_variable(service): secret for service, secret in identity.secrets.items()}
 
 
 def _fits(spec: JobSpec, node: Node) -> bool:

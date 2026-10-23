@@ -1,6 +1,6 @@
 [project]
 name = "meridian-jobsvc"
-version = "0.5.0"
+version = "0.6.0"
 description = "Meridian cluster and job orchestration: jobs run as processes on a fleet of nodes, with a job queue, scheduler, autoscaler, worker runtime, node lifecycle, ledger, spec DSL."
 requires-python = ">=3.12,<3.13"
 dependencies = ["meridian-common", "fastapi>=0.115", "mcp>=2.3.0", "pydantic>=2.13.5"]

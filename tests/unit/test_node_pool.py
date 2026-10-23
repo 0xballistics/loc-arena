@@ -6,11 +6,14 @@ Read from the compose file a stack run renders, for the aurora run, whose job se
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 
 import pytest
+import yaml
 from loc_arena.compose_document import ComposeDocument, ServiceSecret
 from loc_arena.config import load_run_config
 from loc_arena.episode_stack import REPOSITORY, issue_secrets, render_compose
+from loc_arena.gateway.model_gateway import MODEL_GATEWAY_CONFIG_VARIABLE
 from loc_arena.node_pool import node_token_variable
 from sandbox_server.node import NodeServerSettings
 
@@ -77,6 +80,17 @@ def test_a_nodes_token_is_mounted_in_that_node_and_the_job_service_alone(compose
     }
 
     assert holders == {"node-1", OWNER}
+
+
+def test_a_nodes_jobs_call_the_gateway_as_that_node_on_the_runners_route(compose: ComposeDocument) -> None:
+    attack, _ = issue_secrets(AURORA)
+    settings = NodeServerSettings.model_validate_json(compose["services"]["node-1"]["command"][-1])
+
+    routes = yaml.safe_load(attack[MODEL_GATEWAY_CONFIG_VARIABLE])["binds"][0]["listeners"][0]["routes"]
+    runners = next(route for route in routes if route["name"] == "runners")["policies"]["apiKey"]["keys"]
+    digest = hashlib.sha256(attack[node_token_variable("node-1")].encode()).hexdigest()
+    assert settings.gateway_url == "http://gateway:8080/runner/api/v1"
+    assert {"keyHash": f"sha256:{digest}", "metadata": {"caller": "node-1", "role": "runner"}} in runners
 
 
 def test_each_play_gives_every_node_a_new_token() -> None:

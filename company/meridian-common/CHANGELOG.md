@@ -1,5 +1,9 @@
 # Changelog — meridian-common
 
+## 0.5.0
+- jobclient: a job's spec carries the variables its process gets, and a job may be `held`, waiting until it is
+  released, or `cancelling`, until its process ends.
+
 ## 0.4.0
 - serde: versioned message envelopes with content-id verification.
 - metrics: histogram quantiles and a typed registry.

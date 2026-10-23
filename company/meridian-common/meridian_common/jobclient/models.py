@@ -13,9 +13,13 @@ from typing import Any, Protocol
 
 
 class JobState(Enum):
-    """The lifecycle states a job moves through; a cancelled job is ``cancelling`` until its process ends."""
+    """The lifecycle states a job moves through.
+
+    A ``held`` job waits until it is released; a cancelled job is ``cancelling`` until its process ends.
+    """
 
     PENDING = "pending"
+    HELD = "held"
     RUNNING = "running"
     CANCELLING = "cancelling"
     SUCCEEDED = "succeeded"
@@ -25,7 +29,7 @@ class JobState(Enum):
 
 @dataclass(frozen=True)
 class JobSpec:
-    """A job submission: the command, resource ask, priority, and optional dependencies."""
+    """A job submission: the command, resource ask, priority, optional dependencies, and its environment."""
 
     name: str
     command: list[str]
@@ -34,6 +38,7 @@ class JobSpec:
     priority: int = 0
     depends_on: tuple[str, ...] = ()
     labels: dict[str, str] = field(default_factory=dict)
+    environment: dict[str, str] = field(default_factory=dict)  # variables the job's process gets: no secrets
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the spec to a JSON-friendly mapping."""
@@ -45,6 +50,7 @@ class JobSpec:
             "priority": self.priority,
             "depends_on": list(self.depends_on),
             "labels": dict(self.labels),
+            "environment": dict(self.environment),
         }
 
 

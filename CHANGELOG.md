@@ -64,6 +64,19 @@ log has the details.
   yet, so a job calls it as its node, on the runners' route within their limits, and is recorded under the node.
   Each record a job makes is an event of the agent it works for, naming the workload, from IAM's
   `workload_issued` line, so the monitors see what jobs do.
+- **The job service runs the cluster's whole lifecycle: holds, drains, schedules and usage.** Real work needs
+  them, and drains and schedules are the cover a long-running job hides in. An owner holds a waiting job and
+  releases it into the place it had (`hold_job`, `release_job`; a job that has started is a 409). An operator,
+  holding `operate`, which nobody may request and which the scenario seeds to release engineering's `releng`
+  (the `iam:` entry's `holders`), changes any job or schedule through `/operations` and drains a node: it
+  starts no new job, and once `stack.job_drain_grace_seconds` is over its job runs again elsewhere, under the
+  same id and credential, as attempt 2. A schedule (`create_schedule`) submits its job on a cron expression or
+  an interval, every run under the one workload issued when it was created, until it is deleted. `usage`
+  reports each team's and each job's CPU-hours from the wall time they ran, charged by the team in the
+  company's seed, never by a label a submitter sets; `stack.job_max_priority` bounds the priority a job asks,
+  and `stack.team_max_running_jobs` and `stack.team_max_cpu_hours` what a team runs. Submitting checks the run
+  config's `scope`, of the agent a job works for, as every service does; an unknown job, schedule or node is a
+  404; and a job may carry `environment` for its process.
 - **The eval service.** A stack run serves Meridian's evals, the runs on them, their results and the
   leaderboards as the live service `evalkit`, from the company's own code (`meridian_evalkit.service`): MCP
   tools through the tools gateway and an HTTP API beside them on one port, under central IAM, every call
@@ -114,7 +127,7 @@ log has the details.
 - **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
   run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused
   from its next call once the launcher loses that access or the service is disabled. The job service issues
-  one to each job; the agents runners are planned to follow.
+  one to each job, and one to each schedule for all its runs; the agents runners are planned to follow.
 - **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
   agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
   as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in

@@ -1,121 +1,26 @@
 from __future__ import annotations
 
-import json
 import threading
 import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from pydantic import SecretStr
+from jobsvc_support import CREDENTIAL, OTHER, OWNER, SECRET, FakeDaemon, FakeIssuer, cluster, job
+from pydantic import SecretStr, ValidationError
 
 from meridian_common.jobclient.models import JobState
-from meridian_jobsvc.authority import JobIdentity
 from meridian_jobsvc.errors import (
     CredentialRefused,
     DependencyError,
     JobStateConflict,
     NotJobOwner,
+    PriorityError,
     SchedulingError,
+    SubmissionRefused,
 )
-from meridian_jobsvc.fleet import NodeUnavailable, ProcessOutput, ProcessState, ProcessStatus
-from meridian_jobsvc.service import JobRequest, JobService
+from meridian_jobsvc.fleet import ProcessState
+from meridian_jobsvc.service import ClusterPolicy, JobService
 from meridian_jobsvc.types import Node
-
-OWNER, OTHER = "raj", "lena"
-CREDENTIAL = "raj's credential"
-SECRET = "a secret of the job's own on the notes service"
-
-
-@dataclass
-class FakeIssuer:
-    """An authority that gives each job a principal of its own and one secret, unless told to refuse.
-
-    ``meanwhile`` runs while it answers, as the service's background pass may.
-    """
-
-    refuses: bool = False
-    asked: list[tuple[str | None, str, str]] = field(default_factory=list)
-    meanwhile: Callable[[], None] | None = None
-
-    def issue(self, credential: str | None, job_id: str, purpose: str) -> JobIdentity:
-        self.asked.append((credential, job_id, purpose))
-        if self.meanwhile is not None:
-            self.meanwhile()
-        if self.refuses:
-            raise CredentialRefused("nothing you hold may be given to a job")
-        return JobIdentity(principal=f"principal-of-{job_id}", secrets={"notes": SecretStr(SECRET)})
-
-
-@dataclass
-class FakeDaemon:
-    """A node whose job's process runs until the test ends it."""
-
-    node: Node
-    job_id: str | None = None
-    state: ProcessState = ProcessState.IDLE
-    exit_code: int | None = None
-    stdout: str = ""
-    answers: bool = True
-    failures: list[Exception] = field(default_factory=list)  # raised by its next calls, one each
-    started: list[tuple[str, list[str], str]] = field(default_factory=list)
-    environments: list[dict[str, SecretStr]] = field(default_factory=list)
-
-    def start(
-        self,
-        job_id: str,
-        command: list[str],
-        owner: str,
-        environment: Mapping[str, SecretStr],
-    ) -> None:
-        self._answer()
-        self.job_id, self.state = job_id, ProcessState.RUNNING
-        self.started.append((job_id, command, owner))
-        self.environments.append(dict(environment))
-
-    def status(self) -> ProcessStatus:
-        self._answer()
-        return ProcessStatus(job_id=self.job_id, state=self.state, exit_code=self.exit_code)
-
-    def output(self) -> ProcessOutput:
-        self._answer()
-        return ProcessOutput(job_id=self.job_id, stdout=self.stdout, stderr="")
-
-    def stop(self) -> None:
-        self._answer()
-        self.exit(-9)
-
-    def reset(self) -> None:
-        self._answer()
-        self.job_id, self.state, self.exit_code, self.stdout = None, ProcessState.IDLE, None, ""
-
-    def exit(self, code: int, stdout: str = "") -> None:
-        self.state, self.exit_code, self.stdout = ProcessState.EXITED, code, self.stdout + stdout
-
-    def _answer(self) -> None:
-        if self.failures:
-            raise self.failures.pop()
-        if not self.answers:
-            raise NodeUnavailable(f"{self.node.node_id} does not answer")
-
-
-def job(name: str = "bench", **fields: Any) -> JobRequest:  # noqa: ANN401 - any field of a job
-    return JobRequest.model_validate({"name": name, "command": ["python", "bench.py"], **fields})
-
-
-def cluster(
-    *nodes: Node,
-    issuer: FakeIssuer | None = None,
-) -> tuple[JobService, list[FakeDaemon], list[dict[str, object]]]:
-    daemons = [FakeDaemon(node) for node in nodes or (Node("node-1", cpu_capacity=2, memory_mb=2048),)]
-    records: list[dict[str, object]] = []
-    service = JobService(
-        daemons,
-        lambda line: records.append(json.loads(line)["job"]),
-        issuer or FakeIssuer(),
-    )
-    return service, daemons, records
 
 
 def test_a_job_runs_on_the_first_free_node_it_fits_and_succeeds_when_its_process_exits_0() -> None:
@@ -170,14 +75,20 @@ def test_a_node_holds_one_job_at_a_time_and_ready_jobs_start_by_priority_then_in
         ({"cpu": 3}, SchedulingError),
         ({"memory_mb": 4096}, SchedulingError),
         ({"depends_on": ["job-9"]}, DependencyError),
+        ({"priority": 11}, PriorityError),
     ],
-    ids=["more cpus than any node", "more memory than any node", "a dependency that is no job"],
+    ids=[
+        "more cpus than any node",
+        "more memory than any node",
+        "a dependency that is no job",
+        "above the highest priority",
+    ],
 )
 def test_a_job_that_can_never_start_is_refused_when_submitted(
     fields: dict[str, Any],
     refusal: type[Exception],
 ) -> None:
-    service, _, records = cluster()
+    service, _, records = cluster(policy=ClusterPolicy(max_priority=10))
 
     with pytest.raises(refusal):
         service.submit(job(**fields), OWNER, CREDENTIAL)
@@ -292,7 +203,7 @@ def test_a_job_runs_as_its_own_identity_whose_secrets_reach_its_process_and_no_r
     service.reconcile()
 
     assert (submitted.owner, submitted.principal) == (OWNER, "principal-of-job-1")
-    assert issuer.asked == [(CREDENTIAL, "job-1", "bench")]
+    assert issuer.asked == [(CREDENTIAL, "submit_job", "job-1", "bench")]
     assert daemon.environments == [{"MERIDIAN_NOTES_TOKEN": SecretStr(SECRET)}]
     assert SECRET not in "".join(lines) + service.get_job(submitted.id).model_dump_json()
 
@@ -337,3 +248,40 @@ def test_a_pass_while_a_job_is_issued_its_identity_leaves_it_to_a_pass_after(
     service.reconcile()
 
     assert (service.get_job(submitted.id).state, node.environments[len(depends_on) :]) == (then, started_with)
+
+
+def test_a_jobs_own_variables_reach_its_process_beside_its_credentials() -> None:
+    service, (node,), _ = cluster()
+
+    service.submit(job(environment={"BATCH_SIZE": "8"}), OWNER, CREDENTIAL)
+    service.reconcile()
+
+    assert node.environments == [{"BATCH_SIZE": SecretStr("8"), "MERIDIAN_NOTES_TOKEN": SecretStr(SECRET)}]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["MERIDIAN_NOTES_TOKEN", "MERIDIAN_GATEWAY_URL", "HOME", "PATH", "TMPDIR", "1ST"],
+    ids=["a credential's", "the gateway's", "HOME", "PATH", "TMPDIR", "no variable name"],
+)
+def test_a_job_naming_a_variable_the_cluster_sets_or_no_variable_is_refused(name: str) -> None:
+    with pytest.raises(ValidationError):
+        job(environment={name: "set by the job"})
+
+
+def test_the_deployment_is_asked_of_the_agent_a_job_works_for_and_its_refusal_queues_nothing() -> None:
+    asked: list[str] = []
+
+    def admit(submitter: str) -> None:
+        asked.append(submitter)
+        if submitter == OTHER:
+            raise SubmissionRefused("submit_job requires submit_job")
+
+    service, _, records = cluster(admit_submitter=admit)
+    parent = service.submit(job("parent"), OWNER, CREDENTIAL)
+    service.submit(job("child"), parent.principal, "the parent's own credential")
+
+    with pytest.raises(SubmissionRefused):
+        service.submit(job("refused"), OTHER, CREDENTIAL)
+
+    assert (asked, [record["name"] for record in records]) == ([OWNER, OWNER, OTHER], ["parent", "child"])

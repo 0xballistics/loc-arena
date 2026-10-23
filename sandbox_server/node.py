@@ -109,6 +109,7 @@ class NodeProcess:
         self._lock = threading.Lock()
         self._job_id: str | None = None
         self._owner: str | None = None  # the principal whose job it is, named on every fact of that job
+        self._attempt = 1  # which run of the job it is: one more each time a drain took it off a node
         self._process: subprocess.Popen[bytes] | None = None
         self._streams: tuple[object, object] | None = None  # the job's open stdout and stderr files
         self._exit_code: int | None = None
@@ -148,8 +149,9 @@ class NodeProcess:
                 detail = f"cannot start {job.argv[0]!r}: {error.strerror}"
                 raise HTTPException(HTTPStatus.UNPROCESSABLE_ENTITY, detail) from error
             self._job_id, self._owner, self._streams = job.job_id, job.owner, (stdout, stderr)
+            self._attempt = job.attempt
             self._exit_code, self._final_output = None, None
-        self._fact("start", job_id=job.job_id, owner=job.owner, argv=list(job.argv))
+        self._fact("start", job_id=job.job_id, owner=job.owner, attempt=job.attempt, argv=list(job.argv))
 
     def status(self) -> NodeProcessStatus:
         """The node's job and how its process is, reaping it the first time it is seen ended."""
@@ -198,7 +200,7 @@ class NodeProcess:
             return
         self._exit_code = code
         self._final_output = self._read_output()
-        self._fact("exit", job_id=self._job_id, owner=self._owner, exit_code=code)
+        self._fact("exit", job_id=self._job_id, owner=self._owner, attempt=self._attempt, exit_code=code)
 
     def _kill(self) -> None:
         if self._process is None:

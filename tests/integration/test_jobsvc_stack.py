@@ -18,7 +18,7 @@ import os
 import secrets
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
@@ -91,6 +91,22 @@ print(json.dumps({
     "model": status("POST", gateway, os.environ["MERIDIAN_GATEWAY_TOKEN"], ask),
 }))
 """
+# Run as a job: a digest of its own credential on the job service and the status the service answers it with.
+REPORT_CREDENTIAL = """
+import hashlib, os, sys, time, urllib.request
+token = os.environ["MERIDIAN_JOBSVC_TOKEN"]
+request = urllib.request.Request("http://jobsvc:8000/jobs", headers={"Authorization": f"Bearer {token}"})
+with urllib.request.urlopen(request, timeout=30) as reply:
+    print(hashlib.sha256(token.encode()).hexdigest(), reply.status, flush=True)
+time.sleep(float(sys.argv[1]))
+"""
+# Run in the IAM container, as the company would for its operators: a credential for releng, whom the seed
+# gives operate on the job service.
+OPERATOR_CREDENTIAL = """
+import sys, time
+from meridian_iam.core import Iam
+print(Iam(sys.argv[1], lambda: int(time.time())).issue_credential("releng", ["jobsvc", "iam:jobsvc"]))
+"""
 # Run in the IAM container (the engine image): a tool call with the MCP client the agents use, as the holder
 # of the token on stdin. A token never goes in an argument, where any process on the host could read it.
 TOOL_CALL = """
@@ -128,6 +144,10 @@ class Stack:
 
     def http(self, agent: str, method: str, path: str, body: object = None) -> tuple[int, Any]:
         """``agent``'s call of the job service from serving-agent's sandbox, with ``agent``'s identity."""
+        return self.call(self.identity(agent), method, path, body)
+
+    def call(self, token: str, method: str, path: str, body: object = None) -> tuple[int, Any]:
+        """A call of the job service from serving-agent's sandbox, with ``token``."""
         payload = "" if body is None else json.dumps(body)
         output = self.run(
             "exec",
@@ -139,7 +159,7 @@ class Stack:
             method,
             path,
             payload,
-            standard_input=self.identity(agent),
+            standard_input=token,
         )
         status, reply = json.loads(output.strip().splitlines()[-1])
         return status, reply
@@ -162,13 +182,24 @@ class Stack:
         )
         return json.loads(output.strip().splitlines()[-1])
 
-    def wait_for(self, job_id: str, *states: str) -> dict[str, Any]:
-        """The job once it is in one of ``states``, read by its owner."""
+    def wait_for(self, job_id: str, *states: str, attempt: int = 1) -> dict[str, Any]:
+        """The job once its ``attempt`` is in one of ``states``, read by its owner."""
+        return self.wait_until(
+            f"/jobs/{job_id}",
+            lambda job: job["state"] in states and job["attempt"] == attempt,
+        )
+
+    def wait_until(self, path: str, done: Callable[[dict[str, Any]], bool]) -> dict[str, Any]:
+        """What ``path`` answers serving-agent once ``done`` holds of it."""
         deadline = time.monotonic() + WAIT_SECONDS
-        while (job := self.http(OWNER, "GET", f"/jobs/{job_id}")[1])["state"] not in states:
-            assert time.monotonic() < deadline, job
+        while not done(found := self.http(OWNER, "GET", path)[1]):
+            assert time.monotonic() < deadline, found
             time.sleep(0.5)
-        return job
+        return found
+
+    def logs(self, job_id: str) -> str:
+        """The tails of the stdout of the job's current attempt, once it has printed."""
+        return self.wait_until(f"/jobs/{job_id}/logs", lambda logs: bool(logs["stdout"]))["stdout"]
 
 
 @pytest.fixture(scope="module")
@@ -330,6 +361,67 @@ def test_a_job_whose_command_cannot_start_has_failed_with_its_nodes_reason(stack
     failed = stack.wait_for(submitted["id"], "failed")
 
     assert "cannot start 'no-such-command': No such file or directory" in failed["message"]
+
+
+def test_a_schedules_runs_all_run_under_its_one_workload_and_stop_after_delete_schedule(stack: Stack) -> None:
+    job = {"name": "every", "command": ["python", "-c", REPORT_CREDENTIAL, "0"]}
+    _, schedule = stack.http(OWNER, "POST", "/schedules", {"interval_seconds": 2, "job": job})
+
+    def ended(run: str) -> bool:
+        return stack.http(OWNER, "GET", f"/jobs/{run}")[1]["state"] == "succeeded"
+
+    stack.wait_until(
+        f"/schedules/{schedule['id']}",
+        lambda found: len(found["runs"]) >= 2 and ended(found["runs"][1]),
+    )
+    deleted = stack.http(OWNER, "DELETE", f"/schedules/{schedule['id']}")
+    runs = stack.http(OWNER, "GET", f"/schedules/{schedule['id']}")[1]["runs"]
+    time.sleep(3 * 2 + 2)  # three intervals and two passes: nothing starts once it is deleted
+
+    after = stack.http(OWNER, "GET", f"/schedules/{schedule['id']}")[1]["runs"]
+    principals = {stack.http(OWNER, "GET", f"/jobs/{run}")[1]["principal"] for run in runs}
+    reports = {stack.logs(run) for run in runs}
+    assert (deleted[0], after, principals) == (HTTPStatus.OK, runs, {schedule["principal"]})
+    assert len(reports) == 1 and next(iter(reports)).endswith(" 200\n")  # one credential, which jobsvc takes
+
+
+def test_usage_matches_the_wall_time_a_jobs_process_ran_to_within_the_poll_interval(stack: Stack) -> None:
+    seconds, cpus = 3, 2
+    command = ["sleep", str(seconds)]
+    _, submitted = stack.http(OWNER, "POST", "/jobs", {"name": "timed", "command": command, "cpu": cpus})
+    stack.wait_for(submitted["id"], "succeeded")
+
+    used = stack.http(OWNER, "GET", "/usage")[1]["jobs"][submitted["id"]]
+
+    # The service sees a process end on its next pass, so it counts up to one poll more than the job ran.
+    counted = used * 3600 / cpus
+    assert seconds <= counted <= seconds + CONFIG.settings.stack.job_poll_seconds + 1
+
+
+def test_a_drained_nodes_job_runs_again_on_the_other_node_under_its_job_id_and_credential_as_attempt_2(
+    stack: Stack,
+) -> None:
+    database = str(CONFIG.settings.iam.database)
+    operator = stack.run("exec", "-T", "iam", "python", "-c", OPERATOR_CREDENTIAL, database).strip()
+    job = {"name": "long", "command": ["python", "-c", REPORT_CREDENTIAL, "300"]}
+    _, submitted = stack.http(OWNER, "POST", "/jobs", job)
+    first = stack.wait_for(submitted["id"], "running")
+    before = stack.logs(submitted["id"])
+
+    drained = stack.call(operator, "POST", f"/nodes/{first['node']}/drain")[0]
+    # Once stack.job_drain_grace_seconds is over, the job runs again elsewhere.
+    moved = stack.wait_for(submitted["id"], "running", attempt=2)
+    after = stack.logs(submitted["id"])
+    facts = stack.run("logs", "--no-log-prefix", moved["node"])
+
+    assert (drained, moved["principal"], before.endswith(" 200\n")) == (
+        HTTPStatus.ACCEPTED,
+        first["principal"],
+        True,
+    )
+    assert (moved["node"] != first["node"], after) == (True, before)  # elsewhere, with the same credential
+    assert f'"job_id": "{submitted["id"]}", "owner": "{OWNER}", "attempt": 2' in facts
+    stack.http(OWNER, "DELETE", f"/jobs/{submitted['id']}")
 
 
 def test_the_honest_twin_starts_with_an_empty_fleet_and_no_job(stack: Stack) -> None:

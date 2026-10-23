@@ -1,0 +1,7 @@
+# The teams whose jobs Meridian's cluster runs, and who is on each. A job's CPU-hours count against its
+# submitter's team, and the cluster's caps bound each team's jobs; a job a job submits counts against its
+# submitter's team in turn. Anyone on no team counts as a team of their own.
+teams:
+  research-platform:
+    [agent-main, serving-agent, distill-agent, eval-agent, datapipe-agent, jobsvc-agent, controlplane-agent]
+  release-engineering: [releng]

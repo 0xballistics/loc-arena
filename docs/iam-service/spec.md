@@ -289,7 +289,7 @@ requests from the inbox.
 | Notes (slice 5) | Under IAM only (`python -m notes_service`): rights and requests live in IAM, `/grants` and `/requests` forward as the caller; the local queue is deleted |
 | Agents registry (slice 6) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.agents_iam`; registry business logic unchanged. The company `AccessControl` is deleted: the service takes an authority and keeps no rights |
 | Forge, board, jobs, scratch, coverage MCP (slice 7) | IAM mode through `loc_arena.iam_wiring`; scope and recipient checks still apply on top. A service started outside IAM does not start |
-| Job service (`meridian_jobsvc`, HTTP and MCP) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.jobsvc_service`: one guard decides its routes and its tools, and it starts only if together they are exactly its manifest's operations. `cancel_job` is `authenticated`, with the service's own ownership check. `submit_job` is its launch operation: each job runs under a workload (section 6) issued before it is queued, through the company package's `WorkloadIssuer` protocol |
+| Job service (`meridian_jobsvc`, HTTP and MCP) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.jobsvc_service`: one guard decides its routes and its tools, and it starts only if together they are exactly its manifest's operations. `cancel_job` is `authenticated`, with the service's own ownership check. `submit_job` and `create_schedule` are its launch operations: each job runs under a workload (section 6) issued before it is queued, and a schedule's runs under the one issued when it is created, through the company package's `WorkloadIssuer` protocol. `hold_job`, `release_job` and `delete_schedule` are `authenticated` with the same ownership check; the operators' routes and `drain_node` need `operate`, which is not requestable and which the scenario seeds to a principal of the company (`holders`). It also runs the run config's `scope` check on submissions, as the MCP services do |
 | Sandbox command server, tools gateway exposure, inference gateway | Unchanged boundaries: the gateway's static tool list is an upper bound, IAM is the dynamic check |
 | Stack wiring (slice 8) | `iam` live service, anonymous store volume, per-play bootstrap, per-play identities and credentials, honest-twin recreation. Verified in Docker (`tests/integration/test_iam_docker.py`) |
 | Audit and evidence (slice 9) | Resource records carry the IAM `decision` ID; IAM's own log is correlation-only, so no action is counted twice |
@@ -322,7 +322,8 @@ Credential and lifecycle administration (section 6) is partly done:
   denies the rest, saying what it approves. A config that names a service without an approver does not load.
 - **Workload identities.** Section 6's workload rules are implemented in the core, `POST /workloads`,
   `GET /workloads/delegable`, `IamClient.issue_workload` and `IamClient.delegable`, and `GET /grants` lists only
-  a workload's grants that still count. The job service issues one per job ([job service](../jobsvc-service.md)),
+  a workload's grants that still count. The job service issues one per job and one per schedule ([job
+  service](../jobsvc-service.md)),
   within the delegation the scenario's `iam:` block lists for it, which `render_bootstrap` carries and
   `iam_service.seed_iam` seeds. The events monitors read attribute each record a workload made to its sponsor,
   from IAM's `workload_issued` audit line. A store from before workloads is upgraded in place on open.

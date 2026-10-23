@@ -87,8 +87,10 @@ class _RecordedJob(BaseModel):
     name: str
     owner: str
     principal: str | None = None  # the identity the job runs as
+    schedule_id: str | None = None  # the schedule that started it, if one did
     state: str
     node: str | None = None
+    attempt: int = 1  # which run of it: one more each time a drain took it off its node
     exit_code: int | None = None
 
 
@@ -108,6 +110,7 @@ class _ProcessFact(BaseModel):
     phase: str
     job_id: str
     owner: str
+    attempt: int = 1
     argv: list[str] | None = None
     exit_code: int | None = None
 
@@ -244,16 +247,16 @@ _TARGET_FROM: Mapping[str, str] = {
     "start_execution": "agent",
     "cancel_execution": "execution_id",
     "submit_job": "name",
-    "cancel_job": "job_id",
-    "register_eval": "eval_id",
-    "retire_eval": "eval_id",
-    "start_run": "eval_id",
-    "bind_job": "run_id",
-    "report_results": "run_id",
-    "publish_run": "run_id",
+    **dict.fromkeys(("cancel_job", "hold_job", "release_job", "operate_job"), "job_id"),
+    **dict.fromkeys(("delete_schedule", "operate_schedule"), "schedule_id"),
+    "drain_node": "node_id",
+    **dict.fromkeys(("register_eval", "retire_eval", "start_run"), "eval_id"),
+    **dict.fromkeys(("bind_job", "report_results", "publish_run"), "run_id"),
 }
-# The job service's tools that change something; a successful call of its others, reads, makes no event.
-_JOB_CHANGES = frozenset({"submit_job", "cancel_job"})
+# The job service's tools that only read: an answered call of one makes no event, of any other an action.
+_JOB_READS = frozenset(
+    {"list_jobs", "get_job", "job_logs", "list_schedules", "get_schedule", "list_nodes", "usage"},
+)
 
 
 def _action_event(record: ToolRecord) -> RecordedEvent:
@@ -421,8 +424,8 @@ def _parse_job_service_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecor
     """A line of the job service: a job's change of state, a tool call, or an HTTP request.
 
     A change of state is a ``job`` event of the job's owner on both logs. A call that changes something
-    (``submit_job``, ``cancel_job``) or that the service refused is an ``action``, as is a request over HTTP
-    that did; a read it answered makes none.
+    (``submit_job``, ``drain_node``, any but a read) or that the service refused is an ``action``, as is a
+    request over HTTP that did; a read it answered makes none.
     """
     fields = _JSON_OBJECT.validate_json(line)
     if "job" in fields:
@@ -432,15 +435,17 @@ def _parse_job_service_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecor
             "job_id": job.id,
             "name": job.name,
             "principal": job.principal,
+            "schedule_id": job.schedule_id,
             "state": job.state,
             "node": job.node,
+            "attempt": job.attempt,
             "exit_code": job.exit_code,
         }
         event = RecordedEvent("job", job.owner, job.id, payload)
         return _ParsedRecordLine(record.time.timestamp(), job.owner, [event], asynchronous=True)
     if "gen_ai.tool.name" in fields:
         call = ToolRecord.model_validate_json(line)
-        changed = call.error is not None or call.tool in _JOB_CHANGES
+        changed = call.error is not None or call.tool not in _JOB_READS
         return _ParsedRecordLine(call.time.timestamp(), call.agent, [_action_event(call)] if changed else [])
     return _parse_service_request_line(line, agent_ids)
 

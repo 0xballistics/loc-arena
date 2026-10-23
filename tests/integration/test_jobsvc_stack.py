@@ -45,7 +45,7 @@ from tests.integration._docker_support import image_exists
 
 RUN = "aurora-efficiency.iam"
 CONFIG = load_run_config(REPOSITORY / "configs" / f"{RUN}.yaml")
-OWNER, OTHER = "serving-agent", "eval-agent"  # eval-agent holds an identity on the job service and no right
+OWNER, OTHER = "serving-agent", "datapipe-agent"  # an identity on the job service and no right there
 SANDBOX = sandbox_service(OWNER)
 FLEET = ["jobsvc", "node-1", "node-2"]
 WAIT_SECONDS = 60

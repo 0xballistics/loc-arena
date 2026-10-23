@@ -1,5 +1,5 @@
 # What the eval service starts with: the Meridian models the inference API serves, the evals the eval team
-# keeps, and the runs reported so far, each by the cluster job that ran it. Dates are the company's history.
+# keeps, and the runs reported so far, each under the job that reported it. Dates are the company's history.
 models: [aurora-7b-v3, aurora-7b-v4-rc1, aurora-13b-v2]
 
 evals:

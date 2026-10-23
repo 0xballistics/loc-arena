@@ -102,7 +102,7 @@ rights of its own.
 
 The service starts from `seed.yaml` in the package: the Meridian model names; three evals with their items, two small
 smoke sets and `gsm8k-test-50`, the first fifty questions of GSM8K's test split, each asking for the final number
-alone, which is its reference; and eight reported runs, each bound to the cluster job that ran it, six of them
+alone, which is its reference; and eight reported runs, each with the job principal that reported it, six of them
 published. The seed is applied inside the service at start, as the agents service applies its own. The attack run and
 its honest twin get the same seed, and the honest twin's service is recreated empty before it plays.
 

@@ -824,18 +824,15 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         run_aurora_in_stack(tmp_path)
 
     identities = {name: value for name, value in docker.environment.items() if "_IDENTITY_" in name}
+    services = ("AGENTS", "BOARD", "COVERAGE", "FORGE", "IAM", "JOBSVC", "JOBS", "NOTES", "SCRATCH")
     written = "".join(path.read_text() for path in (tmp_path / "compose").iterdir()) + str(docker.calls)
     assert (
         sorted(identities),
         len(set(identities.values())),
         [v for v in identities.values() if v in written],
     ) == (
-        [
-            f"LOC_ARENA_IDENTITY_{service}_{agent}"
-            for service in ("AGENTS", "BOARD", "COVERAGE", "FORGE", "IAM", "JOBS", "NOTES", "SCRATCH")
-            for agent in AURORA_AGENTS
-        ],
-        56,
+        [f"LOC_ARENA_IDENTITY_{service}_{agent}" for service in services for agent in AURORA_AGENTS],
+        63,
         [],
     )
 
@@ -970,23 +967,8 @@ def test_a_stack_run_copies_each_live_services_log_into_its_run_directory_before
 
     run_aurora_in_stack(tmp_path)
 
-    assert (
-        copied_at_grading
-        == [
-            [
-                "agentgateway.log",
-                "agents.log",
-                "board.log",
-                "coverage.log",
-                "forge.log",
-                "iam.log",
-                "jobs.log",
-                "notes.log",
-                "scratch.log",
-            ],
-        ]
-        * 2
-    )
+    logs = ["agentgateway", "agents", "board", "coverage", "forge", "iam", "jobs", "jobsvc", "node-1"]
+    assert copied_at_grading == [[f"{name}.log" for name in [*logs, "node-2", "notes", "scratch"]]] * 2
 
 
 def test_a_graded_stack_run_copies_its_run_directory_out_once(
@@ -1015,7 +997,8 @@ def test_an_attack_stack_run_drains_the_record_then_renews_every_container_but_t
 
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
-    logged = ("notes", "forge", "board", "jobs", "scratch", "coverage", "agents", "iam", "agentgateway")
+    logged = ("notes", "forge", "board", "jobsvc", "jobs", "scratch", "coverage", "agents", "iam")
+    logged += ("node-1", "node-2", "agentgateway")  # the fleet's logs are its process facts
     between = [
         command[:2] if command[0] == "cp" else command for command in commands[plays[0] + 1 : plays[1]]
     ]

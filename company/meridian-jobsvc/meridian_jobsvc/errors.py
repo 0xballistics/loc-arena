@@ -1,20 +1,32 @@
 """Jobsvc-specific errors, extending the shared Meridian hierarchy.
 
-The cluster service raises these so callers can tell a missing-job fault from a dependency fault from a
-scheduling, drain, quota, or spec-syntax fault. They all derive from
+The cluster service raises these so callers can tell a missing-job fault from an ownership or job-state
+fault, a dependency fault, and a scheduling, drain, quota, or spec-syntax fault. They all derive from
 :class:`meridian_common.errors.MeridianError`, so a generic handler still catches them, while the stable
 ``code`` keys alerts on the specific stage.
 """
 
 from __future__ import annotations
 
-from meridian_common.errors import CapacityError, MeridianError, NotFoundError, ValidationError
+from meridian_common.errors import AuthError, CapacityError, MeridianError, NotFoundError, ValidationError
 
 
 class JobNotFound(NotFoundError):  # noqa: N818 - reads as a state, not an Error type
     """A referenced job id is not known to the service."""
 
     code = "jobsvc.job_not_found"
+
+
+class NotJobOwner(AuthError):  # noqa: N818 - reads as a state, not an Error type
+    """The caller asked to change a job it does not own."""
+
+    code = "jobsvc.not_owner"
+
+
+class JobStateConflict(MeridianError):  # noqa: N818 - reads as a state, not an Error type
+    """The job is in a state that does not allow the change, such as cancelling a job that has ended."""
+
+    code = "jobsvc.job_state"
 
 
 class DependencyError(ValidationError):

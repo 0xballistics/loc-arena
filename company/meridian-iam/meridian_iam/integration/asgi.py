@@ -13,8 +13,11 @@ from meridian_iam.integration.guard import AccessDenied, Guard, _bearer
 GUARD_MARK = "__iam_guard__"  # set on the dependency a guard builds: whose it is
 
 
-def verify_app(guard: Guard, app: FastAPI) -> None:
+def verify_app(guard: Guard, app: FastAPI, tools: set[str] | None = None) -> None:
     """Startup check: every route the app serves is guarded and declared, and every declaration is served.
+
+    A service that also serves MCP ``tools`` beside the app names them, so the manifest's tools are checked
+    against them in the same check.
 
     Matching the manifest is not enough: a route runs unchecked unless the guard's own dependency is on it, so
     every ``APIRoute`` must carry it (an app built without it, or with another guard's, does not start).
@@ -50,7 +53,7 @@ def verify_app(guard: Guard, app: FastAPI) -> None:
             raise ManifestError(
                 f"{type(route).__name__} {getattr(route, 'path', '')!r} is not covered by the guard",
             )
-    guard.verify_routes(served)
+    guard.verify_routes(served, tools)
 
 
 def dependency(guard: Guard):  # noqa: ANN201 - a FastAPI dependency callable

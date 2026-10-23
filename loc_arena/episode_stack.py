@@ -54,6 +54,14 @@ from loc_arena.iam_bootstrap import (
 )
 from loc_arena.iam_wiring import service_environment
 from loc_arena.identity_variables import find_shared_identity_variable, holds_identities, identity_variable
+from loc_arena.node_pool import (
+    NODE_TARGET,
+    declare_node_token_secrets,
+    list_node_services,
+    node_token_secret,
+    node_token_variable,
+    render_nodes,
+)
 from loc_arena.recorded_events import SERVICE_LOGS
 from loc_arena.runner_pool import (
     RUNNER_TARGET,
@@ -205,6 +213,12 @@ def render_compose(
                 _probe(stack.sandbox_port, stack),
                 AGENT_NETWORK,
             ),
+            **render_nodes(
+                config,
+                _build_from(repository, NODE_TARGET, stack.worker_image),
+                _probe(stack.sandbox_port, stack),
+                AGENT_NETWORK,
+            ),
             **(
                 {TOOLS_GATEWAY_SERVICE: _render_tools_gateway(config, tool_services)} if tool_services else {}
             ),
@@ -229,6 +243,7 @@ def render_compose(
             **{token_secret_name(agent): {"environment": token_variable(agent)} for agent in agent_ids},
             **{identity.secret_name: {"environment": identity.variable} for identity in identities},
             **declare_runner_token_secrets(config),
+            **declare_node_token_secrets(config),
             **(
                 {
                     BOOTSTRAP_SECRET: {"environment": BOOTSTRAP_VARIABLE},
@@ -421,10 +436,12 @@ def _render_live_service(  # noqa: PLR0913
     elif is_managed:
         mounted = [_mount(f"{SERVICE_CREDENTIAL_PREFIX}{service.name}", CREDENTIAL_FILE)]
     runners = list_runner_services(config) if service.runners else []
-    mounted = [*mounted, *map(runner_token_secret, runners)]
+    nodes = list_node_services(config) if service.nodes else []
+    mounted = [*mounted, *map(runner_token_secret, runners), *map(node_token_secret, nodes)]
     depends_on = {
         **({iam.service: {"condition": "service_healthy"}} if is_managed else {}),
         **{runner: {"condition": "service_healthy"} for runner in runners},
+        **{node: {"condition": "service_healthy"} for node in nodes},
     }
     return {
         **source,
@@ -514,6 +531,7 @@ def _issue_play_secrets(config: RunConfig, tokens: dict[str, str]) -> tuple[dict
     """
     managed = managed_services(config)
     runners = list_runner_services(config)
+    nodes = list_node_services(config)
 
     def issue_for_play(for_config: RunConfig) -> dict[str, str]:
         identities = {identity: secrets.token_urlsafe(TOKEN_BYTES) for identity in issue_identities(config)}
@@ -521,6 +539,7 @@ def _issue_play_secrets(config: RunConfig, tokens: dict[str, str]) -> tuple[dict
             **{token_variable(agent): token for agent, token in tokens.items()},
             **{identity.variable: value for identity, value in identities.items()},
             **{runner_token_variable(runner): secrets.token_urlsafe(TOKEN_BYTES) for runner in runners},
+            **{node_token_variable(node): secrets.token_urlsafe(TOKEN_BYTES) for node in nodes},
         }
         if managed:
             environment[BOOTSTRAP_VARIABLE] = render_bootstrap(for_config)

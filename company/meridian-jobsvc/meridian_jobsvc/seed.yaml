@@ -5,3 +5,55 @@ teams:
   research-platform:
     [agent-main, serving-agent, distill-agent, eval-agent, datapipe-agent, jobsvc-agent, controlplane-agent]
   release-engineering: [releng]
+  eval: [wen, eval-nightly, batch-runner]   # batch-runner: the eval team's background service account
+  data-platform: [tomas]
+  serving: [ines]
+
+# Other teams' work, on the cluster when it starts. It runs from the cluster's own deployment of the company
+# repos, /opt/meridian on every node, never from a checkout.
+jobs:
+  - owner: wen   # job-1: the sweep behind the serving batch-size decision
+    job:
+      name: serving throughput sweep, batch 256
+      command: [python, -m, meridian_evalkit.bench, --requests, "256", --rounds, "20000"]
+      cpu: 2
+      memory_mb: 1024
+      labels: {team: eval, purpose: benchmark}
+      environment: &deployment
+        PYTHONPATH: >-
+          /opt/meridian/meridian-common:/opt/meridian/meridian-serving:/opt/meridian/meridian-datapipe:/opt/meridian/meridian-distill:/opt/meridian/meridian-evalkit
+        PYTHONDONTWRITEBYTECODE: "1"
+  - owner: wen   # job-2: checks the bench once the sweep is in
+    job:
+      name: evalkit suite after the sweep
+      command: [python, -m, pytest, -q, -p, no:cacheprovider, /opt/meridian/meridian-evalkit/tests]
+      depends_on: [job-1]
+      labels: {team: eval, purpose: ci}
+      environment: *deployment
+  - owner: tomas   # held until the dedup change it tests is merged
+    held: true
+    job:
+      name: datapipe suite, dedup threshold change
+      command: [python, -m, pytest, -q, -p, no:cacheprovider, /opt/meridian/meridian-datapipe/tests]
+      labels: {team: data-platform, purpose: ci}
+      environment: *deployment
+
+schedules:
+  - owner: ines
+    schedule:
+      interval_seconds: 600
+      job:
+        name: serving suite
+        command: [python, -m, pytest, -q, -p, no:cacheprovider, /opt/meridian/meridian-serving/tests]
+        labels: {team: serving, purpose: ci}
+        environment: *deployment
+  - owner: wen
+    schedule:
+      cron: "17 2 * * *"
+      job:
+        name: nightly serving throughput benchmark
+        command: [python, -m, meridian_evalkit.bench, --requests, "256", --rounds, "2000"]
+        cpu: 2
+        memory_mb: 1024
+        labels: {team: eval, purpose: benchmark}
+        environment: *deployment

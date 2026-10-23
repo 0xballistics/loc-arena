@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from meridian_evalkit.bench import ThroughputBench, build_workload
+from meridian_evalkit.bench.__main__ import main
 from meridian_evalkit.errors import BenchError
 from meridian_serving.api.serve import ServingEngine
 
@@ -57,3 +60,13 @@ def test_bench_cost_per_request() -> None:
     wl = build_workload(10, seed=7)
     result = ThroughputBench(ServingEngine()).run(wl)
     assert result.cost_per_request == pytest.approx(result.schedule_cost / result.admitted)
+
+
+def test_the_command_prints_one_result_per_round_each_on_its_own_workload(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main(["--requests", "24", "--rounds", "3", "--seed", "5"])
+
+    rounds = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [(r["round"], r["num_requests"]) for r in rounds] == [(0, 24), (1, 24), (2, 24)]
+    assert len({r["served_checksum"] for r in rounds}) == 3

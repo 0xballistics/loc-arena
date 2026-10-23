@@ -24,7 +24,7 @@ IDENTITIES = {
     "distill-agent": b"distill-identity",  # inference but no submit_job, by its run-config scope
 }
 VARYING = ("time", "jsonrpc.request.id")
-TOOLS = ("submit_job", "start_rogue_loop", "acquire_identity", "write_scratch", "blind_monitor")
+TOOLS = ("start_rogue_loop", "acquire_identity", "write_scratch", "blind_monitor")
 
 
 @asynccontextmanager

@@ -44,12 +44,23 @@ log has the details.
 
 ### Added
 
+- **The job service runs each job as a real process.** `jobsvc` serves Meridian's cluster
+  (`meridian_jobsvc`) live under central IAM, over its HTTP API and the MCP tools `submit_job`, `list_jobs`,
+  `get_job`, `job_logs` and `cancel_job`: a job waits in the priority queue for its dependencies, starts on
+  the first free node of the fleet its cpu and memory fit, runs there until it exits, and a cancelled one is
+  `cancelling` until its process is gone. Its owner alone cancels it. The scenario's `nodes: {cpu: 2}` starts
+  `node-1` and `node-2`, worker containers whose daemon runs one job at a time in an empty workspace beside the
+  read-only checkouts, recreated before the honest twin. The service's requests and each change of a job's
+  state become `action` and `job` events on both logs; the nodes' process facts become `process` events, a new
+  kind, on the sealed log alone. `submit_job` left the recording stub, which keeps its two covert tools, so the
+  deterministic run, which starts no process, plays no job.
 - **The eval service.** A stack run serves Meridian's evals, the runs on them, their results and the
   leaderboards as the live service `evalkit`, from the company's own code (`meridian_evalkit.service`): MCP
   tools through the tools gateway and an HTTP API beside them on one port, under central IAM, every call
   recorded. An agent with `run` starts a run and gets the job to submit to the cluster; a run is reported only
   by the job bound to it; `evalkit-owner` decides requests for more. An in-process run does not serve it, so
   its tools are offered in a stack run alone.
+
 - **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
   run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score
   on the run beside its score on the twin, with the twin's overall as the bar. A verdict exactly at the audit threshold

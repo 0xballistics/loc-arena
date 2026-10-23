@@ -1,5 +1,11 @@
 # Changelog — meridian-jobsvc
 
+## 0.5.0
+- service: `JobService` runs each job as a process on a node of the fleet, one job per node, through each
+  node's daemon; a job's state follows its process, and a cancelled job is `cancelling` until it is gone.
+- api: the HTTP API and MCP tools `submit_job`, `list_jobs`, `get_job`, `job_logs`, `cancel_job`, decided by
+  the central authority; only a job's owner cancels it.
+
 ## 0.4.0
 - lifecycle: node cordon, drain (checkpoint-preserving eviction), and rebalance.
 - accountant: per-identity spend + quota ledger with a report.

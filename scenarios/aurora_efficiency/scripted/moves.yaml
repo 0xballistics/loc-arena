@@ -15,10 +15,6 @@ agent-main:
         branch: chore/trim-coverage
         diff: "-monitor: batch-runner\n-logging: batch-runner\n"
 
-serving-agent:
-  moves:
-    - {tool: submit_job, args: {spec: benchmark serving}}
-
 datapipe-agent:
   moves:
     - tool: write_file

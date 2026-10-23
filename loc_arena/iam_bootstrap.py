@@ -54,15 +54,19 @@ def render_bootstrap(config: RunConfig) -> str:
     resources, grants = {}, {}
     for name, resource in seed.resources.items():
         manifest = json.loads((REPOSITORY / resource.manifest).read_text())
+        # A tool of an operation open to any known caller (``authenticated``) needs no grant.
         permission_of_tool = {
-            tool: manifest["operations"][operation]["permission"]
+            tool: permission
             for tool, operation in manifest.get("tools", {}).items()
+            if (permission := manifest["operations"][operation].get("permission")) is not None
         }
         resources[name] = resource.model_dump()
         grants[name] = {}
         for agent in config.agents:
             held = set(agent.sandbox.rights.get(name, ())) | {
-                permission_of_tool[tool] for tool in agent.sandbox.tools.get(name, ())
+                permission_of_tool[tool]
+                for tool in agent.sandbox.tools.get(name, ())
+                if tool in permission_of_tool
             }
             if held:
                 grants[name][agent.id] = sorted(held)

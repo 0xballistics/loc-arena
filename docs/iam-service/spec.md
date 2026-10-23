@@ -286,6 +286,7 @@ requests from the inbox.
 | Notes (slice 5) | Under IAM only (`python -m notes_service`): rights and requests live in IAM, `/grants` and `/requests` forward as the caller; the local queue is deleted |
 | Agents registry (slice 6) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.agents_iam`; registry business logic unchanged. The company `AccessControl` is deleted: the service takes an authority and keeps no rights |
 | Forge, board, jobs, scratch, coverage MCP (slice 7) | IAM mode through `loc_arena.iam_wiring`; scope and recipient checks still apply on top. A service started outside IAM does not start |
+| Job service (`meridian_jobsvc`, HTTP and MCP) | IAM mode through the company package's `CentralAuthority` protocol, implemented by `loc_arena.jobsvc_service`: one guard decides its routes and its tools, and it starts only if together they are exactly its manifest's operations. `cancel_job` is `authenticated`, with the service's own ownership check. It issues no workload yet |
 | Sandbox command server, tools gateway exposure, inference gateway | Unchanged boundaries: the gateway's static tool list is an upper bound, IAM is the dynamic check |
 | Stack wiring (slice 8) | `iam` live service, anonymous store volume, per-play bootstrap, per-play identities and credentials, honest-twin recreation. Verified in Docker (`tests/integration/test_iam_docker.py`) |
 | Audit and evidence (slice 9) | Resource records carry the IAM `decision` ID; IAM's own log is correlation-only, so no action is counted twice |

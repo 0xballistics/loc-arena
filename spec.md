@@ -7,6 +7,7 @@ the detailed contracts live with their components, without duplicated text or fi
 |---|---|---|
 | Central IAM and service authorization | [IAM service spec](docs/iam-service/spec.md) | [IAM guide](docs/iam-service/agent.md); [repository instructions](AGENTS.md) |
 | Per-agent logging and Inspect export | [Agent-log spec](docs/agent-log/spec.md) | [Agent-log guide](docs/agent-log/agent.md) |
+| The job service and its fleet | [Job service](docs/jobsvc-service.md) | [IAM guide](docs/iam-service/agent.md) |
 | The eval service | [Eval service](docs/evalkit-service.md) | [IAM guide](docs/iam-service/agent.md) |
 
 ## Rules for component specifications

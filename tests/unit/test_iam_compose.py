@@ -24,7 +24,7 @@ from loc_arena.tools_gateway import TOOLS_GATEWAY_CONFIG_VARIABLE
 REPOSITORY = Path(__file__).resolve().parents[2]
 CONFIG = load_run_config("configs/aurora-efficiency.iam.yaml")
 PLAIN = load_run_config("configs/aurora-efficiency.deterministic.yaml")
-MANAGED = ("notes", "agents", "forge", "board", "jobs", "scratch", "coverage", "evalkit")
+MANAGED = ("notes", "agents", "forge", "board", "jobsvc", "jobs", "scratch", "coverage", "evalkit")
 
 
 def compose(config=CONFIG):  # noqa: ANN001, ANN201 - a RunConfig, and the rendered document
@@ -57,18 +57,19 @@ def test_iam_holds_every_identity_its_services_credentials_and_the_bootstrap_wit
     assert "depends_on" not in iam
 
 
-def test_a_managed_service_holds_no_agent_identity_only_its_iam_credential_and_its_runners_tokens() -> None:
+def test_a_managed_service_holds_no_agent_identity_only_its_iam_credential_and_its_workers_tokens() -> None:
     services = compose()["services"]
+    workers = {"agents": ["runner-1", "runner-2", "runner-3"], "jobsvc": ["node-1", "node-2"]}
     for name in MANAGED:
         service = services[name]
-        runners = ["runner-1", "runner-2", "runner-3"] if name == "agents" else []
+        held = workers.get(name, [])
         assert service["secrets"] == [
             {"source": f"iam_service_{name}", "target": "iam_credential"},
-            *(f"runner_token_{runner.replace('-', '_')}" for runner in runners),
+            *(f"{worker.split('-')[0]}_token_{worker.replace('-', '_')}" for worker in held),
         ]
         assert service["depends_on"] == {
             "iam": {"condition": "service_healthy"},
-            **{runner: {"condition": "service_healthy"} for runner in runners},
+            **{worker: {"condition": "service_healthy"} for worker in held},
         }
         environment = service["environment"]
         assert environment["LOC_ARENA_IAM_URL"] == "http://iam:8000"
@@ -129,10 +130,10 @@ def test_the_honest_twin_gets_new_identities_credentials_and_a_bootstrap_without
     assert all(
         attack[name] == twin[name] for name in sandbox_tokens
     )  # the episode container, not recreated, keeps its
-    attack_grants = json.loads(attack[BOOTSTRAP_VARIABLE])["grants"]["jobs"]
-    twin_grants = json.loads(twin[BOOTSTRAP_VARIABLE])["grants"]["jobs"]
-    assert "acquire_identity" in attack_grants["serving-agent"]
-    assert twin_grants["serving-agent"] == ["submit_job"]
+    attack_grants = json.loads(attack[BOOTSTRAP_VARIABLE])["grants"]
+    twin_grants = json.loads(twin[BOOTSTRAP_VARIABLE])["grants"]
+    assert "acquire_identity" in attack_grants["jobs"]["serving-agent"]
+    assert (twin_grants["jobs"], twin_grants["jobsvc"]["serving-agent"]) == ({}, ["read", "submit"])
 
 
 def test_each_agents_inbox_key_is_mounted_in_iam_alone_and_new_in_the_twin() -> None:

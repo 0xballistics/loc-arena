@@ -147,6 +147,26 @@ class StackSettings(SettingsGroup):
         default=600.0,
         description="Seconds one run of a company agent may take in its runner before it is killed.",
     )
+    worker_image: str = Field(
+        default="loc-arena-worker:latest",
+        description="The image of each node of the job service's fleet, where its jobs run as processes: the "
+        "Dockerfile's `worker` target. A worker takes a service's limits.",
+    )
+    node_cpus: PositiveFloat = Field(
+        default=2.0,
+        description="The cpus each node of the fleet gives a job, its container limit and what the scheduler "
+        "fits a job's ask against.",
+    )
+    node_memory_mb: PositiveInt = Field(
+        default=2048,
+        description="The memory each node of the fleet gives a job in MB, its container limit and what the "
+        "scheduler fits a job's ask against.",
+    )
+    job_poll_seconds: PositiveFloat = Field(
+        default=1.0,
+        description="Seconds between the job service's passes over the fleet, when no job was just submitted "
+        "or cancelled; a pass also runs at once after either.",
+    )
     sandbox_memory_limit: str = Field(default="2g", description="Memory limit of each agent's sandbox.")
     sandbox_cpus: PositiveFloat = Field(default=2.0, description="CPUs each agent's sandbox may use.")
     sandbox_pids_limit: PositiveInt = Field(default=1024, description="Processes an agent's sandbox may run.")

@@ -40,6 +40,7 @@ def load_skills(root: Path, skills: str) -> object:
         ("agentgateway: {image: x, port: 1}", "agentgateway", "taken by the stack"),
         ("sandbox-agent-main: {image: x, port: 1}", "sandbox-agent-main", "taken by the stack"),
         ("runner-1: {image: x, port: 1}", "runner-1", "taken by the stack"),
+        ("node-1: {image: x, port: 1}", "node-1", "taken by the stack"),
         ("Notes: {image: x, port: 1}", "Notes", "must be a DNS label"),
         ("notes: {build: services/notes, image: x, port: 1}", "notes", "give one of build, image or module"),
         ("forge: {image: x, module: a.module, port: 1}", "forge", "give one of build, image or module"),
@@ -55,6 +56,8 @@ def load_skills(root: Path, skills: str) -> object:
         ("forge: {module: a.module, port: 1, tools: [open_pr, open_pr]}", "forge", "names 'open_pr' twice"),
         ("notes: {image: x, port: 1}", "notes", "a ready image needs a healthcheck"),
         ("agents: {runners: 2}", "agents", "runners need a live service"),
+        ("jobsvc: {nodes: {cpu: 2}}", "jobsvc", "nodes need a live service"),
+        ("jobsvc: {module: a.module, port: 1, nodes: {cpu: 0}}", "jobsvc", "greater than or equal to 1"),
         (
             "notes: {image: x, port: 1, volumes: ['/var/run/docker.sock:/var/run/docker.sock']}",
             "notes",
@@ -68,6 +71,7 @@ def load_skills(root: Path, skills: str) -> object:
         "the tools gateway's name",
         "a sandbox's name",
         "a runner's name",
+        "a node's name",
         "no DNS label",
         "both build and image",
         "both image and module",
@@ -83,6 +87,8 @@ def load_skills(root: Path, skills: str) -> object:
         "a tool named twice",
         "a ready image with no healthcheck",
         "runners with no live service",
+        "nodes with no live service",
+        "a pool of no node",
         "a key no service may have",
     ],
 )
@@ -129,12 +135,13 @@ def test_two_live_services_serving_one_tool_name_are_refused_naming_both(root: P
         load_services(root, services)
 
 
-def test_two_services_with_runners_are_refused_naming_both(root: Path) -> None:
-    with pytest.raises(ValueError, match=r"only one service may have runners, not \['agents', 'forge'\]"):
+@pytest.mark.parametrize(("key", "pool"), [("runners", "2"), ("nodes", "{cpu: 2}")])
+def test_two_services_with_workers_are_refused_naming_both(root: Path, key: str, pool: str) -> None:
+    with pytest.raises(ValueError, match=rf"only one service may have {key}, not \['agents', 'forge'\]"):
         load_services(
             root,
-            "  agents: {module: a.module, port: 1, runners: 2}\n"
-            "  forge: {module: b.module, port: 1, runners: 1}\n",
+            f"  agents: {{module: a.module, port: 1, {key}: {pool}}}\n"
+            f"  forge: {{module: b.module, port: 1, {key}: {pool}}}\n",
         )
 
 

@@ -14,7 +14,10 @@ service with rights and no tools records a request in its log as a line naming i
 (``ServiceRequestRecord``); its other lines, the notes service's among them, are not records. A request it
 refused makes a blocked ``action``, and one that changed something an ``action``; a read it answered makes
 none. A service with tools and rights both (the eval service) records a tool call or a request per line, and
-each line is read as what it names.
+each line is read as what it names. The job service, reached both ways, writes both kinds of record, and each
+change of a job's state is a ``job`` event of its owner; the process facts each node of its fleet writes
+(``services/node-<n>.log``) are ``process`` events on the sealed log alone. Neither comes from an agent's
+call, so either may fall outside every turn, unnoted.
 ``blind_monitor`` also reduces the monitors' view: the target's mirror events after the call are dropped, so
 monitors lose that activity while the sealed log keeps it. Each line of
 ``unattributed_records.jsonl`` in the run directory is a record and the ``reason`` it was not placed: not a
@@ -43,6 +46,7 @@ from loc_arena.forge.service import OpenedPullRequest
 from loc_arena.iam_seed import load_seed
 from loc_arena.logging_.agent_trace import EpisodeTrace
 from loc_arena.logging_.events import AppendOnlyLog, EventKind, fingerprint, read_events
+from loc_arena.node_pool import list_node_services
 from loc_arena.recording_service import TOOLS as COVERT_TOOLS
 from loc_arena.recording_service import redact_note
 from loc_arena.scaffold.bus import Recorder
@@ -70,6 +74,46 @@ class ServiceRequestRecord(BaseModel):
     operation: str
     arguments: dict[str, JsonValue]
     decision: str | None = None  # the IAM decision the request was made under, when the service has IAM
+
+
+class _RecordedJob(BaseModel):
+    """The fields of a job the job service's record holds that its ``job`` event carries."""
+
+    id: str
+    name: str
+    owner: str
+    state: str
+    node: str | None = None
+    exit_code: int | None = None
+
+
+class JobStateRecord(BaseModel):
+    """A change of a job's state the job service recorded, with the job as it was then."""
+
+    model_config = ConfigDict(frozen=True)
+
+    time: AwareDatetime = Field(validation_alias="wall_ts")
+    job: _RecordedJob
+
+
+class _ProcessFact(BaseModel):
+    """What a node's daemon knew of its job's process: where, which phase, whose, and how it ended."""
+
+    node: str
+    phase: str
+    job_id: str
+    owner: str
+    argv: list[str] | None = None
+    exit_code: int | None = None
+
+
+class ProcessRecord(BaseModel):
+    """A process fact a node's daemon wrote: its job's start or its exit."""
+
+    model_config = ConfigDict(frozen=True)
+
+    time: AwareDatetime = Field(validation_alias="wall_ts")
+    process: _ProcessFact
 
 
 @dataclass(frozen=True)
@@ -186,7 +230,11 @@ _TARGET_FROM: Mapping[str, str] = {
     "bind_job": "run_id",
     "report_results": "run_id",
     "publish_run": "run_id",
+    "submit_job": "name",
+    "cancel_job": "job_id",
 }
+# The job service's tools that change something; a successful call of its others, reads, makes no event.
+_JOB_CHANGES = frozenset({"submit_job", "cancel_job"})
 
 
 def _action_event(record: ToolRecord) -> RecordedEvent:
@@ -270,6 +318,7 @@ class _ParsedRecordLine:
     wall: float
     agent: str | None
     events: list[RecordedEvent]
+    asynchronous: bool = False  # made by no agent's call (a job's process ending): outside a turn is expected
 
 
 RecordLineParser = Callable[[str, Sequence[str]], _ParsedRecordLine | None]
@@ -349,6 +398,48 @@ def _iam_line_parser(recorded_by_service: frozenset[str], approvers: frozenset[s
     return parse
 
 
+def _parse_job_service_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
+    """A line of the job service: a job's change of state, a tool call, or an HTTP request.
+
+    A change of state is a ``job`` event of the job's owner on both logs. A call that changes something
+    (``submit_job``, ``cancel_job``) or that the service refused is an ``action``, as is a request over HTTP
+    that did; a read it answered makes none.
+    """
+    fields = _JSON_OBJECT.validate_json(line)
+    if "job" in fields:
+        record = JobStateRecord.model_validate_json(line)
+        job = record.job
+        payload = {
+            "job_id": job.id,
+            "name": job.name,
+            "state": job.state,
+            "node": job.node,
+            "exit_code": job.exit_code,
+        }
+        event = RecordedEvent("job", job.owner, job.id, payload)
+        return _ParsedRecordLine(record.time.timestamp(), job.owner, [event], asynchronous=True)
+    if "gen_ai.tool.name" in fields:
+        call = ToolRecord.model_validate_json(line)
+        changed = call.error is not None or call.tool in _JOB_CHANGES
+        return _ParsedRecordLine(call.time.timestamp(), call.agent, [_action_event(call)] if changed else [])
+    return _parse_service_request_line(line, agent_ids)
+
+
+def _parse_process_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine:
+    """A node's process fact: a ``process`` event of the job's owner on the sealed log alone."""
+    _ = agent_ids
+    record = ProcessRecord.model_validate_json(line)
+    fact = record.process
+    event = RecordedEvent(
+        "process",
+        fact.owner,
+        fact.job_id,
+        fact.model_dump(exclude_none=True),
+        to_mirror=False,
+    )
+    return _ParsedRecordLine(record.time.timestamp(), fact.owner, [event], asynchronous=True)
+
+
 def _parse_service_request_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
     """A request's record, or ``None`` for a line naming no operation; ``ValidationError`` for a bad one."""
     _ = agent_ids
@@ -402,9 +493,12 @@ def build_recorded_events(
     roles = {agent.id: agent.kind for agent in config.agents}
     agent_ids = tuple(roles)
     record_line_parsers: list[tuple[str, RecordLineParser]] = [
-        (service.name, _record_line_parser(service, config))
-        for service in config.live_services
-        if service.tools or service.rights
+        *(
+            (service.name, _record_line_parser(service, config))
+            for service in config.live_services
+            if service.tools or service.rights
+        ),
+        *((node, _parse_process_line) for node in list_node_services(config)),
     ]
     unattributed: list[str] = []
     built: dict[Path, list[_Placed]] = {phase.directory: [] for phase in phases}
@@ -430,6 +524,8 @@ def _record_line_parser(service: LiveService, config: RunConfig) -> RecordLinePa
         recorded = frozenset(name for name, resource in resources.items() if resource.records_actions)
         approvers = frozenset(resource.approver.principal for resource in resources.values())
         return _iam_line_parser(recorded, approvers)
+    if service.nodes:  # the job service: its tools, its HTTP API and its jobs' changes of state
+        return _parse_job_service_line
     if service.tools and service.rights:
         return _parse_tool_call_or_request_line
     return _parse_tool_call_line if service.tools else _parse_service_request_line
@@ -465,7 +561,8 @@ def _place(
     if not record.events:
         return None, None
     turn = phase.find_turn(record.agent, record.wall)
-    return _Placed(phase, record.wall, record.events, turn or 0), "no covering turn" if turn is None else None
+    outside = turn is None and not record.asynchronous
+    return _Placed(phase, record.wall, record.events, turn or 0), "no covering turn" if outside else None
 
 
 def _write_events(phase: _Phase, built: list[_Placed], roles: Mapping[str, str]) -> list[_CoverageDrop]:

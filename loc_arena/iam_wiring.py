@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from mcp.server import MCPServer
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -75,22 +75,27 @@ def build_service_app(
     service: str,
     api: FastAPI | None = None,
 ) -> Starlette:
-    """The app serving ``server`` as ``service``, only if its tools are exactly ``guard``'s manifest's.
+    """The app serving ``server`` as ``service``, and ``api`` beside it, if they serve ``guard``'s manifest.
 
-    A tool added without a declared operation would otherwise be reachable and unchecked by name, and a
-    declared operation with no tool means the manifest describes a service that is not the one running. With
-    ``api``, an HTTP API the guard's dependency decides, the app serves it beside the tools at ``/mcp``, and
-    the manifest's routes are ``api``'s to verify where it is built. The app also answers 503 when IAM cannot
+    Together their tools and routes must be exactly the manifest's: a tool or route added without a declared
+    operation would otherwise be reachable and unchecked by name, and a declared operation with neither means
+    the manifest describes a service that is not the one running. The app also answers 503 when IAM cannot
     verify a caller.
     """
-    guard.verify_routes(
-        None if api is not None else set(),
-        {tool.name for tool in anyio.run(server.list_tools)},
-    )
-    app = build_app(server, service)
+    tools = {tool.name for tool in anyio.run(server.list_tools)}
+    if api is None:
+        guard.verify_routes(set(), tools)
+    else:
+        importlib.import_module("meridian_iam.integration.asgi").verify_app(guard, api, tools)
+    app = importlib.import_module("meridian_iam.integration.mcp").answer_outages(build_app(server, service))
     if api is not None:
-        app.router.routes.append(Mount("/", app=api))  # after /mcp, so the API serves the rest
-    return importlib.import_module("meridian_iam.integration.mcp").answer_outages(app)
+        app.router.routes.append(Mount("/", app=api))  # after /mcp, so the HTTP API serves the rest
+    return app
+
+
+def http_dependency(guard: Any) -> Any:  # noqa: ANN401 - a meridian_iam Guard, and FastAPI's Depends
+    """The app-level dependency through which ``guard`` decides each HTTP request before its handler."""
+    return Depends(importlib.import_module("meridian_iam.integration.asgi").dependency(guard))
 
 
 def load_iam_authority(guard: Any) -> Any:  # noqa: ANN401 - a meridian_iam Guard, and the CentralAuthority over it

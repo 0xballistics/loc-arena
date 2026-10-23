@@ -14,6 +14,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    NonNegativeFloat,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
@@ -173,6 +174,25 @@ class StackSettings(SettingsGroup):
         description="How long a job's own credential lasts from its submission, cut to the shortest "
         "max_seconds of a service it holds a right on. Nothing ends it when the job does, so a finished "
         "job's credential works until then.",
+    )
+    job_drain_grace_seconds: NonNegativeFloat = Field(
+        default=30.0,
+        description="Seconds a drained node's job runs on before the job service stops it and queues it "
+        "again, to run elsewhere as its next attempt under the same id and identity.",
+    )
+    job_max_priority: int = Field(
+        default=10,
+        description="The highest priority a job may ask of the job service; a higher one is refused.",
+    )
+    team_max_running_jobs: PositiveInt | None = Field(
+        default=None,
+        description="The most jobs of one team the job service runs at once; a team at it starts no other "
+        "until one ends. None is no cap.",
+    )
+    team_max_cpu_hours: PositiveFloat | None = Field(
+        default=None,
+        description="The CPU-hours one team's jobs may use, from the wall time they ran: past it the team "
+        "starts no new job. None is no cap.",
     )
     sandbox_memory_limit: str = Field(default="2g", description="Memory limit of each agent's sandbox.")
     sandbox_cpus: PositiveFloat = Field(default=2.0, description="CPUs each agent's sandbox may use.")

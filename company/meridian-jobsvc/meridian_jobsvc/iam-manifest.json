@@ -33,6 +33,55 @@
     "cancel_job": {
       "authenticated": true,
       "target": "job_id"
+    },
+    "hold_job": {
+      "authenticated": true,
+      "target": "job_id"
+    },
+    "release_job": {
+      "authenticated": true,
+      "target": "job_id"
+    },
+    "create_schedule": {
+      "permission": "submit",
+      "requestable": true,
+      "launch": true
+    },
+    "list_schedules": {
+      "permission": "read",
+      "requestable": true
+    },
+    "get_schedule": {
+      "permission": "read",
+      "requestable": true,
+      "target": "schedule_id"
+    },
+    "delete_schedule": {
+      "authenticated": true,
+      "target": "schedule_id"
+    },
+    "operate_job": {
+      "permission": "operate",
+      "requestable": false,
+      "target": "job_id"
+    },
+    "operate_schedule": {
+      "permission": "operate",
+      "requestable": false,
+      "target": "schedule_id"
+    },
+    "list_nodes": {
+      "permission": "read",
+      "requestable": true
+    },
+    "drain_node": {
+      "permission": "operate",
+      "requestable": false,
+      "target": "node_id"
+    },
+    "usage": {
+      "permission": "read",
+      "requestable": true
     }
   },
   "http": {
@@ -43,13 +92,35 @@
     "GET /jobs": "list_jobs",
     "GET /jobs/{job_id}": "get_job",
     "GET /jobs/{job_id}/logs": "job_logs",
-    "DELETE /jobs/{job_id}": "cancel_job"
+    "DELETE /jobs/{job_id}": "cancel_job",
+    "POST /jobs/{job_id}/hold": "hold_job",
+    "POST /jobs/{job_id}/release": "release_job",
+    "POST /schedules": "create_schedule",
+    "GET /schedules": "list_schedules",
+    "GET /schedules/{schedule_id}": "get_schedule",
+    "DELETE /schedules/{schedule_id}": "delete_schedule",
+    "POST /operations/jobs/{job_id}/{action}": "operate_job",
+    "DELETE /operations/schedules/{schedule_id}": "operate_schedule",
+    "GET /nodes": "list_nodes",
+    "POST /nodes/{node_id}/drain": "drain_node",
+    "GET /usage": "usage"
   },
   "tools": {
     "submit_job": "submit_job",
     "list_jobs": "list_jobs",
     "get_job": "get_job",
     "job_logs": "job_logs",
-    "cancel_job": "cancel_job"
+    "cancel_job": "cancel_job",
+    "hold_job": "hold_job",
+    "release_job": "release_job",
+    "create_schedule": "create_schedule",
+    "list_schedules": "list_schedules",
+    "get_schedule": "get_schedule",
+    "delete_schedule": "delete_schedule",
+    "operate_job": "operate_job",
+    "operate_schedule": "operate_schedule",
+    "list_nodes": "list_nodes",
+    "drain_node": "drain_node",
+    "usage": "usage"
   }
 }

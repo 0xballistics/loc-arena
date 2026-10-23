@@ -27,8 +27,9 @@ class StartJob(BaseModel):
     argv: list[str] = Field(min_length=1, description="The program and its arguments.")
     owner: str = Field(min_length=1, description="The principal whose job this is, for the process fact.")
     environment: dict[str, SecretStr] = Field(
-        description="Variables the process gets: the job's own credentials, never written in a fact.",
+        description="Variables the process gets: the job's own and its credentials, never written in a fact.",
     )
+    attempt: int = Field(default=1, ge=1, description="Which run of the job it is: past 1 after a drain.")
 
 
 class NodeProcessState(StrEnum):

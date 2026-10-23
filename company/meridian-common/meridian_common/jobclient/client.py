@@ -7,6 +7,7 @@ translates transport-level failures into the Meridian error hierarchy so callers
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from collections.abc import Callable
 
@@ -120,16 +121,7 @@ class JobClient:
         ordered = _topo_order(specs, by_name)
         ids: dict[str, str] = {}
         for spec in ordered:
-            resolved = tuple(ids[d] for d in spec.depends_on)
-            submitted = JobSpec(
-                name=spec.name,
-                command=list(spec.command),
-                cpu=spec.cpu,
-                memory_mb=spec.memory_mb,
-                priority=spec.priority,
-                depends_on=resolved,
-                labels=dict(spec.labels),
-            )
+            submitted = dataclasses.replace(spec, depends_on=tuple(ids[d] for d in spec.depends_on))
             ids[spec.name] = self.submit(submitted, deadline=deadline)
         return ids
 

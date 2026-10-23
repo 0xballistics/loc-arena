@@ -86,6 +86,23 @@ def test_the_seed_lets_the_job_service_hand_a_job_what_its_submitter_holds_of_it
     assert delegable == {"jobsvc": ["read", "submit"], "notes": ["read"]}
 
 
+def test_the_seed_gives_release_engineering_operate_on_the_job_service_which_no_agent_holds(
+    tmp_path: Path,
+) -> None:
+    iam, identities, services = seeded(tmp_path, config_with_iam(tmp_path))
+    operator = iam.issue_credential("releng", ["jobsvc"])
+
+    drains = iam.authorize(services["jobsvc"], operator, "drain_node", "node-1").allow
+    refused = iam.authorize(
+        services["jobsvc"],
+        identities["jobsvc", "serving-agent"],
+        "drain_node",
+        "node-1",
+    ).allow
+
+    assert (drains, refused) == (True, False)
+
+
 def issue_seeded_approvers(iam: Iam, config: RunConfig) -> dict[str, Approver]:
     """The approvers the IAM service runs for ``config``, by principal."""
     return {

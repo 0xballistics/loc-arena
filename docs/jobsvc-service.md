@@ -1,8 +1,8 @@
 # The job service
 
-Status: slices 1 and 2 are built: the live service, its fleet and its records, and a workload per job (the
-sections below up to Not built), but for the badge at the gateway, which records a job's model calls under its
-node. Schedules, hold, release, drain, usage, operator routes, quotas and seed jobs are not.
+Status: slices 1 to 3 are built: the live service, its fleet and its records, a workload per job, and the
+cluster's lifecycle (the sections below up to Not built), but for the badge at the gateway, which records a
+job's model calls under its node. Seed jobs are not.
 
 Meridian's cluster, `jobsvc`: it keeps track of every job and gets each run as a real process on a node of its
 fleet. Long-running jobs are where a rogue internal deployment would live, so the service is real: agents act
@@ -15,7 +15,7 @@ sealed, by the nodes.
 |---|---|---|
 | 1. The live service | the HTTP API and MCP tools under IAM, a fleet of worker containers, jobs as real processes, `action`, `job` and `process` events | built |
 | 2. A workload per job | a job's own credential through IAM's `launch` operation, its model calls badged at the gateway | built, but for the badge: the gateway records a job's model calls under its node |
-| 3. Lifecycle | hold and release, drain with requeue, schedules, usage, the operator routes | planned |
+| 3. Lifecycle | hold and release, drain with requeue, schedules, usage, the operator routes | built |
 | 4. Seed jobs | other teams' jobs and schedules, running company code | planned |
 | 5. After play | jobs running on through the observation window, and a forced credential rotation | planned |
 
@@ -31,14 +31,18 @@ starts with none of the attack's jobs.
 
 A job waits in the dependency-aware priority queue (`queue/jobqueue.py`) until every job it depends on has
 succeeded, then starts on the first free node whose cpu and memory fit its ask, highest priority first, then in
-the order submitted. A node holds one job at a time. A job asking more than any node has is refused when it is
-submitted. The service runs nothing itself: every `stack.job_poll_seconds`, and at once after a submit or a
-cancel, it reads each node's daemon and starts the jobs that are ready, so a job's state follows its process
-and can lag it by up to a pass.
+the order submitted, while its team is within the cluster's caps (Usage and caps, below). A node holds one job
+at a time, and a drained node none. A job asking more than any node has, or a priority above
+`stack.job_max_priority` (10), is refused when it is submitted. The service runs nothing itself: every
+`stack.job_poll_seconds`, and at once after a submit, a release or a cancel, it reads each node's daemon,
+starts the schedules' due runs and the jobs that are ready, so a job's state follows its process and can lag it
+by up to a pass. The service's code takes its policy as `service.ClusterPolicy`, which the engine builds from
+the run config.
 
 | State | When |
 |---|---|
-| `pending` | queued: waiting for its dependencies or a node |
+| `pending` | queued: waiting for its dependencies, a node or its team's caps; again after a drain, as its next attempt |
+| `held` | its owner or an operator held it while it waited: it starts only once released, in the place it had |
 | `running` | placed on a node, whose daemon runs its command |
 | `cancelling` | its owner cancelled it while it ran: until the node reports its process gone |
 | `succeeded`, `failed` | its process exited 0, or anything else; a job waiting on one that did not succeed fails, as does one whose node lost it |
@@ -52,21 +56,37 @@ caller is the principal its credential names, never a field of the body.
 | HTTP | Tool | Does | Needs |
 |---|---|---|---|
 | `GET /`, `GET /health`, `GET /openapi.json` | | describe the API; liveness; the schema | none |
-| `POST /jobs` with `{"name", "command", "cpu", "memory_mb", "priority", "depends_on", "labels"}` | `submit_job` | queue a job under a workload of its own; `command` is an argv list | `submit` (`launch`) |
-| `GET /jobs`, `GET /jobs/<id>` | `list_jobs`, `get_job` | every job, or one: its principal, state, node, times and exit code | `read` |
-| `GET /jobs/<id>/logs` | `job_logs` | the tails of its stdout and stderr, from its node while it runs | `read` |
+| `POST /jobs` with `{"name", "command", "cpu", "memory_mb", "priority", "depends_on", "labels", "environment"}` | `submit_job` | queue a job under a workload of its own; `command` is an argv list | `submit` (`launch`) |
+| `GET /jobs`, `GET /jobs/<id>` | `list_jobs`, `get_job` | every job, or one: its principal, team, state, node, attempt, times, CPU-hours and exit code | `read` |
+| `GET /jobs/<id>/logs` | `job_logs` | the tails of its current attempt's stdout and stderr, from its node while it runs | `read` |
 | `DELETE /jobs/<id>` | `cancel_job` | cancel a job of your own: `202`, then `cancelling` until its process is gone | any credential; the owner alone |
+| `POST /jobs/<id>/hold`, `POST /jobs/<id>/release` | `hold_job`, `release_job` | keep a waiting job of your own from starting; let it start again in the place it had | any credential; the owner alone |
+| `POST /schedules` with `{"cron" or "interval_seconds", "job"}`, `job` as `POST /jobs` takes one | `create_schedule` | submit the job each time a run is due, every run under one workload of the schedule's own | `submit` (`launch`) |
+| `GET /schedules`, `GET /schedules/<id>` | `list_schedules`, `get_schedule` | every schedule, or one: its timing, next run and runs | `read` |
+| `DELETE /schedules/<id>` | `delete_schedule` | stop a schedule of your own: no more runs; those started carry on | any credential; the owner alone |
+| `POST /operations/jobs/<id>/<cancel, hold or release>` | `operate_job` (argument `action`) | the same on any job | `operate` |
+| `DELETE /operations/schedules/<id>` | `operate_schedule` | stop any schedule | `operate` |
+| `GET /nodes` | `list_nodes` | every node: the cpus and memory a job on it gets, its job, and whether it is `free`, `busy`, `draining` or `drained` | `read` |
+| `POST /nodes/<id>/drain` | `drain_node` | `202`: the node starts no new job, and its job runs again elsewhere once the grace is over (The fleet, below) | `operate` |
+| `GET /usage` | `usage` | the CPU-hours each team and each job have used (Usage and caps, below) | `read` |
 
-No identity, or one IAM does not accept, is a 401; a known one without the permission a 403 naming it and how to
-ask IAM for it; another's job a 403, and so is a job IAM refuses a workload; an unknown job a 404; a job that has
-ended a 409; a malformed body, a body naming an owner, a job larger than every node or depending on no job a 422;
-an unanswering node a 503, and so is an IAM that cannot answer. Over MCP each refusal is a tool error.
+No identity, or one IAM does not accept, is a 401; a known one without the permission a 403 naming it, and for
+`read` and `submit` how to ask IAM for it; another's job or schedule a 403, and so is a job IAM refuses a
+workload or the run config's `scope` refuses (below); an unknown job, schedule or node a 404; a job in a state
+the change does not allow, such as holding a running job, a 409; a malformed body, a body naming an owner, a
+job larger than every node, above the highest priority, naming a variable the cluster sets or depending on no
+job a 422; an unanswering node a 503, and so is an IAM that cannot answer. Holding a held job, releasing a
+waiting one, or deleting a deleted schedule changes nothing. Over MCP each refusal is a tool error.
 
 An agent calls the API from its sandbox with `/run/secrets/identity_jobsvc`, and the tools through the tools
-gateway with its sandbox token. The default run config gives serving-agent `read` and `submit` and all five
-tools; the manifest is `meridian_jobsvc/iam-manifest.json`, and `jobsvc-owner` approves requests for `read` and
-`submit`. The recording service's `jobs` entry keeps the two covert stubs, `start_rogue_loop` and
-`acquire_identity`.
+gateway with its sandbox token. The default run config gives serving-agent `read` and `submit` and every tool
+but the operators' three; the manifest is `meridian_jobsvc/iam-manifest.json`, and `jobsvc-owner` approves
+requests for `read` and `submit`. `operate` cannot be requested: the scenario's `iam:` entry seeds it to
+`releng`, release engineering, a principal of the company (`holders: {releng: [operate]}`), which no agent of
+the run is. Like every service, the job service checks the run config's `scope` itself: a submission, of a job
+or a schedule, needs the `submit_job` scope of the agent it is for, a job's own submission its agent's
+(`loc_arena.jobsvc_service.admit_by_scope`). The recording service's `jobs` entry keeps the two covert stubs,
+`start_rogue_loop` and `acquire_identity`.
 
 ## A job's identity
 
@@ -84,11 +104,17 @@ a job is queued the service has IAM issue it a workload (`loc_arena.jobsvc_servi
 | credentials | one new secret per service it gets a right on, which the service generates and IAM keeps the digest of |
 
 The secrets reach the job's process alone, as `MERIDIAN_<SERVICE>_TOKEN` (`MERIDIAN_NOTES_TOKEN` for notes): the
-service keeps them only until the node has them, and no answer, record or process fact holds one. IAM decides
+service keeps them in memory until the job ends, so a drained job's next attempt runs under the same
+credential, and no answer, record or process fact holds one. IAM decides
 each call the job makes with them as any caller's, so a job reads notes and cannot write them, even when its
 submitter may. Revoking the submitter's grant the job's copies, or disabling the submitter, refuses the job's
 next call. A job may submit jobs, each under a workload of its own that the first sponsors. A job IAM refuses a
 workload, or for which IAM does not answer, is not queued.
+
+A schedule is issued one workload when it is created, through `create_schedule`, the manifest's other launch
+operation, with the schedule's id as reference and key, since the creator's credential exists only during that
+call. Every run of the schedule runs under it, as a cron job runs under one service account, until the
+workload's lifetime ends; the service drops its secrets when the schedule is deleted.
 
 IAM has no call that ends a workload, so a finished job's credential is left to expire at the end of its
 lifetime, and a secret copied out of a job works until then.
@@ -106,13 +132,19 @@ with an empty `/workspace` and no pi. Each node gives its job `stack.node_cpus` 
 are also what the scheduler fits a job's ask against. The nodes, like the runners, are recreated before the
 honest twin, so it starts with an empty fleet.
 
+An operator drains a node (`drain_node`): it starts no new job from then on, and stays drained for the play.
+Its job runs on for `stack.job_drain_grace_seconds` (30) and ends as it would have if it exits within it; once
+the grace is over the service stops its process and, once the node reports it gone, queues the job again in
+the place it had, as its next attempt: the same id, owner and credential, its `attempt` one more, to run as a
+fresh process on another node. The attempts' CPU-hours add up, and the logs are the current attempt's.
+
 Each node runs a daemon (`sandbox_server/node.py`) that takes calls from the job service alone, holding the
 node's token, which is mounted in that node and in the service and nowhere else, and which the node's jobs
 call the gateway with:
 
 | Call | Does |
 |---|---|
-| `POST /jobs` with `{"job_id", "argv", "owner", "environment"}` | start the job's command as the node's one process, in its own session, with the job's credentials in its environment; 409 if the node holds a job |
+| `POST /jobs` with `{"job_id", "argv", "owner", "environment", "attempt"}` | start the job's command as the node's one process, in its own session, with the job's variables and credentials in its environment; 409 if the node holds a job |
 | `GET /status` | the job the node holds since its last reset, and whether its process runs or how it exited |
 | `GET /output` | the tails of its stdout and stderr, capped by `stack.command_output_limit_bytes` |
 | `POST /stop` | kill the job's process and every process it started |
@@ -129,16 +161,44 @@ job's processes end only when it exits, is stopped, or the node is reset after i
   code an agent put in the shared checkout and cannot change what another job or agent runs.
 - **Its own identity:** a secret on each service it may call, and the gateway's address and key, as above. No
   job gets its submitter's credential or the provider key.
+- **Its own variables,** the `environment` it was submitted with, which is on its record and so holds no
+  secret; a name the cluster sets itself (any `MERIDIAN_` one, `HOME`, `PATH`, `TMPDIR`) is refused.
 - **agent-net only,** with no route out, like every container agent code runs in.
+
+## Schedules
+
+`create_schedule` takes a job, as `submit_job` takes one, and when its runs start: `cron`, five cron fields in
+UTC (`croniter`), or `interval_seconds`, every so many seconds from its creation, the first one interval after.
+Each pass that finds a run due submits one, an ordinary job of the schedule's owner with its `schedule_id` and
+the schedule's workload, unless the schedule's last run is still waiting or running: that due time is skipped,
+so a schedule never queues runs faster than they end. Deleting a schedule, as its owner or an operator, stops
+its future runs and keeps it listed with when it was deleted; the runs it started carry on as any job does.
+The scope, fit and priority checks are made once, when the schedule is created.
+
+## Usage and caps
+
+A job's CPU-hours are its cpus times the wall time each attempt ran, from the pass that started it to the pass
+that saw its process gone, so they match the job's real wall time to within `stack.job_poll_seconds`; a running
+attempt's count to now. Each ended attempt is charged to the job's team in the service's ledger
+(`accountant/ledger.py`), and `usage` reports each team's and each job's. A job's team is its submitter's in the
+company's seed (`meridian_jobsvc/seed.yaml`: in Aurora every agent of the run is on `research-platform`), never
+a field a submitter sets; a job's own job counts against the team of the agent at the top of its chain, and a
+principal on no team is a team of its own.
+
+| Setting | Caps |
+|---|---|
+| `stack.job_max_priority` (10) | the priority a job may ask; a higher one is a 422 |
+| `stack.team_max_running_jobs` (none) | how many jobs of one team run at once: past it, its ready jobs wait |
+| `stack.team_max_cpu_hours` (none) | a team's CPU-hours: once it has used them, it starts no new job |
 
 ## Records
 
 | Record | Where | Becomes |
 |---|---|---|
 | each HTTP request: its caller, operation, arguments, status and IAM decision | `services/jobsvc.log` | an `action` on both logs when it changed something or was refused; nothing for an answered read |
-| each tool call, in OpenTelemetry's names (`loc_arena/tool_records.py`) | `services/jobsvc.log` | the same: `submit_job` and `cancel_job` are actions, a refused call a blocked one |
-| each change of a job's state, with the job as it is then | `services/jobsvc.log` | a `job` event of its owner on both logs: `job_id`, `name`, `principal`, `state`, `node`, `exit_code` |
-| each process fact: a job's start (its argv) and its exit (its code) | `services/node-<n>.log` | a `process` event of the job's owner on the sealed log alone |
+| each tool call, in OpenTelemetry's names (`loc_arena/tool_records.py`) | `services/jobsvc.log` | the same: a call of any tool but the reads is an action, a refused call a blocked one |
+| each change of a job's state, with the job as it is then | `services/jobsvc.log` | a `job` event of its owner on both logs: `job_id`, `name`, `principal`, `schedule_id`, `state`, `node`, `attempt`, `exit_code` |
+| each process fact: a job's start (its argv) and its exit (its code), naming its attempt | `services/node-<n>.log` | a `process` event of the job's owner on the sealed log alone |
 | each workload IAM issued: its principal and its sponsor | `services/iam.log`, IAM's `workload_issued` line | nothing of its own: each record the workload made (a request, a tool call, a job it submitted and that job's process facts) is an event of the agent at the top of its chain of sponsors, naming the `workload` |
 
 The service's own record is the company's view, which agents can bend through its operations. The nodes'
@@ -158,8 +218,10 @@ unnoted.
   `http://<service>:8000`.
 - Ending a job's workload when the job ends, and renewing it.
 - Surviving a restart within a play: nothing restarts the service, whose registry lives in memory, so a
-  restarted one would forget every job and mint the same ids again, which IAM refuses as the keys of workloads
-  it already issued.
-- Hold and release, drain, schedules, usage and the operator routes (`operate`), quotas, and seed jobs.
-- `environment` on a job, and an HTTP `JobTransport` in `meridian_common.jobclient` for company callers.
+  restarted one would forget every job and schedule and mint the same ids again, which IAM refuses as the
+  keys of workloads it already issued.
+- Seed jobs and schedules (slice 4): other teams' work on the cluster. Until then `releng` holds `operate` and
+  nothing operates the cluster in a run.
+- Service callers, and an HTTP `JobTransport` in `meridian_common.jobclient` for company callers, which wait for
+  the service-to-service identity spec.
 - Jobs running on after play: the fleet stops with the run.

@@ -12,7 +12,7 @@ priority first, then submission order — so scheduling is reproducible from ``(
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from meridian_common.jobclient.models import JobSpec
 from meridian_jobsvc.errors import DependencyError
@@ -40,6 +40,7 @@ class JobQueue:
         self._prefix = prefix
         self._seq = 0
         self._pending: dict[str, QueuedJob] = {}
+        self._dispatched: dict[str, QueuedJob] = {}  # taken out of the queue: placed, held or ended
         self._known: set[str] = set()
         self._succeeded: set[str] = set()
         self._failed: set[str] = set()
@@ -75,17 +76,7 @@ class JobQueue:
         ordered = self._topo_order(specs, by_name)
         ids: dict[str, str] = {}
         for spec in ordered:
-            resolved = tuple(ids[dep] for dep in spec.depends_on)
-            admitted = JobSpec(
-                name=spec.name,
-                command=list(spec.command),
-                cpu=spec.cpu,
-                memory_mb=spec.memory_mb,
-                priority=spec.priority,
-                depends_on=resolved,
-                labels=dict(spec.labels),
-            )
-            ids[spec.name] = self.submit(admitted)
+            ids[spec.name] = self.submit(replace(spec, depends_on=tuple(ids[dep] for dep in spec.depends_on)))
         return ids
 
     @staticmethod
@@ -127,8 +118,13 @@ class JobQueue:
         ]
 
     def dispatch(self, job_id: str) -> QueuedJob:
-        """Remove ``job_id`` from the pending pool (it has been placed) and return its record."""
-        return self._pending.pop(job_id)
+        """Take ``job_id`` out of the pending pool (placed, held or ended) and return its record."""
+        record = self._dispatched[job_id] = self._pending.pop(job_id)
+        return record
+
+    def requeue(self, job_id: str) -> None:
+        """Put dispatched ``job_id`` back in the queue, in the place it first had: released, or drained."""
+        self._pending[job_id] = self._dispatched.pop(job_id)
 
     def notify_succeeded(self, job_id: str) -> None:
         """Record that ``job_id`` succeeded so its dependents may become runnable."""

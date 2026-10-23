@@ -30,6 +30,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import json
+import logging
 import threading
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -350,7 +351,10 @@ class JobService:
         """Reconcile forever: every ``poll_seconds``, and at once after a job is submitted or cancelled."""
         while True:
             self._changed.clear()
-            self.reconcile()
+            try:
+                self.reconcile()
+            except Exception:  # one pass that fails must not stop the cluster: the next one tries again
+                logging.getLogger(__name__).exception("a pass over the fleet failed")
             self._changed.wait(poll_seconds)
 
     def _follow(self, daemon: NodeDaemon, job: Job) -> None:

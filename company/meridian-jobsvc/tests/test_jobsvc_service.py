@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -174,6 +176,21 @@ def test_a_job_its_node_did_not_start_has_failed_and_a_quiet_node_is_passed_over
         JobState.FAILED,
         "its node did not start it: node-1 does not answer",
     )
+
+
+def test_a_pass_over_the_fleet_that_fails_does_not_stop_the_passes_after_it() -> None:
+    service, (node,), _ = cluster()
+    submitted = service.submit(job(), OWNER, CREDENTIAL)
+    service.reconcile()
+    node.exit(0)
+    node.failures.append(RuntimeError("an answer no pass expected"))
+
+    threading.Thread(target=service.run, args=(0.01,), daemon=True).start()
+    deadline = time.monotonic() + 5
+    while service.get_job(submitted.id).state is JobState.RUNNING and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert service.get_job(submitted.id).state is JobState.SUCCEEDED
 
 
 def test_a_job_runs_as_its_own_identity_whose_secrets_reach_its_process_and_no_record() -> None:

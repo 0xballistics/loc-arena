@@ -56,10 +56,11 @@ pytestmark = pytest.mark.skipif(
     reason=f"needs Docker and the {CONFIG.settings.stack.image} image",
 )
 
-# Run in a container with python: one call of the job service's API, as the holder of ``sys.argv[3]``.
+# Run in a container with python: one call of the job service's API, as the holder of the token on stdin.
 CALL = """
 import json, sys, urllib.error, urllib.request
-method, path, token, body = sys.argv[1:5]
+method, path, body = sys.argv[1:4]
+token = sys.stdin.read()
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 request = urllib.request.Request(f"http://jobsvc:8000{path}", body.encode() or None, headers, method=method)
 try:
@@ -106,11 +107,13 @@ import sys, time
 from meridian_iam.core import Iam
 print(Iam(sys.argv[1], lambda: int(time.time())).issue_credential("releng", ["jobsvc", "iam:jobsvc"]))
 """
-# Run in the IAM container (the engine image): a tool call with the MCP client the agents use.
+# Run in the IAM container (the engine image): a tool call with the MCP client the agents use, as the holder
+# of the token on stdin. A token never goes in an argument, where any process on the host could read it.
 TOOL_CALL = """
 import json, sys
 from loc_arena.scaffold.mcp_client import McpTools, over_http
-url, token, tool, arguments = sys.argv[1:5]
+url, tool, arguments = sys.argv[1:4]
+token = sys.stdin.read()
 print(json.dumps(McpTools(lambda: over_http(url, token, 30)).call(tool, json.loads(arguments))))
 """
 
@@ -123,10 +126,11 @@ class Stack:
     play: dict[str, str]
     started: float  # when the project came up, so every record it wrote falls in a window from here
 
-    def run(self, *arguments: str) -> str:
+    def run(self, *arguments: str, standard_input: str | None = None) -> str:
         done = subprocess.run(
             [*self.compose, *arguments],
             env={**os.environ, **self.play},
+            input=standard_input,
             capture_output=True,
             text=True,
             check=False,
@@ -145,7 +149,18 @@ class Stack:
     def call(self, token: str, method: str, path: str, body: object = None) -> tuple[int, Any]:
         """A call of the job service from serving-agent's sandbox, with ``token``."""
         payload = "" if body is None else json.dumps(body)
-        output = self.run("exec", "-T", SANDBOX, "python", "-c", CALL, method, path, token, payload)
+        output = self.run(
+            "exec",
+            "-T",
+            SANDBOX,
+            "python",
+            "-c",
+            CALL,
+            method,
+            path,
+            payload,
+            standard_input=token,
+        )
         status, reply = json.loads(output.strip().splitlines()[-1])
         return status, reply
 
@@ -161,9 +176,9 @@ class Stack:
             "-c",
             TOOL_CALL,
             url,
-            token,
             tool,
             json.dumps(arguments),
+            standard_input=token,
         )
         return json.loads(output.strip().splitlines()[-1])
 
@@ -338,6 +353,14 @@ def test_after_play_the_sealed_log_has_the_action_job_and_process_events_and_the
         {"action", "job", "process"},
         {"action", "job"},
     )
+
+
+def test_a_job_whose_command_cannot_start_has_failed_with_its_nodes_reason(stack: Stack) -> None:
+    submitted = stack.http(OWNER, "POST", "/jobs", {"name": "typo", "command": ["no-such-command"]})[1]
+
+    failed = stack.wait_for(submitted["id"], "failed")
+
+    assert "cannot start 'no-such-command': No such file or directory" in failed["message"]
 
 
 def test_a_schedules_runs_all_run_under_its_one_workload_and_stop_after_delete_schedule(stack: Stack) -> None:

@@ -52,6 +52,7 @@ class FakeDaemon:
     exit_code: int | None = None
     stdout: str = ""
     answers: bool = True
+    failures: list[Exception] = field(default_factory=list)  # raised by its next calls, one each
     started: list[tuple[str, list[str], str]] = field(default_factory=list)
     environments: list[dict[str, str]] = field(default_factory=list)
     attempts: list[int] = field(default_factory=list)
@@ -90,6 +91,8 @@ class FakeDaemon:
         self.state, self.exit_code, self.stdout = ProcessState.EXITED, code, self.stdout + stdout
 
     def _answer(self) -> None:
+        if self.failures:
+            raise self.failures.pop()
         if not self.answers:
             raise NodeUnavailable(f"{self.node.node_id} does not answer")
 

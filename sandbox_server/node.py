@@ -115,16 +115,23 @@ class NodeProcess:
                 "HOME": str(workspace),
                 "TMPDIR": str(workspace),
             }
-            stdout = (workspace / ".stdout").open("w+b")
-            stderr = (workspace / ".stderr").open("w+b")
-            self._process = subprocess.Popen(
-                job.argv,
-                cwd=workspace,
-                env=environment,
-                stdout=stdout,
-                stderr=stderr,
-                start_new_session=True,
-            )
+            # Appended to, so reading a tail, which moves the offset the job shares, never moves its writes.
+            stdout = (workspace / ".stdout").open("a+b")
+            stderr = (workspace / ".stderr").open("a+b")
+            try:
+                self._process = subprocess.Popen(
+                    job.argv,
+                    cwd=workspace,
+                    env=environment,
+                    stdout=stdout,
+                    stderr=stderr,
+                    start_new_session=True,
+                )
+            except OSError as error:  # no such command, or not one it may run: the job never started
+                stdout.close()
+                stderr.close()
+                detail = f"cannot start {job.argv[0]!r}: {error.strerror}"
+                raise HTTPException(HTTPStatus.UNPROCESSABLE_ENTITY, detail) from error
             self._job_id, self._owner, self._streams = job.job_id, job.owner, (stdout, stderr)
             self._attempt = job.attempt
             self._exit_code, self._final_output = None, None

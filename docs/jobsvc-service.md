@@ -100,7 +100,7 @@ a job is queued the service has IAM issue it a workload (`loc_arena.jobsvc_servi
 | principal | IAM's `job-<id>`, which `get_job` shows as the job's `principal` |
 | reference and idempotency key | the job's id |
 | purpose | the job's name |
-| grants | what the job service may delegate (the scenario's `iam:` entry `delegation`) that the submitter holds now, as IAM answers `GET /workloads/delegable`: in Aurora `notes: [read]` and `jobsvc: [read, submit]` |
+| grants | what the job service may delegate (the scenario's `iam:` entry `delegation`) that the submitter holds now, as IAM answers `GET /workloads/delegable`: in Aurora `notes: [read]`, `jobsvc: [read, submit]` and `evalkit: [read, run]` |
 | lifetime | `stack.job_credential_seconds` (two hours), cut to the shortest `max_seconds` of a service it gets a right on |
 | credentials | one new secret per service it gets a right on, which the service generates and IAM keeps the digest of |
 
@@ -160,8 +160,10 @@ job's processes end only when it exits, is stopped, or the node is reset after i
 
 - **Its workspace,** `/workspace`, empty when it starts and emptied when it ends; its command runs there, with
   `HOME` and `TMPDIR` in it.
-- **The checkouts,** mounted read-only where a sandbox has them (`stack.checkouts_directory`), so a job runs the
-  code an agent put in the shared checkout and cannot change what another job or agent runs.
+- **The checkouts,** mounted read-only where a sandbox has them (`stack.checkouts_directory`), with each repo
+  of the checkout the episode seeded there on its `PYTHONPATH` unless the job's own environment sets one, as
+  the seed's jobs do, so an agent's job runs the code an agent put in the shared checkout and cannot change
+  what another job or agent runs.
 - **Its own identity:** a secret on each service it may call, and the gateway's address and key, as above. No
   job gets its submitter's credential or the provider key.
 - **Its own variables,** the `environment` it was submitted with, which is on its record and so holds no

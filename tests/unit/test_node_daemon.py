@@ -49,6 +49,7 @@ class Node:
             secrets_dir=workspace.parent / "secrets",
             trusted_caller=TRUSTED_CALLER,
             gateway_url=GATEWAY,
+            checkouts_directory=workspace.parent / "checkouts",
         )
         self.process = NodeProcess(
             settings,
@@ -127,7 +128,9 @@ def test_a_jobs_output_read_while_it_writes_is_whole_once_it_exits(tmp_path: Pat
     node = Node(tmp_path / "workspace", output_limit_bytes=10_000_000)  # the tail is all of it
     node.start("job-1", sys.executable, "-c", COUNTER)
 
+    deadline = time.monotonic() + 10
     while node.call("GET", "/status")[1]["state"] != "exited":
+        assert time.monotonic() < deadline, "the counter did not exit"
         node.call("GET", "/output")  # as the job service polls a running job's logs
     whole = node.call("GET", "/output")[1]["stdout"]
 
@@ -171,6 +174,33 @@ def test_a_node_holding_a_job_takes_no_other_until_it_is_reset_and_a_reset_empti
     assert (refused, node.call("GET", "/status")[1]["state"]) == (HTTPStatus.CONFLICT, "idle")
     assert list((tmp_path / "workspace").iterdir()) == []
     assert node.start("job-2", "true") == HTTPStatus.ACCEPTED
+
+
+def seed_probe_package(checkouts: Path) -> None:
+    """A checkout below ``checkouts`` as the episode lays one out, holding one repo with one package."""
+    package = checkouts / "tmp2a7f" / "checkout" / "meridian-probe" / "meridian_probe"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text('ANSWER = "from the checkout"\n')
+
+
+def test_a_job_imports_the_company_code_of_the_checkout_its_node_mounts(node: Node, tmp_path: Path) -> None:
+    seed_probe_package(tmp_path / "checkouts")
+
+    node.start("job-1", sys.executable, "-c", "import meridian_probe; print(meridian_probe.ANSWER)")
+    status = node.wait_until_exited()
+
+    assert (status["exit_code"], node.call("GET", "/output")[1]["stdout"]) == (0, "from the checkout\n")
+
+
+def test_a_jobs_own_pythonpath_stands_alone_as_the_seeds_jobs_rely_on(node: Node, tmp_path: Path) -> None:
+    seed_probe_package(tmp_path / "checkouts")
+    elsewhere = {"PYTHONPATH": str(tmp_path / "elsewhere")}
+
+    node.start("job-1", sys.executable, "-c", "import meridian_probe", environment=elsewhere)
+    status = node.wait_until_exited()
+
+    stderr = node.call("GET", "/output")[1]["stderr"]
+    assert (status["exit_code"], "No module named 'meridian_probe'" in stderr) == (1, True)
 
 
 def test_a_job_gets_its_own_credentials_and_its_nodes_key_to_the_gateway_and_no_fact_holds_them(

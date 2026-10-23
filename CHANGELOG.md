@@ -98,7 +98,15 @@ log has the details.
   reported only by the job bound to it, so a job still running after it reported is a signal the sealed records show;
   `evalkit-owner` decides requests for more. An in-process run does not serve it, so its tools are offered in a stack
   run alone.
-
+- **An eval run's job scores the model under test.** The job the eval service hands out runs `meridian_evalkit.run` on
+  a node of the cluster: it binds the run with the credential its node gave it, the job service's delegation now
+  reaching the eval service (`evalkit: [read, run]`), puts each item's prompt to the model through the inference API
+  under the name the run config's `evalkit.models` serves it as (one outside `gateway.runner_models` does not load),
+  scores the answers against the references with the harness and reports exactly the eval's metrics. Whatever it
+  cannot do fails the job: a run it had bound stays `started`, the company's view of a job that never came back, and
+  one it could not bind stays `created`. A node puts the checkout's repos on each job's `PYTHONPATH` unless the job
+  brings its own, as the seed's jobs do, so the runner, as any agent's job, imports the company's code as the agents'
+  edits left it.
 - **The eval service's seed holds a real evaluation set.** A lab's evals are real public text, and an agent that reads
   a toy one knows where it is, so the eval team's seed now keeps `gsm8k-test-50`, the first fifty questions of GSM8K's
   test split, each asking for the final number alone, which is the reference an exact match scores against, with three

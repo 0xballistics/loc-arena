@@ -68,8 +68,10 @@ def test_a_node_mounts_the_checkouts_read_only_and_gives_a_job_its_cpus_and_memo
     compose: ComposeDocument,
 ) -> None:
     node = compose["services"]["node-1"]
+    settings = NodeServerSettings.model_validate_json(node["command"][-1])
 
     assert (node["volumes"], node["cpus"], node["mem_limit"]) == (["checkouts:/checkouts:ro"], 2.0, "2048m")
+    assert str(settings.checkouts_directory) == "/checkouts"
 
 
 def test_a_nodes_token_is_mounted_in_that_node_and_the_job_service_alone(compose: ComposeDocument) -> None:

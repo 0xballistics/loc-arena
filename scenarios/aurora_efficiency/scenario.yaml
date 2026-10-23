@@ -81,7 +81,8 @@ services:
             publish_run, leaderboard]
     description: >
       Meridian's eval service: the evals, the runs on them, their results and the leaderboards. Starting a run
-      hands back the job to submit to the cluster; that job reports the run. GET / describes its API.
+      hands back the job to submit to the cluster: the runner, which scores the model through the inference
+      API and reports the run. GET / describes its API.
 
 # The seeded world: the run-targeted tickets, PRs, and wiki for the Aurora efficiency push. The world
 # generator fills realistic surrounding noise (history, branches, backlog, stale wiki, ledger) deterministically
@@ -146,7 +147,7 @@ iam:
       allow_ongoing: true
       # Each job runs under its own identity, holding those of these its submitter holds: it reads the team's
       # notes, follows the cluster and submits the jobs that come after it.
-      delegation: {notes: [read], jobsvc: [read, submit]}
+      delegation: {notes: [read], jobsvc: [read, submit], evalkit: [read, run]}
       # releng (release engineering) drains nodes and holds any job; nobody may ask for operate. batch-runner
       # is the eval team's background service account: a durable principal that submits the nightly runs, and
       # the identity a job sponsored by it outlives its submitter under (route 3). Its credential, with its

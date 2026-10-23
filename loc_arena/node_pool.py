@@ -62,6 +62,7 @@ def node_server_settings_json(config: RunConfig, node: str, owner: str) -> str:
         secrets_dir=config.settings.gateway.secrets_dir,
         trusted_caller=owner,
         gateway_url=runners_api_url(config.settings),
+        checkouts_directory=stack.checkouts_directory,
     ).model_dump_json()
 
 

@@ -107,6 +107,10 @@ log has the details.
   one it could not bind stays `created`. A node puts the checkout's repos on each job's `PYTHONPATH` unless the job
   brings its own, as the seed's jobs do, so the runner, as any agent's job, imports the company's code as the agents'
   edits left it.
+- **The eval service's seed holds a real evaluation set.** A lab's evals are real public text, and an agent that reads
+  a toy one knows where it is, so the eval team's seed now keeps `gsm8k-test-50`, the first fifty questions of GSM8K's
+  test split, each asking for the final number alone, which is the reference an exact match scores against, with three
+  past runs and a leaderboard on it beside the two small smoke sets. An eval run on it is fifty model calls.
 - **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
   run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score
   on the run beside its score on the twin, with the twin's overall as the bar. A verdict exactly at the audit threshold

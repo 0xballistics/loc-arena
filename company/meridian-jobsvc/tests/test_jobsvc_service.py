@@ -60,7 +60,7 @@ class FakeDaemon:
     answers: bool = True
     failures: list[Exception] = field(default_factory=list)  # raised by its next calls, one each
     started: list[tuple[str, list[str], str]] = field(default_factory=list)
-    environments: list[dict[str, str]] = field(default_factory=list)
+    environments: list[dict[str, SecretStr]] = field(default_factory=list)
 
     def start(
         self,
@@ -72,7 +72,7 @@ class FakeDaemon:
         self._answer()
         self.job_id, self.state = job_id, ProcessState.RUNNING
         self.started.append((job_id, command, owner))
-        self.environments.append({name: secret.get_secret_value() for name, secret in environment.items()})
+        self.environments.append(dict(environment))
 
     def status(self) -> ProcessStatus:
         self._answer()
@@ -267,6 +267,21 @@ def test_a_job_its_node_did_not_start_has_failed_and_a_quiet_node_is_passed_over
     )
 
 
+def test_a_pass_over_the_fleet_that_fails_does_not_stop_the_passes_after_it() -> None:
+    service, (node,), _ = cluster()
+    submitted = service.submit(job(), OWNER, CREDENTIAL)
+    service.reconcile()
+    node.exit(0)
+    node.failures.append(RuntimeError("an answer no pass expected"))
+
+    threading.Thread(target=service.run, args=(0.01,), daemon=True).start()
+    deadline = time.monotonic() + 5
+    while service.get_job(submitted.id).state is JobState.RUNNING and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert service.get_job(submitted.id).state is JobState.SUCCEEDED
+
+
 def test_a_job_runs_as_its_own_identity_whose_secrets_reach_its_process_and_no_record() -> None:
     issuer = FakeIssuer()
     lines: list[str] = []
@@ -278,7 +293,7 @@ def test_a_job_runs_as_its_own_identity_whose_secrets_reach_its_process_and_no_r
 
     assert (submitted.owner, submitted.principal) == (OWNER, "principal-of-job-1")
     assert issuer.asked == [(CREDENTIAL, "job-1", "bench")]
-    assert daemon.environments == [{"MERIDIAN_NOTES_TOKEN": SECRET}]
+    assert daemon.environments == [{"MERIDIAN_NOTES_TOKEN": SecretStr(SECRET)}]
     assert SECRET not in "".join(lines) + service.get_job(submitted.id).model_dump_json()
 
 
@@ -299,13 +314,13 @@ def test_a_job_refused_its_identity_is_never_queued_and_the_next_one_runs() -> N
 
 @pytest.mark.parametrize(
     ("waits_on_a_failed_job", "then", "started_with"),
-    [(False, JobState.RUNNING, [{"MERIDIAN_NOTES_TOKEN": SECRET}]), (True, JobState.FAILED, [])],
+    [(False, JobState.RUNNING, [{"MERIDIAN_NOTES_TOKEN": SecretStr(SECRET)}]), (True, JobState.FAILED, [])],
     ids=["ready to start", "waiting on a failed job"],
 )
 def test_a_pass_while_a_job_is_issued_its_identity_leaves_it_to_a_pass_after(
     waits_on_a_failed_job: bool,
     then: JobState,
-    started_with: list[dict[str, str]],
+    started_with: list[dict[str, SecretStr]],
 ) -> None:
     issuer = FakeIssuer()
     service, (node,), _ = cluster(issuer=issuer)
@@ -322,18 +337,3 @@ def test_a_pass_while_a_job_is_issued_its_identity_leaves_it_to_a_pass_after(
     service.reconcile()
 
     assert (service.get_job(submitted.id).state, node.environments[len(depends_on) :]) == (then, started_with)
-
-
-def test_a_pass_over_the_fleet_that_fails_does_not_stop_the_passes_after_it() -> None:
-    service, (node,), _ = cluster()
-    submitted = service.submit(job(), OWNER, CREDENTIAL)
-    service.reconcile()
-    node.exit(0)
-    node.failures.append(RuntimeError("an answer no pass expected"))
-
-    threading.Thread(target=service.run, args=(0.01,), daemon=True).start()
-    deadline = time.monotonic() + 5
-    while service.get_job(submitted.id).state is JobState.RUNNING and time.monotonic() < deadline:
-        time.sleep(0.01)
-
-    assert service.get_job(submitted.id).state is JobState.SUCCEEDED

@@ -123,8 +123,8 @@ def test_a_jobs_output_read_while_it_writes_is_whole_once_it_exits(tmp_path: Pat
 def test_a_command_that_cannot_start_is_refused_with_its_reason_and_the_node_takes_the_next_job(
     node: Node,
 ) -> None:
-    body = {"job_id": "job-1", "argv": ["no-such-command"], "owner": OWNER, "environment": {}}
-    refused = node.call("POST", "/jobs", body)
+    job = {"job_id": "job-1", "argv": ["no-such-command"], "owner": OWNER, "environment": {}}
+    refused = node.call("POST", "/jobs", job)
 
     taken = node.start("job-2", "true")
 

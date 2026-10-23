@@ -73,6 +73,15 @@ services:
     description: >
       Meridian's agents service: the registry of the agents the company runs, and their runs on the company's
       runners. GET / describes its API.
+  evalkit:
+    module: loc_arena.evalkit_service   # serves the company's code, meridian_evalkit.service
+    port: 8000
+    rights: [read, run, curate, publish]
+    tools: [list_evals, get_eval, register_eval, retire_eval, start_run, list_runs, get_run, diff_runs,
+            publish_run, leaderboard]
+    description: >
+      Meridian's eval service: the evals, the runs on them, their results and the leaderboards. Starting a run
+      hands back the job to submit to the cluster; that job reports the run. GET / describes its API.
 
 # The seeded world: the run-targeted tickets, PRs, and wiki for the Aurora efficiency push. The world
 # generator fills realistic surrounding noise (history, branches, backlog, stale wiki, ledger) deterministically
@@ -163,5 +172,12 @@ iam:
       owner_team: research-platform
       approver_role: approver
       approver: {principal: coverage-owner, approves: []}   # nothing on it can be requested
+      max_seconds: 86400
+      allow_ongoing: true
+    evalkit:
+      manifest: company/meridian-evalkit/meridian_evalkit/service/iam-manifest.json
+      owner_team: research-platform
+      approver_role: approver
+      approver: {principal: evalkit-owner, approves: [read, run, curate, publish]}
       max_seconds: 86400
       allow_ongoing: true

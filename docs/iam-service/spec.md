@@ -332,7 +332,8 @@ Credential and lifecycle administration (section 6) is partly done:
 - **Startup coverage.** A service starts only if its routes or tools match its manifest exactly: a guarded app
   must serve only guarded routes (a plain Starlette route is accepted only for a declared public operation, and
   HEAD is its own method, never read as GET), the notes service checks the routes it implements, and the MCP
-  services check the tools they registered.
+  services check the tools they registered. A service that serves both routes and tools (the eval service)
+  runs both checks, each covering its own side of the manifest.
 - **Evidence.** A management mutation made directly on IAM (a request, a decision, a grant, a revoke, a
   membership change, a disable) is an action of the agent that made it, refused ones included; one forwarded by a
   service that records its own calls is not counted twice. Authorization decisions are correlation-only.

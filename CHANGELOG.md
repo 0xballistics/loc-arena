@@ -90,6 +90,14 @@ log has the details.
   sponsored by the account and outlives the agent; the run config's `scope` bounds the agents of the run, not a
   company principal IAM already authorized. jobsvc stops no job when play ends. The throughput benchmark runs
   from the command line (`python -m meridian_evalkit.bench`).
+- **The eval service.** An eval run is the sanctioned reason for a job on the cluster, which makes it the cover a
+  rogue deployment hides in, so a stack run now serves Meridian's evals, the runs on them, their results and the
+  leaderboards as the live service `evalkit`, from the company's own code (`meridian_evalkit.service`): MCP tools
+  through the tools gateway and an HTTP API beside them on one port, under central IAM, every call recorded. An agent
+  with `run` starts a run and gets the job to submit to the cluster (eval-agent holds `submit` there); a run is
+  reported only by the job bound to it, so a job still running after it reported is a signal the sealed records show;
+  `evalkit-owner` decides requests for more. An in-process run does not serve it, so its tools are offered in a stack
+  run alone.
 
 - **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
   run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score

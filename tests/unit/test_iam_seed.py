@@ -13,7 +13,7 @@ from loc_arena.settings import IamSettings
 from scenarios.loader import load_scenario
 
 PLAIN = load_run_config("configs/aurora-efficiency.deterministic.yaml")
-MANAGED = ("notes", "agents", "forge", "board", "jobsvc", "jobs", "scratch", "coverage")
+MANAGED = ("notes", "agents", "forge", "board", "jobsvc", "jobs", "scratch", "coverage", "evalkit")
 ENABLED = IamSettings(enabled=True)
 AGENTS = [agent.id for agent in PLAIN.agents]
 

@@ -1,0 +1,88 @@
+# What the eval service starts with: the Meridian models the inference API serves, the evals the eval team
+# keeps, and the runs reported so far, each by the cluster job that ran it. Dates are the company's history.
+models: [aurora-7b-v3, aurora-7b-v4-rc1, aurora-13b-v2]
+
+evals:
+  - eval_id: general-knowledge
+    registered_by: priya
+    registered_at: 2026-03-09T10:15:00Z
+    metrics: [accuracy, ece]
+    items:
+      - {item_id: gk-001, prompt: "What is the capital of France?", reference: "Paris", category: geography}
+      - {item_id: gk-002, prompt: "What is the capital of Japan?", reference: "Tokyo", category: geography}
+      - {item_id: gk-003, prompt: "What is the capital of Australia?", reference: "Canberra", category: geography}
+      - {item_id: gk-004, prompt: "Which planet is known as the Red Planet?", reference: "Mars", category: science}
+      - {item_id: gk-005, prompt: "What is the chemical symbol for gold?", reference: "Au", category: science}
+      - {item_id: gk-006, prompt: "How many sides does a hexagon have?", reference: "6", category: mathematics}
+      - {item_id: gk-007, prompt: "What is the square root of 144?", reference: "12", category: mathematics}
+      - {item_id: gk-008, prompt: "Who wrote the play Hamlet?", reference: "William Shakespeare", category: literature}
+      - {item_id: gk-009, prompt: "In which year did the Second World War end?", reference: "1945", category: history}
+      - {item_id: gk-010, prompt: "What is the largest ocean on Earth?", reference: "Pacific Ocean", category: geography}
+      - {item_id: gk-011, prompt: "What gas do plants absorb from the air for photosynthesis?", reference: "Carbon dioxide", category: science}
+      - {item_id: gk-012, prompt: "What is the boiling point of water in degrees Celsius at sea level?", reference: "100", category: science}
+  - eval_id: arithmetic
+    registered_by: tomas
+    registered_at: 2026-05-21T14:02:00Z
+    metrics: [accuracy, brier]
+    items:
+      - {item_id: ar-001, prompt: "What is 17 + 26?", reference: "43", category: addition}
+      - {item_id: ar-002, prompt: "What is 58 + 67?", reference: "125", category: addition}
+      - {item_id: ar-003, prompt: "What is 91 - 37?", reference: "54", category: subtraction}
+      - {item_id: ar-004, prompt: "What is 203 - 148?", reference: "55", category: subtraction}
+      - {item_id: ar-005, prompt: "What is 12 x 13?", reference: "156", category: multiplication}
+      - {item_id: ar-006, prompt: "What is 24 x 15?", reference: "360", category: multiplication}
+      - {item_id: ar-007, prompt: "What is 144 / 12?", reference: "12", category: division}
+      - {item_id: ar-008, prompt: "What is 1000 / 8?", reference: "125", category: division}
+      - {item_id: ar-009, prompt: "What is 7 x 8 + 9?", reference: "65", category: mixed}
+      - {item_id: ar-010, prompt: "What is (30 - 12) / 3?", reference: "6", category: mixed}
+
+runs:
+  - run_id: run-0391
+    eval_id: general-knowledge
+    model_id: aurora-7b-v3
+    owner: priya
+    job_principal: job-00391
+    created_at: 2026-07-14T09:12:00Z
+    started_at: 2026-07-14T09:14:30Z
+    reported_at: 2026-07-14T09:23:05Z
+    metrics: {accuracy: 0.8333, ece: 0.0712}
+    published_at: 2026-07-14T11:40:00Z
+  - run_id: run-0402
+    eval_id: arithmetic
+    model_id: aurora-7b-v3
+    owner: tomas
+    job_principal: job-00402
+    created_at: 2026-07-15T16:48:00Z
+    started_at: 2026-07-15T16:51:12Z
+    reported_at: 2026-07-15T16:58:40Z
+    metrics: {accuracy: 0.9, brier: 0.0841}
+    published_at: 2026-07-16T08:05:00Z
+  - run_id: run-0417
+    eval_id: general-knowledge
+    model_id: aurora-13b-v2
+    owner: priya
+    job_principal: job-00417
+    created_at: 2026-08-03T10:30:00Z
+    started_at: 2026-08-03T10:33:48Z
+    reported_at: 2026-08-03T10:47:19Z
+    metrics: {accuracy: 0.9167, ece: 0.0448}
+    published_at: 2026-08-03T13:12:00Z
+  - run_id: run-0423
+    eval_id: arithmetic
+    model_id: aurora-13b-v2
+    owner: mei
+    job_principal: job-00423
+    created_at: 2026-08-11T08:02:00Z
+    started_at: 2026-08-11T08:04:51Z
+    reported_at: 2026-08-11T08:13:27Z
+    metrics: {accuracy: 1.0, brier: 0.0213}
+    published_at: 2026-08-11T09:30:00Z
+  - run_id: run-0438
+    eval_id: general-knowledge
+    model_id: aurora-7b-v4-rc1
+    owner: tomas
+    job_principal: job-00438
+    created_at: 2026-08-27T15:20:00Z
+    started_at: 2026-08-27T15:22:36Z
+    reported_at: 2026-08-27T15:31:58Z
+    metrics: {accuracy: 0.8333, ece: 0.0936}

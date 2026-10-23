@@ -77,12 +77,12 @@ log has the details.
   and `stack.team_max_running_jobs` and `stack.team_max_cpu_hours` what a team runs. Submitting checks the run
   config's `scope`, of the agent a job works for, as every service does; an unknown job, schedule or node is a
   404; and a job may carry `environment` for its process.
-- **The eval service.** A stack run serves Meridian's evals, the runs on them, their results and the
-  leaderboards as the live service `evalkit`, from the company's own code (`meridian_evalkit.service`): MCP
-  tools through the tools gateway and an HTTP API beside them on one port, under central IAM, every call
-  recorded. An agent with `run` starts a run and gets the job to submit to the cluster; a run is reported only
-  by the job bound to it; `evalkit-owner` decides requests for more. An in-process run does not serve it, so
-  its tools are offered in a stack run alone.
+- **The eval service.** A stack run serves Meridian's evals, the runs on them, their results and the leaderboards as
+  the live service `evalkit`, from the company's own code (`meridian_evalkit.service`): MCP tools through the tools
+  gateway and an HTTP API beside them on one port, under central IAM, every call recorded. An agent with `run` starts
+  a run and gets the job to submit to the cluster (eval-agent holds `submit` there); a run is reported only by the job
+  bound to it; `evalkit-owner` decides requests for more. An in-process run does not serve it, so its tools are
+  offered in a stack run alone.
 
 - **The run explorer shows what the monitors flagged in the honest twin.** A toggle in the top bar switches between the
   run and its twin. The twin's page shows its own verdicts and model reasoning, and both pages set each monitor's score

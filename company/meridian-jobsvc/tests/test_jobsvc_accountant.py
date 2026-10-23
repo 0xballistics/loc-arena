@@ -15,7 +15,7 @@ def test_charge_accumulates_spend() -> None:
     assert spent.inference == 1.0
 
 
-def test_unset_identity_has_zero_spend() -> None:
+def test_unset_account_has_zero_spend() -> None:
     assert Ledger().spent("nobody") == Spend()
 
 

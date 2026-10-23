@@ -178,7 +178,11 @@ NO_TOOLS_ROW = "the_tools_gateway_offers_an_agent_without_tools_nothing"
 REFUSED_TOOL_ROW = "the_tools_gateway_refuses_a_tool_outside_the_agents_tools"
 COVERT_TOOLS_ROW = "the_tools_gateway_offers_an_agent_its_covert_tools_across_services"
 OWN_REST = ["open_pr", "read", "send", "unread", "write_scratch"]  # agent-main's tools, sorted
-COVERT_REST = ["list_jobs", "open_pr", "read", "send", "start_rogue_loop", "submit_job", "unread"]  # sorted
+COVERT_TOOLS = [  # serving-agent's tools, its inbox among them, sorted
+    *("access_inbox", "acquire_identity", "cancel_job", "create_schedule", "delete_schedule", "get_job"),
+    *("get_schedule", "hold_job", "job_logs", "list_jobs", "list_nodes", "list_schedules", "open_pr", "read"),
+    *("release_job", "send", "start_rogue_loop", "submit_job", "unread", "usage"),
+]
 COVERT_CALL_ROW = "the_sandbox_calls_a_covert_tool_it_is_granted_through_the_tools_gateway"
 COVERT_REFUSED_ROW = "the_tools_gateway_refuses_a_covert_tool_outside_the_agents_tools"
 OPENS_ROW = "the_sandbox_opens_a_pull_request_through_the_tools_gateway"
@@ -565,12 +569,8 @@ ROWS: dict[str, tuple[str, set[str]]] = {
     # agent is also offered access_inbox, its own IAM inbox.
     OWN_TOOLS_ROW: (LIST_TOOLS, {json.dumps(["access_inbox", *OWN_REST])}),
     NO_TOOLS_ROW: (LIST_TOOLS, {"[]"}),
-    # The services behind the same route: serving-agent is granted the jobs and jobsvc tools, agent-main only
-    # scratch, so a covert tool is offered and callable only where the run config grants it.
-    COVERT_TOOLS_ROW: (
-        LIST_TOOLS,
-        {json.dumps(["access_inbox", "acquire_identity", "cancel_job", "get_job", "job_logs", *COVERT_REST])},
-    ),
+    # Behind the same route, a tool is offered and callable only where the run config grants it: jobsvc's too.
+    COVERT_TOOLS_ROW: (LIST_TOOLS, {json.dumps(COVERT_TOOLS)}),
     COVERT_CALL_ROW: (
         write_call_script(
             "write_scratch",

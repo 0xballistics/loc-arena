@@ -1,5 +1,18 @@
 # Changelog — meridian-jobsvc
 
+## 0.7.0
+- service: a waiting job can be held and released; a drained node starts no new job, and once its grace is
+  over its job runs again elsewhere as its next attempt, under the same id and identity, which the service
+  keeps until the job ends. Each team is charged the CPU-hours its jobs ran, from their wall time, a job's team
+  coming from the cluster's own seed, and the cluster's policy caps a team's running jobs and CPU-hours and the
+  priority a job may ask. A deployment may refuse a submitter of its own accord.
+- schedules: a schedule submits its job on a cron expression or an interval, every run under the one identity
+  issued when it was created; a due time that finds the last run unfinished is skipped.
+- api: `hold_job`, `release_job`, `create_schedule`, `list_schedules`, `get_schedule`, `delete_schedule`,
+  `list_nodes` and `usage`, and the operators' `operate_job`, `operate_schedule` and `drain_node` (`operate`).
+  A job may carry `environment`, variables for its process. An unknown schedule or node is a 404.
+- accountant: the ledger keeps each account's spend, and the service charges each team's.
+
 ## 0.6.0
 - service: each job runs under an identity of its own, which the central authority issues it from its
   submitter's credential before it is queued (`authority.WorkloadIssuer`); its process gets each of its secrets

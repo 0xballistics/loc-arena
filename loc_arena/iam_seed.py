@@ -2,7 +2,8 @@
 
 A pack's ``iam:`` block names, per live service, the manifest the service ships, the owner policy its
 requests follow and the approver that decides them: a principal of the company, never an agent under test,
-with the permissions it approves (it denies the rest); and, for a service that launches work, its
+with the permissions it approves (it denies the rest); the company principals that hold permissions on it
+from the start (``holders``), such as its operators; and, for a service that launches work, its
 ``delegation``: what that work may be given. Each agent's starting rights and tools on a service, from the run
 config, become its baseline grants.
 The block is inert only where the run config turns ``iam.enabled`` off (an in-process run). Every service an
@@ -29,6 +30,7 @@ INBOX_TOOL = "access_inbox"  # the one tool IAM serves, through the tools gatewa
 REPOSITORY = (
     Path(__file__).resolve().parents[1]
 )  # manifest paths are relative to it; the engine image mirrors it
+CompanyPrincipal = Annotated[StrictStr, Field(pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")]
 
 
 class ApproverSeed(BaseModel):
@@ -36,7 +38,7 @@ class ApproverSeed(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    principal: Annotated[StrictStr, Field(pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")] = Field(
+    principal: CompanyPrincipal = Field(
         description="Its principal in IAM: a member of the owner team, and never an agent of the run.",
     )
     approves: tuple[StrictStr, ...] = Field(
@@ -69,6 +71,11 @@ class ResourceSeed(BaseModel):
         description="What the work the service launches may be given, by service: each piece of work gets "
         "its own identity holding those of these permissions its sponsor holds. Needs a manifest operation "
         "marked launch.",
+    )
+    holders: dict[CompanyPrincipal, tuple[StrictStr, ...]] = Field(
+        default_factory=dict,
+        description="Principals of the company that hold permissions on the service from the start, such as "
+        "its operators' that nobody may request; never an agent of the run.",
     )
 
 
@@ -110,13 +117,18 @@ def find_seed_problem(
             return head
         if problem := _manifest_problem(name, head, live[name].rights, resource.approver):
             return problem
+        if problem := _holders_problem(
+            name,
+            resource.holders,
+            head,
+            {*agents, *map(_service_principal, seed.resources)},
+        ):
+            return problem
         heads[name] = head
         principal, role = resource.approver.principal, (resource.owner_team, resource.approver_role)
         if principal in agents:
             return f"the approver of {name!r} is {principal!r}, an agent under test"
-        if principal in {
-            f"{service}-service" for service in seed.resources
-        }:  # IAM names each service's own so
+        if principal in map(_service_principal, seed.resources):  # IAM names each service's own so
             return f"the approver of {name!r} is named {principal!r}, as a service's own principal is"
         if (
             roles.setdefault(principal, role) != role
@@ -182,6 +194,32 @@ def _manifest_problem(
     if unrequestable := sorted(set(approver.approves) - requestable):
         return f"the approver of {name!r} approves permissions nobody can request: {unrequestable}"
     return None
+
+
+def _holders_problem(
+    name: str,
+    holders: Mapping[str, Collection[str]],
+    head: _ManifestHead,
+    taken: Collection[str],
+) -> str | None:
+    """What is wrong with the company principals seeded holding permissions on ``name``, else ``None``.
+
+    A holder is never one of the ``taken`` principals (an agent of the run, a service's own), and holds only
+    permissions the service's manifest checks.
+    """
+    for holder, permissions in holders.items():
+        if holder in taken:
+            return (
+                f"{holder!r} holds rights on {name!r} from the seed, but is an agent of the run or a service"
+            )
+        if unchecked := sorted(set(permissions) - _checked_permissions(head)):
+            return f"{holder!r} holds permissions the iam manifest of {name!r} never checks: {unchecked}"
+    return None
+
+
+def _service_principal(service: str) -> str:
+    """The principal IAM names a managed service's own."""
+    return f"{service}-service"
 
 
 def _delegation_problem(

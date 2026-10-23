@@ -62,9 +62,15 @@ class Node:
         response = client.request(method, path, json=body, headers={"Authorization": f"Bearer {TOKEN}"})
         return response.status_code, response.json()
 
-    def start(self, job_id: str, *argv: str, environment: dict[str, str] | None = None) -> int:
+    def start(
+        self,
+        job_id: str,
+        *argv: str,
+        environment: dict[str, str] | None = None,
+        attempt: int = 1,
+    ) -> int:
         job = {"job_id": job_id, "argv": list(argv), "owner": OWNER, "environment": environment or {}}
-        return self.call("POST", "/jobs", job)[0]
+        return self.call("POST", "/jobs", {**job, "attempt": attempt})[0]
 
     def wait_until_exited(self, timeout: float = 10.0) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
@@ -103,6 +109,17 @@ def test_a_job_runs_as_a_process_until_it_exits_and_its_exit_and_output_are_kept
     assert [(fact["phase"], fact["owner"], fact.get("exit_code")) for fact in node.facts] == [
         ("start", OWNER, None),
         ("exit", OWNER, 3),
+    ]
+
+
+def test_each_fact_of_a_job_names_its_attempt_which_a_drain_makes_more_than_one(node: Node) -> None:
+    node.start("job-1", "true", attempt=2)
+
+    node.wait_until_exited()
+
+    assert [(fact["phase"], fact["job_id"], fact["attempt"]) for fact in node.facts] == [
+        ("start", "job-1", 2),
+        ("exit", "job-1", 2),
     ]
 
 

@@ -47,7 +47,7 @@ service is not specified yet.
 | The service | It does | Status |
 |---|---|---|
 | is guarded | declares its operations, asks IAM before each protected call, runs only on allow | built in IAM mode: notes, agents (HTTP); jobsvc (HTTP and MCP); forge, board, jobs, scratch, coverage (MCP) |
-| launches work | also issues each piece of work a workload principal with a subset of its caller's rights | built in `meridian-iam`; no service issues workloads yet |
+| launches work | also issues each piece of work a workload principal with a subset of its caller's rights | built: jobsvc issues one per job |
 | calls another service | acts at another resource for its caller | not specified: do not reuse a caller's credential or share a secret |
 
 ### Every service
@@ -104,24 +104,27 @@ service is not specified yet.
    permission and has no target. Only a caller holding that permission can launch.
 2. **Seed what it may hand on.** `Iam.allow_delegation("<its resource>", {resource: [permission]})`, named by
    the service's resource (not its `<name>-service` principal), is a trusted seed call listing every
-   permission its workloads may get, its own resource included only if listed. The scenario's `iam:` block
-   cannot express it yet, so the first issuing service adds it to `ResourceSeed`, `render_bootstrap` and
-   `iam_service.seed_iam`.
-3. **Make the work visible.** A workload calls as `job-<id>`, and `loc_arena/recorded_events.py` drops every
-   record whose caller is not an agent of the run, so monitors would see nothing of it. Before a service
-   issues workloads in a run, attribute each workload's records to its sponsor from IAM's `workload_issued`
-   audit line, which names both.
+   permission its workloads may get, its own resource included only if listed. The scenario's `iam:` entry for
+   the service lists it as `delegation` (`ResourceSeed`), which `render_bootstrap` carries and
+   `iam_service.seed_iam` seeds once every resource is registered. A delegation on a service the seed does not
+   manage, or of a permission that service never checks, or from a service whose manifest marks no operation
+   `launch`, stops the config loading.
+3. **Make the work visible.** A workload calls as `job-<id>`, which is no agent of the run:
+   `loc_arena/recorded_events.py` makes each record a workload made an event of its sponsor, from IAM's
+   `workload_issued` audit line, which names both, and the event names the `workload`.
 4. **Issue per piece of work**, before starting it. `caller_token` is the bearer the caller presented (over
-   HTTP the `Authorization` header; in an MCP tool, the SDK's `get_access_token()`):
+   HTTP the `Authorization` header; in an MCP tool, the SDK's `get_access_token()`). Ask IAM what the work could
+   get, which is what the service may delegate and the caller holds now, and issue exactly that:
 
    ```python
-   secrets_by_audience = {"notes": secrets.token_urlsafe(32)}  # one per audience the grants need
+   grants = guard.client.delegable(caller_token, "submit_job")  # {"notes": ["read"]}
+   secrets_by_audience = {resource: secrets.token_urlsafe(32) for resource in grants}  # one per audience
    workload = guard.client.issue_workload(
        caller_token,
        "submit_job",
        reference=job_id,
        purpose="nightly eval of run 12",
-       grants={"notes": ["read"]},
+       grants=grants,
        ttl=3600,
        credentials=secrets_by_audience,
        key=job_id,

@@ -44,8 +44,9 @@ def _live_names(config: RunConfig) -> set[str]:
 def render_bootstrap(config: RunConfig) -> str:
     """The document IAM seeds itself from at start, for this ``config`` (apply the play's mode first).
 
-    Per managed service: its manifest path, owner policy and approver (the scenario's, never an agent of the
-    run), and each agent's baseline permissions: its starting rights and the permission of each tool it holds.
+    Per managed service: its manifest path, owner policy, approver (the scenario's, never an agent of the
+    run) and delegation, and each agent's baseline permissions: its starting rights and the permission of each
+    tool it holds.
     Dropping the honest twin's covert tools from ``config`` drops their grants with them.
     """
     seed = load_seed(resolve_scenario(config))

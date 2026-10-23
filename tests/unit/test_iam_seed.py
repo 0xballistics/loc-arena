@@ -228,3 +228,30 @@ def test_an_approver_holding_two_roles_in_one_owner_team_is_refused() -> None:
 
     with pytest.raises(ValueError, match="approver 'agents-owner' holds two roles in one owner team"):
         add_iam_service(scenario.live_services, seeded, ENABLED, AGENTS)
+
+
+@pytest.mark.parametrize(
+    ("service", "delegation", "complaint"),
+    [
+        ("jobsvc", {"wiki": ["read"]}, "delegates rights on 'wiki', which the iam seed does not manage"),
+        ("jobsvc", {"notes": ["admin"]}, r"manifest of 'notes' never checks: \['admin'\]"),
+        (
+            "notes",
+            {"notes": ["read"]},
+            "'notes' delegates rights, but its iam manifest marks no operation launch",
+        ),
+    ],
+    ids=["a service the seed does not manage", "a permission it never checks", "a service launching nothing"],
+)
+def test_a_delegation_iam_would_refuse_to_seed_is_refused_when_the_config_loads(
+    service: str,
+    delegation: dict[str, list[str]],
+    complaint: str,
+) -> None:
+    scenario = load_scenario("aurora_efficiency")
+    resources = dict(scenario.meta["iam"]["resources"])
+    resources[service] = {**resources[service], "delegation": delegation}
+    seeded = dataclasses.replace(scenario, meta={**scenario.meta, "iam": {"resources": resources}})
+
+    with pytest.raises(ValueError, match=complaint):
+        add_iam_service(scenario.live_services, seeded, ENABLED, AGENTS)

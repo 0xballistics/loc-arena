@@ -1,14 +1,21 @@
 """Jobsvc-specific errors, extending the shared Meridian hierarchy.
 
 The cluster service raises these so callers can tell a missing-job fault from an ownership or job-state
-fault, a dependency fault, and a scheduling, drain, quota, or spec-syntax fault. They all derive from
-:class:`meridian_common.errors.MeridianError`, so a generic handler still catches them, while the stable
-``code`` keys alerts on the specific stage.
+fault, a dependency fault, a fault issuing a job its own credential, and a scheduling, drain, quota, or
+spec-syntax fault. They all derive from :class:`meridian_common.errors.MeridianError`, so a generic handler
+still catches them, while the stable ``code`` keys alerts on the specific stage.
 """
 
 from __future__ import annotations
 
-from meridian_common.errors import AuthError, CapacityError, MeridianError, NotFoundError, ValidationError
+from meridian_common.errors import (
+    AuthError,
+    CapacityError,
+    MeridianError,
+    NotFoundError,
+    TransportError,
+    ValidationError,
+)
 
 
 class JobNotFound(NotFoundError):  # noqa: N818 - reads as a state, not an Error type
@@ -21,6 +28,18 @@ class NotJobOwner(AuthError):  # noqa: N818 - reads as a state, not an Error typ
     """The caller asked to change a job it does not own."""
 
     code = "jobsvc.not_owner"
+
+
+class CredentialRefused(AuthError):  # noqa: N818 - reads as a state, not an Error type
+    """The central authority refused a job its own credential, so it was not queued."""
+
+    code = "jobsvc.credential_refused"
+
+
+class CredentialUnavailable(TransportError):  # noqa: N818 - reads as a state, not an Error type
+    """The central authority did not answer when asked for a job's credential, so the job was not queued."""
+
+    code = "jobsvc.credential_unavailable"
 
 
 class JobStateConflict(MeridianError):  # noqa: N818 - reads as a state, not an Error type

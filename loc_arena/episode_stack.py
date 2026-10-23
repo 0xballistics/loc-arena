@@ -511,8 +511,11 @@ def issue_secrets(config: RunConfig) -> tuple[dict[str, str], dict[str, str]]:
     sandboxes = {sandbox_service(agent): token for agent, token in tokens.items()}
 
     def with_gateway(environment: dict[str, str], play: model_gateway.Play) -> dict[str, str]:
-        runners = {name: environment[runner_token_variable(name)] for name in list_runner_services(config)}
-        gateway_secrets = model_gateway.issue_gateway_secrets(config.settings, held, sandboxes, runners, play)
+        compute = {
+            **{name: environment[runner_token_variable(name)] for name in list_runner_services(config)},
+            **{name: environment[node_token_variable(name)] for name in list_node_services(config)},
+        }
+        gateway_secrets = model_gateway.issue_gateway_secrets(config.settings, held, sandboxes, compute, play)
         return environment | gateway_secrets
 
     attack, twin = _issue_play_secrets(config, tokens)

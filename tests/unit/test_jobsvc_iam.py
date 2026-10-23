@@ -1,8 +1,9 @@
 """The job service under central IAM: a real IAM server in front of its HTTP API and its tools, a fake fleet.
 
 The app is the one a stack run serves (``loc_arena.jobsvc_service.serving_app``): the tools at ``/mcp`` and
-the API beside them, over one ``JobService``. Its node is a stand-in whose process ends when a test says so,
-and each test calls ``reconcile`` itself in place of the background pass.
+the API beside them, over one ``JobService``, which has IAM issue each job a workload. Its node is a stand-in
+whose process ends when a test says so, and which keeps the environment each job was started with; each test
+calls ``reconcile`` itself in place of the background pass.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import json
 import socket
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
@@ -21,11 +22,12 @@ import anyio
 import httpx2
 import pytest
 import uvicorn
-from loc_arena.jobsvc_service import serving_app
+from loc_arena.jobsvc_service import IamWorkloadIssuer, serving_app
 from loc_arena.tool_records import ToolRecord
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, TextContent
+from pydantic import SecretStr
 from starlette.applications import Starlette
 
 from meridian_iam.client import IamClient
@@ -33,6 +35,7 @@ from meridian_iam.contracts import ManifestError, load_manifest
 from meridian_iam.core import Iam
 from meridian_iam.integration import Guard
 from meridian_iam.service import create_app
+from meridian_jobsvc.errors import CredentialRefused
 from meridian_jobsvc.fleet import ProcessOutput, ProcessState, ProcessStatus
 from meridian_jobsvc.service import JobService
 from meridian_jobsvc.types import Node
@@ -43,6 +46,7 @@ OWNER, OTHER, OUTSIDER = "serving-agent", "eval-agent", "datapipe-agent"  # OUTS
 URL = "http://jobsvc:8000"
 JOB = {"name": "bench", "command": ["python", "bench.py"]}
 ASK = "POST /requests on the IAM service"
+JOB_SECRET = "MERIDIAN_JOBSVC_TOKEN"  # where a job's process finds its own credential on the job service
 
 
 @dataclass
@@ -55,11 +59,19 @@ class FakeDaemon:
     exit_code: int | None = None
     stdout: str = ""
     started: list[str] = field(default_factory=list)
+    environments: list[dict[str, SecretStr]] = field(default_factory=list)
 
-    def start(self, job_id: str, command: list[str], owner: str) -> None:
+    def start(
+        self,
+        job_id: str,
+        command: list[str],
+        owner: str,
+        environment: Mapping[str, SecretStr],
+    ) -> None:
         _ = command, owner
         self.job_id, self.state = job_id, ProcessState.RUNNING
         self.started.append(job_id)
+        self.environments.append(dict(environment))
 
     def status(self) -> ProcessStatus:
         return ProcessStatus(job_id=self.job_id, state=self.state, exit_code=self.exit_code)
@@ -85,8 +97,10 @@ class World:
     records: list[str]
 
     def guard(self, manifest: dict[str, Any] = MANIFEST) -> Guard:
-        client = IamClient(self.iam_url, self.tokens["service"], timeout=1, retries=0)
-        return Guard(load_manifest(manifest), client)
+        return Guard(load_manifest(manifest), self.client())
+
+    def client(self) -> IamClient:
+        return IamClient(self.iam_url, self.tokens["service"], timeout=1, retries=0)
 
     def app(self) -> Starlette:
         return serving_app(self.service, self.guard(), self.records.append)
@@ -116,6 +130,7 @@ def world(tmp_path: Path) -> Iterator[World]:
         allow_ongoing=True,
     )
     iam.bind_service("jobsvc-service", "jobsvc", "jobsvc")
+    iam.allow_delegation("jobsvc", {"jobsvc": ["read"]})  # a job reads the cluster and submits nothing
     tokens = {
         agent: iam.issue_credential(agent, ["jobsvc", "iam:jobsvc"]) for agent in (OWNER, OTHER, OUTSIDER)
     }
@@ -126,7 +141,10 @@ def world(tmp_path: Path) -> Iterator[World]:
     iam_server, iam_url = serve(create_app(iam))
     node = FakeDaemon(Node("node-1", cpu_capacity=2, memory_mb=2048))
     records: list[str] = []
-    yield World(iam, iam_url, iam_server, tokens, JobService([node], records.append), node, records)
+    # Asked for two hours, a job's workload is cut to the jobsvc grant's hour; uncut, IAM would refuse it.
+    client = IamClient(iam_url, tokens["service"], timeout=1, retries=0)
+    service = JobService([node], records.append, IamWorkloadIssuer(client, 7200, {"jobsvc": 3600}))
+    yield World(iam, iam_url, iam_server, tokens, service, node, records)
     iam_server.should_exit = True
 
 
@@ -332,3 +350,85 @@ def test_each_request_tool_call_and_change_of_a_jobs_state_is_one_line_of_the_re
         ["pending", "running"],
         [("get_job", OTHER, True)],
     )
+
+
+async def start_job(world: World, jobsvc: Jobsvc, caller: str = OWNER) -> dict[str, Any]:
+    """Submit and start ``caller``'s job; its process's credential becomes ``jobsvc.tokens["job"]``."""
+    submitted = (await jobsvc.http("POST", "/jobs", caller, JOB)).json()
+    world.service.reconcile()
+    jobsvc.tokens["job"] = world.node.environments[-1][JOB_SECRET].get_secret_value()
+    return submitted
+
+
+def test_a_job_calls_the_service_as_its_own_principal_allowed_exactly_what_iam_gave_it(world: World) -> None:
+    seen: dict[str, object] = {}
+
+    async def scenario(jobsvc: Jobsvc) -> None:
+        submitted = await start_job(world, jobsvc)
+        read = await jobsvc.http("GET", f"/jobs/{submitted['id']}", "job")
+        seen["read"] = (read.status_code, read.json()["principal"] == submitted["principal"] != OWNER)
+        refused = await jobsvc.http("POST", "/jobs", "job", JOB)  # its owner may submit; a job may not
+        seen["submit"] = (refused.status_code, refused.json()["detail"]["permission"])
+        seen["recorded as"] = json.loads(world.records[-1])["caller"] == submitted["principal"]
+
+    play(world, scenario)
+
+    assert seen == {
+        "read": (HTTPStatus.OK, True),
+        "submit": (HTTPStatus.FORBIDDEN, "submit"),
+        "recorded as": True,
+    }
+
+
+def test_a_job_holds_what_its_owner_holds_of_what_a_job_may_be_given_and_no_more(world: World) -> None:
+    world.iam.allow_delegation("jobsvc", {"jobsvc": ["submit"]})  # now a job may read and submit
+    world.iam.revoke(world.tokens["admin"], OTHER, "jobsvc", ["read"], "r")  # OTHER may submit, not read
+    replies: list[int] = []
+
+    async def scenario(jobsvc: Jobsvc) -> None:
+        await start_job(world, jobsvc, OTHER)
+        replies.append((await jobsvc.http("GET", "/jobs", "job")).status_code)
+        replies.append((await jobsvc.http("POST", "/jobs", "job", JOB)).status_code)
+
+    play(world, scenario)
+
+    assert replies == [HTTPStatus.FORBIDDEN, HTTPStatus.CREATED]
+
+
+@pytest.mark.parametrize(
+    ("lose", "refused"),
+    [
+        (
+            lambda world: world.iam.revoke(world.tokens["admin"], OWNER, "jobsvc", ["read"], "r"),
+            HTTPStatus.FORBIDDEN,
+        ),
+        (lambda world: world.iam.disable_principal(OWNER), HTTPStatus.UNAUTHORIZED),
+    ],
+    ids=["its owner's grant revoked", "its owner disabled"],
+)
+def test_a_jobs_next_call_is_refused_once_its_owner_loses_the_grant_it_copied(
+    world: World,
+    lose: Callable[[World], object],
+    refused: HTTPStatus,
+) -> None:
+    replies: list[int] = []
+
+    async def scenario(jobsvc: Jobsvc) -> None:
+        await start_job(world, jobsvc)
+        replies.append((await jobsvc.http("GET", "/jobs", "job")).status_code)
+        lose(world)
+        replies.append((await jobsvc.http("GET", "/jobs", "job")).status_code)
+
+    play(world, scenario)
+
+    assert replies == [HTTPStatus.OK, refused]
+
+
+def test_a_job_id_issued_once_is_refused_another_workload_so_none_passes_to_another_caller(
+    world: World,
+) -> None:
+    issuer = IamWorkloadIssuer(world.client(), 7200, {"jobsvc": 3600})  # as a restarted service would
+    issuer.issue(world.tokens[OWNER], "job-1", "bench")
+
+    with pytest.raises(CredentialRefused, match="idempotency key reused"):
+        issuer.issue(world.tokens[OTHER], "job-1", "bench")

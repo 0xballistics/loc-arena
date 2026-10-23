@@ -14,10 +14,13 @@ service with rights and no tools records a request in its log as a line naming i
 (``ServiceRequestRecord``); its other lines, the notes service's among them, are not records. A request it
 refused makes a blocked ``action``, and one that changed something an ``action``; a read it answered makes
 none. A service with tools and rights both (the eval service) records a tool call or a request per line, and
-each line is read as what it names. The job service, reached both ways, writes both kinds of record, and each
-change of a job's state is a ``job`` event of its owner; the process facts each node of its fleet writes
-(``services/node-<n>.log``) are ``process`` events on the sealed log alone. Neither comes from an agent's
-call, so either may fall outside every turn, unnoted.
+each line is read as what it names. The job service, reached both ways, writes both kinds of record, and
+each change of a job's state is a ``job`` event of its owner; the process facts each node of its fleet
+writes (``services/node-<n>.log``) are ``process`` events on the sealed log alone. Neither comes from an
+agent's call, so either may fall outside every turn, unnoted. A job's own calls carry its workload
+principal (``job-<id>``), which is no agent of the run: each record a workload made is its sponsor's, by
+IAM's ``workload_issued`` audit line, and each of its events names the ``workload``; it too may fall outside
+every turn, unnoted.
 ``blind_monitor`` also reduces the monitors' view: the target's mirror events after the call are dropped, so
 monitors lose that activity while the sealed log keeps it. Each line of
 ``unattributed_records.jsonl`` in the run directory is a record and the ``reason`` it was not placed: not a
@@ -29,13 +32,14 @@ adds nothing.
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import json
 import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPMethod, HTTPStatus
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from sandbox_server.confinement import resolve_inside
@@ -82,6 +86,7 @@ class _RecordedJob(BaseModel):
     id: str
     name: str
     owner: str
+    principal: str | None = None  # the identity the job runs as
     state: str
     node: str | None = None
     exit_code: int | None = None
@@ -114,6 +119,20 @@ class ProcessRecord(BaseModel):
 
     time: AwareDatetime = Field(validation_alias="wall_ts")
     process: _ProcessFact
+
+
+class _IssuedWorkload(BaseModel):
+    """Whose work a workload is: its principal and its sponsor, the caller that launched the work."""
+
+    principal: str
+    sponsor: str
+
+
+class WorkloadIssuedRecord(BaseModel):
+    """IAM's audit line for a workload a service issued, naming its sponsor."""
+
+    kind: Literal["workload_issued"]
+    result: _IssuedWorkload
 
 
 @dataclass(frozen=True)
@@ -224,14 +243,14 @@ _TARGET_FROM: Mapping[str, str] = {
     "revoke_rights": "agent",
     "start_execution": "agent",
     "cancel_execution": "execution_id",
+    "submit_job": "name",
+    "cancel_job": "job_id",
     "register_eval": "eval_id",
     "retire_eval": "eval_id",
     "start_run": "eval_id",
     "bind_job": "run_id",
     "report_results": "run_id",
     "publish_run": "run_id",
-    "submit_job": "name",
-    "cancel_job": "job_id",
 }
 # The job service's tools that change something; a successful call of its others, reads, makes no event.
 _JOB_CHANGES = frozenset({"submit_job", "cancel_job"})
@@ -412,6 +431,7 @@ def _parse_job_service_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecor
         payload = {
             "job_id": job.id,
             "name": job.name,
+            "principal": job.principal,
             "state": job.state,
             "node": job.node,
             "exit_code": job.exit_code,
@@ -492,13 +512,14 @@ def build_recorded_events(
     ]
     roles = {agent.id: agent.kind for agent in config.agents}
     agent_ids = tuple(roles)
+    sponsors = _read_sponsors(run_directory, config, phases)
     record_line_parsers: list[tuple[str, RecordLineParser]] = [
         *(
-            (service.name, _record_line_parser(service, config))
+            (service.name, _attribute_workloads(_record_line_parser(service, config), sponsors))
             for service in config.live_services
             if service.tools or service.rights
         ),
-        *((node, _parse_process_line) for node in list_node_services(config)),
+        *((node, _attribute_workloads(_parse_process_line, sponsors)) for node in list_node_services(config)),
     ]
     unattributed: list[str] = []
     built: dict[Path, list[_Placed]] = {phase.directory: [] for phase in phases}
@@ -529,6 +550,48 @@ def _record_line_parser(service: LiveService, config: RunConfig) -> RecordLinePa
     if service.tools and service.rights:
         return _parse_tool_call_or_request_line
     return _parse_tool_call_line if service.tools else _parse_service_request_line
+
+
+def _read_sponsors(run_directory: Path, config: RunConfig, phases: list[_Phase]) -> dict[str, str]:
+    """Each workload central IAM issued in the run, by principal, and the agent its work is for.
+
+    A workload another workload launched works for that one's sponsor: IAM logs a workload's issuance after
+    its sponsor's, so each sponsor is resolved by the time its workloads are read.
+    """
+    sponsors: dict[str, str] = {}
+    if not config.settings.iam.enabled:
+        return sponsors
+    for line in _read_record_lines(run_directory, config.settings.iam.service, phases):
+        try:
+            issued = WorkloadIssuedRecord.model_validate_json(line).result
+        except ValidationError:  # IAM's every other audit line
+            continue
+        sponsors[issued.principal] = sponsors.get(issued.sponsor, issued.sponsor)
+    return sponsors
+
+
+def _attribute_workloads(parse: RecordLineParser, sponsors: Mapping[str, str]) -> RecordLineParser:
+    """``parse``, with each record a workload made attributed to the agent it works for.
+
+    Each of the workload's events becomes its sponsor's, naming the ``workload``, and like a job's, may fall
+    outside every turn of the sponsor's.
+    """
+
+    def parse_attributed(line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine | None:
+        record = parse(line, agent_ids)
+        workload = None if record is None else record.agent
+        if record is None or workload is None or workload not in sponsors:
+            return record
+        sponsor = sponsors[workload]
+        events = [
+            dataclasses.replace(event, actor_uid=sponsor, payload={**event.payload, "workload": workload})
+            if event.actor_uid == workload
+            else event
+            for event in record.events
+        ]
+        return _ParsedRecordLine(record.wall, sponsor, events, asynchronous=True)
+
+    return parse_attributed
 
 
 def _read_record_lines(run_directory: Path, service: str, phases: list[_Phase]) -> Iterator[str]:

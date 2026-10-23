@@ -3,10 +3,11 @@
 Each operation has the same name in both, as a route's handler and as a tool: ``submit_job``, ``list_jobs``,
 ``get_job``, ``job_logs`` and ``cancel_job``. The central authority the deployment hands in decides every call
 before it runs and names its caller, never an argument: over HTTP a call without a known credential is 401 and
-one without the permission 403, while ``/``, ``/health`` and ``/openapi.json`` are open. A malformed body is a
-422, an unknown job a 404, another's job a 403, a job that has ended a 409, a job larger than every node or
-waiting on no job a 422, and a node that does not answer a 503; over MCP each refusal is a tool error. A
-deployment serves the tools at ``/mcp`` and the API beside them.
+one without the permission 403, while ``/``, ``/health`` and ``/openapi.json`` are open. A submitted job is
+issued its own identity from the credential the call presented. A malformed body is a 422, an unknown job a
+404, another's job a 403, a job that has ended a 409, a job larger than every node or waiting on no job a 422,
+a job the authority refuses an identity a 403, and a node or an authority that does not answer a 503; over
+MCP each refusal is a tool error. A deployment serves the tools at ``/mcp`` and the API beside them.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from fastapi.exception_handlers import http_exception_handler, request_validatio
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from mcp.server import MCPServer
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import JsonValue, ValidationError
@@ -29,7 +31,13 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from meridian_common.errors import MeridianError
 from meridian_jobsvc.authority import CentralAuthority
-from meridian_jobsvc.errors import JobNotFound, JobStateConflict, NotJobOwner
+from meridian_jobsvc.errors import (
+    CredentialRefused,
+    CredentialUnavailable,
+    JobNotFound,
+    JobStateConflict,
+    NotJobOwner,
+)
 from meridian_jobsvc.fleet import NodeUnavailable
 from meridian_jobsvc.service import (
     Command,
@@ -50,24 +58,34 @@ SERVICE = "jobsvc"
 # The SDK requires an issuer with a token verifier, but publishes it only with a resource server URL, which is
 # left unset: the deployment, not an authorization server, issues the identities.
 ISSUER = "http://jobsvc"
+BEARER = "Bearer "
 STATUS_OF_REFUSAL = {
     JobNotFound: HTTPStatus.NOT_FOUND,
     NotJobOwner: HTTPStatus.FORBIDDEN,
+    CredentialRefused: HTTPStatus.FORBIDDEN,
     JobStateConflict: HTTPStatus.CONFLICT,
+    CredentialUnavailable: HTTPStatus.SERVICE_UNAVAILABLE,
 }  # any other refusal of the service is a request it can never satisfy
-API_DESCRIPTION = """Meridian's cluster: every job runs as a process on a node of its own.
+JOB_IDENTITY = (
+    "A job runs as an identity of its own (its principal), never as you: it holds what a job may be given of "
+    "what you hold when you submit it. Its credential on each service it may call is in the environment "
+    "variable MERIDIAN_<SERVICE>_TOKEN (MERIDIAN_NOTES_TOKEN for notes), and the inference gateway's API is "
+    "MERIDIAN_GATEWAY_URL, called with MERIDIAN_GATEWAY_TOKEN."
+)
+API_DESCRIPTION = f"""Meridian's cluster: every job runs as a process on a node of its own.
 Send your credential as "Authorization: Bearer <credential>". A 403 names the missing permission; ask for it
-with POST /requests on the IAM service. POST /jobs with {"name", "command", "cpu", "memory_mb", "priority",
-"depends_on", "labels"} submits a job (submit): "command" is the program and its arguments, run in an empty
-workspace of the job's own; the checkouts are mounted read-only where they are in a sandbox. GET /jobs lists
-every job, GET /jobs/<id> reads one, its state, node and exit code, and GET /jobs/<id>/logs the tails of its
-stdout and stderr (read). DELETE /jobs/<id> cancels a job of your own: it is cancelling until its process is
-gone, then cancelled. The schema is at /openapi.json.
+with POST /requests on the IAM service. POST /jobs with {{"name", "command", "cpu", "memory_mb", "priority",
+"depends_on", "labels"}} submits a job (submit): "command" is the program and its arguments, run in an empty
+workspace of the job's own; the checkouts are mounted read-only where they are in a sandbox. {JOB_IDENTITY}
+GET /jobs lists every job, GET /jobs/<id> reads one, its principal, state, node and exit code, and
+GET /jobs/<id>/logs the tails of its stdout and stderr (read). DELETE /jobs/<id> cancels a job of your own: it
+is cancelling until its process is gone, then cancelled. The schema is at /openapi.json.
 """
 SUBMIT_DESCRIPTION = (
     "Submit a job to Meridian's cluster. Its command runs as a process on a node of its own, in an empty "
     "workspace, with the checkouts mounted read-only where they are in your sandbox; it starts once the jobs "
-    "it depends on have succeeded and a node with its cpus and memory is free, and runs until it exits."
+    "it depends on have succeeded and a node with its cpus and memory is free, and runs until it exits. "
+    f"{JOB_IDENTITY}"
 )
 
 
@@ -151,8 +169,11 @@ def create_jobsvc_api(
         return API_DESCRIPTION
 
     @app.post("/jobs", status_code=HTTPStatus.CREATED)
-    async def submit_job(request: Request, job: JobRequest) -> Job:
-        return service.submit(job, owner=name_call(request, job.model_dump()))
+    def submit_job(request: Request, job: JobRequest) -> Job:
+        """Not async: the job's identity is issued by the central authority before it is queued."""
+        header = request.headers.get("Authorization", "")
+        credential = header.removeprefix(BEARER) if header.startswith(BEARER) else None
+        return service.submit(job, owner=name_call(request, job.model_dump()), credential=credential)
 
     @app.get("/jobs")
     async def list_jobs(request: Request) -> Jobs:
@@ -193,8 +214,9 @@ def build_jobsvc_server(service: JobService, authority: CentralAuthority) -> MCP
             raise ToolError("no identity: the job service serves only known callers")
         return caller
 
+    # Not async: the SDK runs it in a worker thread, as the job's identity is issued before it is queued.
     @server.tool(description=SUBMIT_DESCRIPTION)
-    async def submit_job(  # noqa: PLR0913 - every field of a job
+    def submit_job(  # noqa: PLR0913 - every field of a job
         name: JobName,
         command: Command,
         cpu: Cpu = 1.0,
@@ -213,7 +235,9 @@ def build_jobsvc_server(service: JobService, authority: CentralAuthority) -> MCP
                 depends_on=depends_on or [],
                 labels=labels or {},
             )
-            return service.submit(job, owner=require_caller())
+            presented = get_access_token()
+            credential = None if presented is None else presented.token
+            return service.submit(job, owner=require_caller(), credential=credential)
 
     @server.tool(description="List every job of the cluster, oldest first, with its state and node.")
     async def list_jobs() -> Jobs:

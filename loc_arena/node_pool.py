@@ -5,7 +5,8 @@ One live service of the scenario may declare a fleet (``nodes: {<pool>: n}``). A
 alone, which must also hold the node's token, and runs one job at a time in an empty ``/workspace``, with the
 checkouts mounted read-only where a sandbox has them. Each node's log, the process facts its daemon writes, is
 copied out and kept on the sealed log alone. A node's token is mounted in that node and in the service,
-nowhere else; the fleet is recreated before the honest twin, as the runners are.
+nowhere else, and is also the key its jobs call the gateway with, on the runners' route; the fleet is
+recreated before the honest twin, as the runners are.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from scenarios.loader import NODE_PREFIX, LiveService
 
 from loc_arena.compose_document import ComposeService, Healthcheck
 from loc_arena.config import RunConfig
+from loc_arena.gateway.model_gateway import runners_api_url
 from loc_arena.sandbox import TOKEN_FILE
 
 NODE_TARGET = "worker"  # the Dockerfile's stage of the nodes
@@ -59,6 +61,7 @@ def node_server_settings_json(config: RunConfig, node: str, owner: str) -> str:
         output_limit_bytes=stack.command_output_limit_bytes,
         secrets_dir=config.settings.gateway.secrets_dir,
         trusted_caller=owner,
+        gateway_url=runners_api_url(config.settings),
     ).model_dump_json()
 
 

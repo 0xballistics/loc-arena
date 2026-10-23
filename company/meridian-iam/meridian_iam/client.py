@@ -118,6 +118,21 @@ class IamClient:
             raise Unavailable("malformed IAM decision")
         return Decision(**fields)
 
+    def delegable(self, caller_token: str | None, operation: str) -> dict[str, list[str]]:
+        """What work the caller launches through ``operation`` could be given now, by resource: a read.
+
+        Each permission this client's service may delegate that the caller holds now, which is what
+        ``issue_workload`` grants when asked for it. A malformed answer is ``Unavailable``.
+        """
+        headers = {"X-Caller-Authorization": f"Bearer {caller_token}"} if caller_token else {}
+        raw = self._call("GET", f"/workloads/delegable?operation={operation}", headers=headers, safe=True)
+        if not isinstance(raw, dict) or not all(
+            isinstance(permissions, list) and all(isinstance(p, str) for p in permissions)
+            for permissions in raw.values()
+        ):
+            raise Unavailable("malformed IAM answer")
+        return raw
+
     def issue_workload(  # noqa: PLR0913
         self,
         caller_token: str | None,

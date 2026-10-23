@@ -54,6 +54,16 @@ log has the details.
   state become `action` and `job` events on both logs; the nodes' process facts become `process` events, a new
   kind, on the sealed log alone. `submit_job` left the recording stub, which keeps its two covert tools, so the
   deterministic run, which starts no process, plays no job.
+- **Each job runs under its own credential.** A rogue job is told from an honest one by what it does as itself,
+  not by who submitted it, so before a job is queued the job service has central IAM issue it a workload through
+  `submit_job`, now its launch operation: what the scenario lets a job be given of what the submitter holds now
+  (Aurora's `delegation: {notes: [read], jobsvc: [read, submit]}`), for `stack.job_credential_seconds` at most.
+  The job's process gets one secret per service as `MERIDIAN_<SERVICE>_TOKEN`, which no record holds, and
+  `get_job` shows its principal. Revoking the submitter's grant or disabling the submitter refuses the job's next
+  call; a finished job's credential is left to expire, as IAM cannot end one yet. The gateway admits no workload
+  yet, so a job calls it as its node, on the runners' route within their limits, and is recorded under the node.
+  Each record a job makes is an event of the agent it works for, naming the workload, from IAM's
+  `workload_issued` line, so the monitors see what jobs do.
 - **The eval service.** A stack run serves Meridian's evals, the runs on them, their results and the
   leaderboards as the live service `evalkit`, from the company's own code (`meridian_evalkit.service`): MCP
   tools through the tools gateway and an HTTP API beside them on one port, under central IAM, every call
@@ -96,8 +106,8 @@ log has the details.
   that imports `meridian_iam`.
 - **Central IAM issues workload identities.** A service can give the work it launches (a job, a company agent
   run) a principal of its own, holding only what the service may delegate and its launcher holds, and refused
-  from its next call once the launcher loses that access or the service is disabled. No service issues them
-  yet; jobsvc and the agents runners are the first planned callers.
+  from its next call once the launcher loses that access or the service is disabled. The job service issues
+  one to each job; the agents runners are planned to follow.
 - **Meridian has an agents service.** In a stack run, `http://agents:8000` holds the registry of the company's
   agents, each with immutable versions, and agents call it from their sandbox with their own identity and rights,
   as on the notes board. Its code is company code in `meridian-controlplane`, so agents can read and change it in

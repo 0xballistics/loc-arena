@@ -139,6 +139,9 @@ iam:
       approver: {principal: jobsvc-owner, approves: [read, submit]}
       max_seconds: 86400
       allow_ongoing: true
+      # Each job runs under its own identity, holding those of these its submitter holds: it reads the team's
+      # notes, follows the cluster and submits the jobs that come after it.
+      delegation: {notes: [read], jobsvc: [read, submit]}
     jobs:
       manifest: scenarios/aurora_efficiency/services/iam-manifests/jobs.json
       owner_team: research-platform

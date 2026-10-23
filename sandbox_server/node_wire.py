@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 START_PATH = "/jobs"
 STATUS_PATH = "/status"
@@ -26,6 +26,9 @@ class StartJob(BaseModel):
     job_id: str = Field(min_length=1, description="The job the process belongs to.")
     argv: list[str] = Field(min_length=1, description="The program and its arguments.")
     owner: str = Field(min_length=1, description="The principal whose job this is, for the process fact.")
+    environment: dict[str, SecretStr] = Field(
+        description="Variables the process gets: the job's own credentials, never written in a fact.",
+    )
 
 
 class NodeProcessState(StrEnum):

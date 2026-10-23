@@ -42,6 +42,7 @@ def main(arguments: list[str]) -> None:
         load_seed(),
         url=f"http://{entry.name}:{entry.port}",
         resources=JobResources(cpu=settings.evalkit.job_cpu, memory_mb=settings.evalkit.job_memory_mb),
+        served=settings.evalkit.models,
     )
     guard = guard_from_environment(os.environ)  # IAM decides every call: no identity or rights table here
     api = create_evalkit_api(registry, write_record_line, load_iam_authority(guard))

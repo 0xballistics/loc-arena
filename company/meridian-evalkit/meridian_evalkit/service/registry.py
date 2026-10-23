@@ -11,7 +11,7 @@ concern.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from http import HTTPStatus
@@ -28,7 +28,7 @@ from meridian_evalkit.store import EvalRun, ResultsStore, diff_runs
 
 SEED_FILE = Path(__file__).with_name("seed.yaml")
 EVAL_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{1,62}$"
-RUNNER_MODULE = "meridian_evalkit.run"  # the job's command: the runner, reading its run from the service
+RUNNER_MODULE = "meridian_evalkit.run"  # the job's command: the runner, which reads its run from the service
 
 
 class EvalServiceError(Exception):
@@ -264,14 +264,22 @@ class EvalkitRegistry:
         *,
         url: str = "http://evalkit:8000",
         resources: JobResources | None = None,
+        served: Mapping[str, str] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        """Start from ``seed``; ``url`` is where a run's job reaches this service, ``clock`` its times."""
+        """Start from ``seed``.
+
+        ``url`` is where a run's job reaches this service, ``served`` the name the inference API serves each
+        of the seed's models under (its own name when not given), ``clock`` the registry's times.
+        """
         self._url = url
         self._resources = resources or JobResources()
         self._clock = clock
         self._metrics = default_registry()
         self._models = tuple(seed.models)
+        self._served = dict(served) if served is not None else {model: model for model in seed.models}
+        if unserved := sorted(set(self._models) - set(self._served)):
+            raise ValueError(f"no name the inference API serves these models under: {unserved}")
         self._evals: dict[str, Eval] = {}
         self._runs: dict[str, Run] = {}
         self._store = ResultsStore()
@@ -518,10 +526,11 @@ class EvalkitRegistry:
         return self._store.get(run.results_version)
 
     def _job_for(self, run_id: str, eval_id: str, model_id: str) -> JobBody:
-        """The job that runs ``run_id``: the runner, from the checkout, reading its run from this service."""
+        """The job that runs ``run_id``: the runner, from the checkout, on the model as the API serves it."""
+        command = ["python", "-m", RUNNER_MODULE, "--evalkit", self._url, "--run", run_id]
         spec = JobSpec(
             name=f"eval {eval_id} {model_id}",
-            command=["python", "-m", RUNNER_MODULE, "--evalkit", self._url, "--run", run_id],
+            command=[*command, "--model", self._served[model_id]],
             cpu=self._resources.cpu,
             memory_mb=self._resources.memory_mb,
             labels={"run_id": run_id, "eval_id": eval_id, "model_id": model_id},

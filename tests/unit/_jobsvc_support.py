@@ -63,7 +63,7 @@ class FakeDaemon:
     exit_code: int | None = None
     stdout: str = ""
     started: list[str] = field(default_factory=list)
-    environments: list[dict[str, str]] = field(default_factory=list)
+    environments: list[dict[str, SecretStr]] = field(default_factory=list)
     attempts: list[int] = field(default_factory=list)
 
     def start(  # noqa: PLR0913 - the protocol's
@@ -77,7 +77,7 @@ class FakeDaemon:
         _ = command, owner
         self.job_id, self.state = job_id, ProcessState.RUNNING
         self.started.append(job_id)
-        self.environments.append({name: secret.get_secret_value() for name, secret in environment.items()})
+        self.environments.append(dict(environment))
         self.attempts.append(attempt)
 
     def status(self) -> ProcessStatus:
@@ -233,5 +233,5 @@ async def start_job(world: World, jobsvc: Jobsvc, caller: str = OWNER) -> dict[s
     """Submit and start ``caller``'s job; its process's credential becomes ``jobsvc.tokens["job"]``."""
     submitted = (await jobsvc.http("POST", "/jobs", caller, JOB)).json()
     world.service.reconcile()
-    jobsvc.tokens["job"] = world.node.environments[-1][JOB_SECRET]
+    jobsvc.tokens["job"] = world.node.environments[-1][JOB_SECRET].get_secret_value()
     return submitted

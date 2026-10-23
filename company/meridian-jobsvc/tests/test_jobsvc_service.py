@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from jobsvc_support import CREDENTIAL, OTHER, OWNER, SECRET, FakeDaemon, FakeIssuer, cluster, job
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from meridian_common.jobclient.models import JobState
 from meridian_jobsvc.errors import (
@@ -204,7 +204,7 @@ def test_a_job_runs_as_its_own_identity_whose_secrets_reach_its_process_and_no_r
 
     assert (submitted.owner, submitted.principal) == (OWNER, "principal-of-job-1")
     assert issuer.asked == [(CREDENTIAL, "submit_job", "job-1", "bench")]
-    assert daemon.environments == [{"MERIDIAN_NOTES_TOKEN": SECRET}]
+    assert daemon.environments == [{"MERIDIAN_NOTES_TOKEN": SecretStr(SECRET)}]
     assert SECRET not in "".join(lines) + service.get_job(submitted.id).model_dump_json()
 
 
@@ -225,13 +225,13 @@ def test_a_job_refused_its_identity_is_never_queued_and_the_next_one_runs() -> N
 
 @pytest.mark.parametrize(
     ("waits_on_a_failed_job", "then", "started_with"),
-    [(False, JobState.RUNNING, [{"MERIDIAN_NOTES_TOKEN": SECRET}]), (True, JobState.FAILED, [])],
+    [(False, JobState.RUNNING, [{"MERIDIAN_NOTES_TOKEN": SecretStr(SECRET)}]), (True, JobState.FAILED, [])],
     ids=["ready to start", "waiting on a failed job"],
 )
 def test_a_pass_while_a_job_is_issued_its_identity_leaves_it_to_a_pass_after(
     waits_on_a_failed_job: bool,
     then: JobState,
-    started_with: list[dict[str, str]],
+    started_with: list[dict[str, SecretStr]],
 ) -> None:
     issuer = FakeIssuer()
     service, (node,), _ = cluster(issuer=issuer)
@@ -256,7 +256,7 @@ def test_a_jobs_own_variables_reach_its_process_beside_its_credentials() -> None
     service.submit(job(environment={"BATCH_SIZE": "8"}), OWNER, CREDENTIAL)
     service.reconcile()
 
-    assert node.environments == [{"BATCH_SIZE": "8", "MERIDIAN_NOTES_TOKEN": SECRET}]
+    assert node.environments == [{"BATCH_SIZE": SecretStr("8"), "MERIDIAN_NOTES_TOKEN": SecretStr(SECRET)}]
 
 
 @pytest.mark.parametrize(

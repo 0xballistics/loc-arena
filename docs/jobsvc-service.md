@@ -217,6 +217,9 @@ unnoted.
 - The tools gateway admitting a workload's credential: a job calls each service directly, at
   `http://<service>:8000`.
 - Ending a job's workload when the job ends, and renewing it.
+- Surviving a restart within a play: nothing restarts the service, whose registry lives in memory, so a
+  restarted one would forget every job and schedule and mint the same ids again, which IAM refuses as the
+  keys of workloads it already issued.
 - Seed jobs and schedules (slice 4): other teams' work on the cluster. Until then `releng` holds `operate` and
   nothing operates the cluster in a run.
 - Service callers, and an HTTP `JobTransport` in `meridian_common.jobclient` for company callers, which wait for

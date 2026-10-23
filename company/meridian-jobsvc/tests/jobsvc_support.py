@@ -54,7 +54,7 @@ class FakeDaemon:
     answers: bool = True
     failures: list[Exception] = field(default_factory=list)  # raised by its next calls, one each
     started: list[tuple[str, list[str], str]] = field(default_factory=list)
-    environments: list[dict[str, str]] = field(default_factory=list)
+    environments: list[dict[str, SecretStr]] = field(default_factory=list)
     attempts: list[int] = field(default_factory=list)
 
     def start(  # noqa: PLR0913 - the protocol's
@@ -68,7 +68,7 @@ class FakeDaemon:
         self._answer()
         self.job_id, self.state = job_id, ProcessState.RUNNING
         self.started.append((job_id, command, owner))
-        self.environments.append({name: secret.get_secret_value() for name, secret in environment.items()})
+        self.environments.append(dict(environment))
         self.attempts.append(attempt)
 
     def status(self) -> ProcessStatus:

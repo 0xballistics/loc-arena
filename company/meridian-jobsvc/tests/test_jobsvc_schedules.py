@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from jobsvc_support import CREDENTIAL, OWNER, SECRET, Clock, FakeIssuer, cluster, job
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from meridian_common.jobclient.models import JobState
 from meridian_jobsvc.schedules import ScheduleRequest
@@ -37,7 +37,7 @@ def test_a_schedules_runs_start_when_due_as_its_one_identity_and_stop_once_it_is
         (created.id, OWNER, "principal-of-schedule-1", JobState.SUCCEEDED),
     ] * 2
     assert issuer.asked == [(CREDENTIAL, "create_schedule", created.id, "nightly")]
-    assert node.environments == [{"MERIDIAN_NOTES_TOKEN": SECRET}] * 2
+    assert node.environments == [{"MERIDIAN_NOTES_TOKEN": SecretStr(SECRET)}] * 2
 
 
 def test_a_due_run_is_skipped_while_the_schedules_last_run_is_unfinished() -> None:

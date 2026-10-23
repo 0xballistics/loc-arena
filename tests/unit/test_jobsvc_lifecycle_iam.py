@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
 from meridian_jobsvc.service import ClusterPolicy
 from tests.unit._jobsvc_support import (
@@ -247,7 +248,8 @@ def test_a_drained_nodes_job_runs_again_elsewhere_under_its_job_id_and_credentia
             await jobsvc.http("GET", f"/jobs/{submitted['id']}", "job")
         ).json()  # read with its credential
         seen["moved"] = (moved["node"], moved["attempt"], moved["principal"] == submitted["principal"])
-        seen["same credential"] = world.nodes[1].environments == [{JOB_SECRET: jobsvc.tokens["job"]}]
+        credential = SecretStr(jobsvc.tokens["job"])  # the one its first attempt was handed
+        seen["same credential"] = world.nodes[1].environments == [{JOB_SECRET: credential}]
         nodes = (await jobsvc.tool(OTHER, "list_nodes", {})).structured_content or {}
         seen["nodes"] = [(node["id"], node["state"]) for node in nodes["nodes"]]
 

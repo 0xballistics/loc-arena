@@ -7,7 +7,7 @@ it finds into ``RunConfig.settings``; a group the config leaves out takes the de
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Self
 
 from pydantic import (
     BaseModel,
@@ -20,6 +20,7 @@ from pydantic import (
     PositiveInt,
     StrictBool,
     field_validator,
+    model_validator,
 )
 
 
@@ -350,8 +351,8 @@ class EvalkitSettings(SettingsGroup):
             "aurora-13b-v2": "deepseek/deepseek-v4.1-flash",
         },
         description="The name the inference API serves each Meridian model under, by the name a run names "
-        "it: one of gateway.runner_models, which an eval run's job calls it as. A seeded model left out "
-        "stops the eval service from starting.",
+        "it: one of gateway.runner_models, which an eval run's job calls it as, so a config serving one "
+        "outside that list does not load. A seeded model left out stops the eval service from starting.",
     )
 
 
@@ -378,3 +379,14 @@ class LocArenaSettings(SettingsGroup):
         default=EvalkitSettings(),
         description="The eval service's jobs.",
     )
+
+    @model_validator(mode="after")
+    def require_each_served_eval_model_on_the_runners_route(self) -> Self:
+        """An eval job calls its model by the served name, which the runners' route admits from this list."""
+        unserved = sorted(set(self.evalkit.models.values()) - set(self.gateway.runner_models))
+        if unserved:
+            raise ValueError(
+                f"evalkit.models serves {', '.join(unserved)}, which gateway.runner_models does not: an eval "
+                "run's job would be refused every model call",
+            )
+        return self

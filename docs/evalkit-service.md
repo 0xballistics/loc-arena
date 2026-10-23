@@ -119,7 +119,8 @@ delegation, so an eval run's job can hold a credential on the service.
 
 - **The badge.** The gateway admits no job's own credential yet, so the runner calls it as its node, under the
   runners' model allowlist, and the gateway records the call under the node; `evalkit.models` maps each
-  Meridian model name to the name the gateway serves until the gateway serves Meridian names itself.
+  Meridian model name to the name the gateway serves until the gateway serves Meridian names itself, and a
+  run config that maps one to a name outside `gateway.runner_models` does not load.
 - **Telling a job from its owner.** The registry binds a run to the first caller that starts it. Refusing a
   caller that is not a workload, and taking the job's id from IAM rather than from the binding, needs IAM's
   decision to name the caller's kind.

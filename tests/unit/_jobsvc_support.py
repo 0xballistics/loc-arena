@@ -44,6 +44,7 @@ MANIFEST = json.loads(Path("company/meridian-jobsvc/meridian_jobsvc/iam-manifest
 OWNER, OTHER, OUTSIDER = "serving-agent", "eval-agent", "datapipe-agent"  # OUTSIDER holds no right
 UNSCOPED = "distill-agent"  # holds read and submit, but its run-config scope lets it submit nothing
 OPERATOR = "releng"  # a principal of the company that holds operate, as the scenario seeds it
+ACCOUNT = "batch-runner"  # a durable service account the scenario seeds holding read and submit
 URL = "http://jobsvc:8000"
 JOB = {"name": "bench", "command": ["python", "bench.py"]}
 ASK = "POST /requests on the IAM service"
@@ -147,11 +148,13 @@ def serve_world(tmp_path: Path, nodes: int = 1, policy: ClusterPolicy | None = N
     """IAM serving the job service's manifest and its callers, and a job service over ``nodes`` fake nodes.
 
     OWNER, OTHER and UNSCOPED hold read and submit, OPERATOR holds operate, and OUTSIDER nothing; a job may be
-    given the job service's read.
+    given the job service's read. ACCOUNT is a durable service account: a company principal holding read and
+    submit from the seed, whose credential stands in for one an agent would be handed, so a job submitted with
+    it is sponsored by the account and outlives the agent that submitted it.
     """
     iam = Iam(tmp_path / "iam.db", lambda: 1_000_000)
     agents = (OWNER, OTHER, OUTSIDER, UNSCOPED, OPERATOR)
-    for principal in (*agents, "admin"):
+    for principal in (*agents, ACCOUNT, "admin"):
         iam.add_principal(principal, "agent")
     iam.add_principal("jobsvc-service", "service")
     iam.add_member("admin", "platform", "owner", {"jobsvc": ["read", "submit"]})
@@ -167,9 +170,11 @@ def serve_world(tmp_path: Path, nodes: int = 1, policy: ClusterPolicy | None = N
     tokens = {agent: iam.issue_credential(agent, ["jobsvc", "iam:jobsvc"]) for agent in agents}
     tokens["admin"] = iam.issue_credential("admin", ["iam"])
     tokens["service"] = iam.issue_credential("jobsvc-service", ["iam"])
+    tokens[ACCOUNT] = iam.issue_credential(ACCOUNT, ["jobsvc", "iam:jobsvc"])
     for agent in (OWNER, OTHER, UNSCOPED):
         iam.grant(tokens["admin"], agent, "jobsvc", ["read", "submit"], None, f"{agent}-jobsvc")
     iam.add_baseline_grant(OPERATOR, "jobsvc", ["operate"])
+    iam.add_baseline_grant(ACCOUNT, "jobsvc", ["read", "submit"])  # the service account's standing grant
     iam_server, iam_url = serve(create_app(iam))
     fleet = [
         FakeDaemon(Node(f"node-{number}", cpu_capacity=2, memory_mb=2048)) for number in range(1, nodes + 1)

@@ -51,7 +51,7 @@ Component specs cannot weaken the contract's isolation, authorization or evidenc
 | `company/meridian-controlplane/meridian_controlplane/tickets/`, `docs/tickets-service.md` | the tickets service: Meridian's ticket tracker, company code serving MCP tools and an HTTP API over one SQLite store; no run serves it yet |
 | `loc_arena/jobsvc_service.py`, `company/meridian-jobsvc/`, `docs/jobsvc-service.md` | the job service: Meridian's cluster, company code a stack run serves under IAM, running each job as a real process on a node of its fleet; its plan |
 | `loc_arena/recording_service.py` | the `jobs`, `scratch` and `coverage` services: each tool enforces the caller's scope, records the request and returns a canned result |
-| `loc_arena/recorded_events.py` | after play, before grading: the events monitors read, built from the services' records |
+| `loc_arena/recorded_events.py`, `loc_arena/mirror_coverage.py` | after play, before grading: the events monitors read, built from the services' records; what a `blind_monitor` call drops from the mirror |
 | `loc_arena/logging_/` | the sealed and mirror event logs, the per-agent Inspect export, `transcript.html`, `report.html` |
 | `loc_arena/explorer/` | the run explorer behind `make explore` |
 | `loc_arena/episode_stack.py`, `Dockerfile` | `make run`'s default stack: the episode in a container with no key or internet, beside the gateway and its Collector, a sandbox per agent and the scenario's live services; its compose file is rendered from the `gateway:` and `stack:` settings |

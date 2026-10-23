@@ -17,7 +17,9 @@ Every job runs as an identity of its own, never as its submitter: before a job i
 authority issues it one from the credential its submitter presented (``meridian_jobsvc.authority``), and a
 schedule's runs share the one it was issued when it was created. A job's process gets each of its secrets in
 an environment variable (``credential_variable``). The service keeps them until the job ends, so a drained
-job's next attempt runs as the same identity; no record or answer holds one.
+job's next attempt runs as the same identity; no record or answer holds one. The cluster's seed
+(``meridian_jobsvc.seed``), other teams' jobs and schedules, is the service's before any call: each its
+owner's, holding no identity, since no owner of it presented a credential, and so marked seed.
 
 Each attempt's CPU-hours, its cpus times its wall time from its start to the pass that saw it end, are charged
 to the job's team in the ledger (``meridian_jobsvc.accountant``). A job's team is its submitter's in the
@@ -55,6 +57,7 @@ from meridian_jobsvc.fleet import NodeDaemon, NodeUnavailable, ProcessOutput, Pr
 from meridian_jobsvc.models import ClusterNode, Job, JobLogs, JobRequest, NodeState, Usage
 from meridian_jobsvc.queue.jobqueue import JobQueue
 from meridian_jobsvc.schedules import Schedule, ScheduleRequest
+from meridian_jobsvc.seed import ClusterSeed
 from meridian_jobsvc.types import Node
 
 LAUNCH_JOB = "submit_job"  # the operations the authority issues identities through: a job's,
@@ -151,6 +154,22 @@ class JobService:
             job = self._add(job_id, request, owner, identity)
         self._changed.set()
         return job
+
+    def seed(self, seed: ClusterSeed) -> None:
+        """Queue ``seed``'s jobs, held where it says, and keep its schedules: each its owner's, no identity.
+
+        Call it before the service takes a call, so the seeded jobs are ``job-1`` onwards in the seed's order.
+        """
+        with self._lock:
+            for seeded in seed.jobs:
+                job = self._add(self._queue.submit(_spec(seeded.job)), seeded.job, seeded.owner, None)
+                if seeded.held:
+                    self._queue.dispatch(job.id)
+                    self._record(job, state=JobState.HELD)
+            for seeded in seed.schedules:
+                schedule_id = f"schedule-{next(self._schedule_numbers)}"
+                self._keep_schedule(schedule_id, seeded.schedule, seeded.owner, None)
+        self._changed.set()
 
     def list_jobs(self) -> list[Job]:
         """Every job, oldest first."""
@@ -253,19 +272,7 @@ class JobService:
             schedule_id = f"schedule-{next(self._schedule_numbers)}"
         identity = self._issuer.issue(credential, LAUNCH_SCHEDULE, schedule_id, request.job.name)
         with self._lock:
-            now = self._clock()
-            self._sponsors[identity.principal] = owner
-            self._schedule_identities[schedule_id] = identity
-            schedule = Schedule(
-                **request.model_dump(),
-                id=schedule_id,
-                owner=owner,
-                principal=identity.principal,
-                created_at=now,
-                next_run_at=request.next_run(now, now),
-            )
-            self._schedules[schedule_id] = schedule
-        return schedule
+            return self._keep_schedule(schedule_id, request, owner, identity)
 
     def list_schedules(self) -> list[Schedule]:
         """Every schedule, oldest first, deleted ones included."""
@@ -406,7 +413,7 @@ class JobService:
                     job_id,
                     schedule.job,
                     schedule.owner,
-                    self._schedule_identities[schedule.id],
+                    self._schedule_identities.get(schedule.id),  # none for a seeded schedule
                     schedule.id,
                 )
                 runs = [*runs, job_id]
@@ -522,24 +529,52 @@ class JobService:
         job_id: str,
         request: JobRequest,
         owner: str,
-        identity: JobIdentity,
+        identity: JobIdentity | None,
         schedule_id: str | None = None,
     ) -> Job:
-        """Register queued ``job_id`` as ``owner``'s, running as ``identity``, and record it; lock held."""
-        self._identities[job_id] = identity
-        self._sponsors.setdefault(identity.principal, owner)
+        """Register queued ``job_id`` as ``owner``'s, running as ``identity``, and record it; lock held.
+
+        A job with no identity is seeded.
+        """
+        if identity is not None:
+            self._identities[job_id] = identity
+            self._sponsors.setdefault(identity.principal, owner)
         sponsor = self._sponsor_of(owner)
         job = Job(
             id=job_id,
             **request.model_dump(),
             owner=owner,
-            principal=identity.principal,
+            principal=None if identity is None else identity.principal,
             team=self._teams.get(sponsor, sponsor),
             schedule_id=schedule_id,
+            seed=identity is None,
             state=JobState.PENDING,
             submitted_at=self._clock(),
         )
         return self._record(job)
+
+    def _keep_schedule(
+        self,
+        schedule_id: str,
+        request: ScheduleRequest,
+        owner: str,
+        identity: JobIdentity | None,
+    ) -> Schedule:
+        """Keep ``owner``'s schedule, its runs to run as ``identity``: a seeded one has none. Lock held."""
+        if identity is not None:
+            self._sponsors[identity.principal] = owner
+            self._schedule_identities[schedule_id] = identity
+        now = self._clock()
+        self._schedules[schedule_id] = Schedule(
+            **request.model_dump(),
+            id=schedule_id,
+            owner=owner,
+            principal=None if identity is None else identity.principal,
+            seed=identity is None,
+            created_at=now,
+            next_run_at=request.next_run(now, now),
+        )
+        return self._schedules[schedule_id]
 
     def _sponsor_of(self, principal: str) -> str:
         """The principal at the top of ``principal``'s chain of jobs and schedules: whom its work is for.
@@ -567,9 +602,10 @@ class JobService:
         return used
 
     def _process_environment(self, job: Job) -> dict[str, SecretStr]:
-        """What ``job``'s process gets: its own variables, and its identity's secrets. Lock held."""
+        """What ``job``'s process gets: its own variables, and its identity's secrets, if any. Lock held."""
         own = {name: SecretStr(value) for name, value in job.environment.items()}
-        return own | job_environment(self._identities[job.id])
+        identity = self._identities.get(job.id)
+        return own if identity is None else own | job_environment(identity)
 
     def _describe(self, node_id: str) -> ClusterNode:
         node = self._daemons[node_id].node

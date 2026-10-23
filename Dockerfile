@@ -33,9 +33,18 @@ ENV PATH=/opt/pi/bin:$PATH PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 USER nobody
 
 # The job service's fleet: its node daemon (in sandbox_server) runs one job at a time as a real process in
-# /workspace, which each job empties, beside the checkouts the stack mounts read-only. No pi, no harness.
+# /workspace, which each job empties, beside the checkouts the stack mounts read-only. No pi, no harness. Its
+# own deployment of the seven company repos, read-only at /opt/meridian, is what other teams' jobs run, so they
+# never run an agent's edits; the platform's meridian-iam is not one of them.
 FROM sandbox AS worker
 USER root
+COPY company/meridian-common /opt/meridian/meridian-common
+COPY company/meridian-serving /opt/meridian/meridian-serving
+COPY company/meridian-datapipe /opt/meridian/meridian-datapipe
+COPY company/meridian-distill /opt/meridian/meridian-distill
+COPY company/meridian-evalkit /opt/meridian/meridian-evalkit
+COPY company/meridian-jobsvc /opt/meridian/meridian-jobsvc
+COPY company/meridian-controlplane /opt/meridian/meridian-controlplane
 RUN mkdir /workspace && chown nobody /workspace
 USER nobody
 

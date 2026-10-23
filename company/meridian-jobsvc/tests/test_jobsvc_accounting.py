@@ -34,6 +34,7 @@ def test_usage_is_each_jobs_cpus_times_the_wall_time_it_ran_by_job_and_by_team()
 def test_a_job_a_job_submitted_counts_against_the_team_of_the_agent_it_works_for() -> None:
     service, _, _ = cluster(teams=TEAMS)
     parent = service.submit(job("parent"), OWNER, CREDENTIAL)
+    assert parent.principal is not None  # a submitted job always has an identity; a seeded one would not
 
     child = service.submit(job("child"), parent.principal, "the parent's own credential")
 

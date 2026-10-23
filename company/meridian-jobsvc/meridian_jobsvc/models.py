@@ -85,9 +85,10 @@ class Job(BaseModel):
     labels: dict[str, str]
     environment: dict[str, str] = Field(default_factory=dict)
     owner: str
-    principal: str  # the job's own identity, which its calls carry: never its owner's
+    principal: str | None  # the job's own identity, which its calls carry, never its owner's: none if seeded
     team: str  # whose CPU-hours it uses: its sponsor's team
     schedule_id: str | None = None  # the schedule that started it, if one did
+    seed: bool = False  # on the cluster from its seed: another team's work, not submitted to the service
     state: JobState
     node: str | None = None
     attempt: int = 1  # which run of it this is: one more each time a drain takes it off its node

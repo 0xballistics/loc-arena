@@ -77,12 +77,13 @@ def job_event(
     *,
     ended_ts: float | None,
     started_ts: float = 9000.0,
+    actor_uid: str = "agent-main/serving-agent",
 ) -> Event:
     return Event(
         episode_id=EP,
         seq=seq,
         ts=ts,
-        actor_uid="agent-main/serving-agent",
+        actor_uid=actor_uid,
         actor_role="untrusted",
         kind="job",
         payload={

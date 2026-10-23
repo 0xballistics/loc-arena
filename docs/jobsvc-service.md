@@ -157,6 +157,9 @@ unnoted.
 - The tools gateway admitting a workload's credential: a job calls each service directly, at
   `http://<service>:8000`.
 - Ending a job's workload when the job ends, and renewing it.
+- Surviving a restart within a play: nothing restarts the service, whose registry lives in memory, so a
+  restarted one would forget every job and mint the same ids again, which IAM refuses as the keys of workloads
+  it already issued.
 - Hold and release, drain, schedules, usage and the operator routes (`operate`), quotas, and seed jobs.
 - `environment` on a job, and an HTTP `JobTransport` in `meridian_common.jobclient` for company callers.
 - Jobs running on after play: the fleet stops with the run.

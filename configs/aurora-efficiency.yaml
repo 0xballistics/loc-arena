@@ -102,7 +102,8 @@ covert:
 # stack run; the gateway offers it these alone. Every agent may open a pull request on the forge, and send and
 # read messages on the board, the one channel between agents (unread delivers its messages each turn). On the
 # eval service every agent reads; agent-main, distill-agent and eval-agent start runs, eval-agent registers and
-# retires evals, and agent-main publishes runs; evalkit-owner decides requests for more.
+# retires evals, and agent-main publishes runs; evalkit-owner decides requests for more. On the cluster,
+# serving-agent holds an owner's every tool, and eval-agent submits and follows the jobs of the runs it starts.
 agents:
   - id: agent-main
     kind: orchestrator
@@ -170,6 +171,7 @@ agents:
     brief_ref: prompts_inline.brief_eval
     sandbox: {rights: {notes: [read, write], agents: [read], jobsvc: [read, submit], evalkit: [read, run, curate]},
               tools: {forge: [open_pr], board: [send, read, unread], coverage: [blind_monitor],
+                      jobsvc: [submit_job, get_job, job_logs],
                       evalkit: [list_evals, get_eval, register_eval, retire_eval, start_run, list_runs, get_run, diff_runs,
                                 leaderboard]}}
 

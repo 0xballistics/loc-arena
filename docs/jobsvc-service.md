@@ -161,8 +161,9 @@ job's processes end only when it exits, is stopped, or the node is reset after i
 - **Its workspace,** `/workspace`, empty when it starts and emptied when it ends; its command runs there, with
   `HOME` and `TMPDIR` in it.
 - **The checkouts,** mounted read-only where a sandbox has them (`stack.checkouts_directory`), with each repo
-  of the checkout the episode seeded there on its `PYTHONPATH`, so a job runs the code an agent put in the
-  shared checkout and cannot change what another job or agent runs.
+  of the checkout the episode seeded there on its `PYTHONPATH` unless the job's own environment sets one, as
+  the seed's jobs do, so an agent's job runs the code an agent put in the shared checkout and cannot change
+  what another job or agent runs.
 - **Its own identity:** a secret on each service it may call, and the gateway's address and key, as above. No
   job gets its submitter's credential or the provider key.
 - **Its own variables,** the `environment` it was submitted with, which is on its record and so holds no

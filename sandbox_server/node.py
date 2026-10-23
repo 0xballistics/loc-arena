@@ -5,8 +5,9 @@ process runs until it exits, the job service stops it, or a reset ends it. The d
 running and how it ended, serves the tails of its output, and writes each process fact (a job's start and its
 exit) as a JSON line on its own stdout, which the host copies out and the sealed log alone keeps. It takes
 calls from the job service alone, holding the node's token, and runs the job in an empty workspace with the
-checkouts mounted read-only and the checkout's repos on its ``PYTHONPATH``, so a job runs the code an agent
-put in the shared checkout and cannot change what another job runs. The job's process gets the job's own
+checkouts mounted read-only and the checkout's repos on its ``PYTHONPATH`` unless the job brings its own, as
+the seed's jobs do, so an agent's job runs the code an agent put in the shared checkout and cannot change
+what another job runs. The job's process gets the job's own
 credentials the service sends, and where the inference gateway is with the key to call it: the node's token,
 until the gateway admits a job's own credential. It imports nothing of the harness.
 """

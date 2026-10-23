@@ -1,5 +1,12 @@
 # Changelog — meridian-jobsvc
 
+## 0.8.0
+- seed: the cluster starts with other teams' work as well as its teams: jobs, held or waiting on another where
+  the seed says, and schedules, each its owner's. `JobService.seed` queues them before any call; they hold no
+  identity, since no owner of them presented a credential, so a job or schedule shows `principal` none and
+  `seed` true, and a seeded job's process gets its own variables alone. They run from the cluster's own
+  deployment of the company repos.
+
 ## 0.7.0
 - service: a waiting job can be held and released; a drained node starts no new job, and once its grace is
   over its job runs again elsewhere as its next attempt, under the same id and identity, which the service

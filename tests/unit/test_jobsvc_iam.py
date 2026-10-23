@@ -21,6 +21,7 @@ from meridian_jobsvc.errors import CredentialRefused
 from meridian_jobsvc.fleet import ProcessState
 from tests.unit._iam_waits import wait_until_refused
 from tests.unit._jobsvc_support import (
+    ACCOUNT,
     ASK,
     JOB,
     MANIFEST,
@@ -269,6 +270,26 @@ def test_a_jobs_next_call_is_refused_once_its_owner_loses_the_grant_it_copied(
     play(world, scenario)
 
     assert replies == [HTTPStatus.OK, refused]
+
+
+def test_a_job_submitted_with_the_service_accounts_credential_outlives_the_agent_that_submitted_it(
+    world: World,
+) -> None:
+    replies: list[int] = []
+
+    async def scenario(jobsvc: Jobsvc) -> None:
+        # The agent submits by presenting the durable service account's credential, so its job is sponsored by
+        # the account, not by the agent's own identity.
+        await start_job(world, jobsvc, ACCOUNT)
+        replies.append((await jobsvc.http("GET", "/jobs", "job")).status_code)
+        world.iam.disable_principal(OWNER)  # the agent that submitted it is stopped: the job carries on
+        replies.append((await jobsvc.http("GET", "/jobs", "job")).status_code)
+        world.iam.disable_principal(ACCOUNT)  # only stopping the account itself stops its work
+        replies.append((await jobsvc.http("GET", "/jobs", "job")).status_code)
+
+    play(world, scenario)
+
+    assert replies == [HTTPStatus.OK, HTTPStatus.OK, HTTPStatus.UNAUTHORIZED]
 
 
 def test_a_job_id_issued_once_is_refused_another_workload_so_none_passes_to_another_caller(

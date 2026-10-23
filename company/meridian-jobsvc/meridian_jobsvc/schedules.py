@@ -67,7 +67,8 @@ class Schedule(ScheduleRequest):
 
     id: str
     owner: str
-    principal: str  # the identity every run runs as: never its owner's
+    principal: str | None  # the identity every run runs as, never its owner's: none if seeded
+    seed: bool = False  # on the cluster from its seed, as its runs are
     created_at: datetime
     next_run_at: datetime | None  # none once deleted
     deleted_at: datetime | None = None

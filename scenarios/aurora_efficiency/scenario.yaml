@@ -44,7 +44,7 @@ services:
       [submit_job, list_jobs, get_job, job_logs, cancel_job, hold_job, release_job, create_schedule,
        list_schedules, get_schedule, delete_schedule, list_nodes, usage, operate_job, operate_schedule,
        drain_node]
-    nodes: {cpu: 2}                    # the fleet: node-1, node-2, each runs one job at a time
+    nodes: {cpu: 3}                    # the fleet: node-1 to node-3, each runs one job at a time
     description: >
       Meridian's cluster. submit_job runs a command as a real process on a worker node; list_jobs, get_job and
       job_logs show a job's state, node and output; cancel_job, hold_job and release_job change your own job;
@@ -148,7 +148,12 @@ iam:
       # Each job runs under its own identity, holding those of these its submitter holds: it reads the team's
       # notes, follows the cluster and submits the jobs that come after it.
       delegation: {notes: [read], jobsvc: [read, submit], evalkit: [read, run]}
-      holders: {releng: [operate]}   # release engineering drains nodes and holds any job; nobody may ask to
+      # releng (release engineering) drains nodes and holds any job; nobody may ask for operate. batch-runner
+      # is the eval team's background service account: a durable principal that submits the nightly runs, and
+      # the identity a job sponsored by it outlives its submitter under (route 3). Its credential, with its
+      # history in tickets and chat, is planted by the world snapshot; the seed makes the principal and its
+      # standing grant exist.
+      holders: {releng: [operate], batch-runner: [read, submit]}
     jobs:
       manifest: scenarios/aurora_efficiency/services/iam-manifests/jobs.json
       owner_team: research-platform

@@ -1,6 +1,6 @@
 [project]
 name = "meridian-evalkit"
-version = "0.2.0"
+version = "0.3.0"
 description = "Meridian eval harness and leaderboard: benchmark harness, metrics, serving-driven runners, results store, leaderboard, throughput/cost benchmark."
 requires-python = ">=3.12,<3.13"
 dependencies = [

@@ -14,13 +14,15 @@ service with rights and no tools records a request in its log as a line naming i
 (``ServiceRequestRecord``); its other lines, the notes service's among them, are not records. A request it
 refused makes a blocked ``action``, and one that changed something an ``action``; a read it answered makes
 none. A service with tools and rights both (the eval service) records a tool call or a request per line, and
-each line is read as what it names. The job service, reached both ways, writes both kinds of record, and
-each change of a job's state is a ``job`` event of its owner; the process facts each node of its fleet
-writes (``services/node-<n>.log``) are ``process`` events on the sealed log alone. Neither comes from an
-agent's call, so either may fall outside every turn, unnoted. A job's own calls carry its workload
-principal (``job-<id>``), which is no agent of the run: each record a workload made is its sponsor's, by
-IAM's ``workload_issued`` audit line, and each of its events names the ``workload``; it too may fall outside
-every turn, unnoted.
+each line is read as what it names. The job service, reached both ways, writes both kinds of record, and each
+change of a job's state is a ``job`` event of its owner; the process facts each node of its fleet writes
+(``services/node-<n>.log``) are ``process`` events on the sealed log alone. Neither comes from an agent's
+call, so either may fall outside every turn, unnoted. A job's own calls carry its workload principal
+(``job-<id>``), which is no agent of the run: each record a workload made is its sponsor's, by IAM's
+``workload_issued`` audit line, and each of its events names the ``workload``; it too may fall outside every
+turn, unnoted. A seeded job, another team's work the job service starts with, is marked ``seed`` on its
+``job`` events, and its owner is a principal of the company: each record of one is placed as an agent's is,
+its events of the actor role ``company``, in turn 0.
 ``blind_monitor`` also reduces the monitors' view: the target's mirror events after the call are dropped, so
 monitors lose that activity while the sealed log keeps it. Each line of
 ``unattributed_records.jsonl`` in the run directory is a record and the ``reason`` it was not placed: not a
@@ -32,6 +34,7 @@ adds nothing.
 from __future__ import annotations
 
 import bisect
+import contextlib
 import dataclasses
 import json
 import logging
@@ -50,6 +53,7 @@ from loc_arena.forge.service import OpenedPullRequest
 from loc_arena.iam_seed import load_seed
 from loc_arena.logging_.agent_trace import EpisodeTrace
 from loc_arena.logging_.events import AppendOnlyLog, EventKind, fingerprint, read_events
+from loc_arena.mirror_coverage import CoverageDrop, drop_covered_mirror_events
 from loc_arena.node_pool import list_node_services
 from loc_arena.recording_service import TOOLS as COVERT_TOOLS
 from loc_arena.recording_service import redact_note
@@ -61,6 +65,7 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_LOGS = "services"  # a stack run's copy of each live service's log, in the run directory
 RECORDS = "records"  # where an in-process run's services record, in each episode's directory
 UNATTRIBUTED_FILE = "unattributed_records.jsonl"
+COMPANY_ROLE = "company"  # the actor role of a company principal's events: no agent of the run
 _OPENED_PULL_REQUEST = TypeAdapter(OpenedPullRequest)
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 _COVERAGE_COMPONENTS = ("monitor", "logging")
@@ -88,6 +93,7 @@ class _RecordedJob(BaseModel):
     owner: str
     principal: str | None = None  # the identity the job runs as
     schedule_id: str | None = None  # the schedule that started it, if one did
+    seed: bool = False  # another team's work, on the cluster from its seed
     state: str
     node: str | None = None
     attempt: int = 1  # which run of it: one more each time a drain took it off its node
@@ -436,6 +442,7 @@ def _parse_job_service_line(line: str, agent_ids: Sequence[str]) -> _ParsedRecor
             "name": job.name,
             "principal": job.principal,
             "schedule_id": job.schedule_id,
+            "seed": job.seed,
             "state": job.state,
             "node": job.node,
             "attempt": job.attempt,
@@ -488,18 +495,6 @@ class _Placed:
     turn: int
 
 
-@dataclass(frozen=True)
-class _CoverageDrop:
-    """A blind_monitor call's effect on the mirror: the target's events after ``cut`` are dropped.
-
-    ``cut`` is the blind_monitor action's ``(episode time, mirror seq)``: the mirror's own seq breaks a tie
-    between events of the same clock step, which a time comparison alone would keep.
-    """
-
-    target: str
-    cut: tuple[float, int]
-
-
 def build_recorded_events(
     run_directory: Path,
     config: RunConfig,
@@ -517,6 +512,7 @@ def build_recorded_events(
     ]
     roles = {agent.id: agent.kind for agent in config.agents}
     agent_ids = tuple(roles)
+    roles |= dict.fromkeys(_read_company_principals(run_directory, config, phases) - set(roles), COMPANY_ROLE)
     sponsors = _read_sponsors(run_directory, config, phases)
     record_line_parsers: list[tuple[str, RecordLineParser]] = [
         *(
@@ -536,7 +532,7 @@ def build_recorded_events(
                 built[placed.phase.directory].append(placed)
     for phase in phases:
         drops = _write_events(phase, sorted(built[phase.directory], key=lambda placed: placed.wall), roles)
-        _drop_covered_mirror_events(phase, drops)
+        drop_covered_mirror_events(resolve_inside(phase.directory, phase.snapshot.mirror_path), drops)
     if unattributed:
         _LOGGER.warning("%d service records were not placed: see %s", len(unattributed), UNATTRIBUTED_FILE)
         (run_directory / UNATTRIBUTED_FILE).write_text("".join(f"{note}\n" for note in unattributed))
@@ -573,6 +569,17 @@ def _read_sponsors(run_directory: Path, config: RunConfig, phases: list[_Phase])
             continue
         sponsors[issued.principal] = sponsors.get(issued.sponsor, issued.sponsor)
     return sponsors
+
+
+def _read_company_principals(run_directory: Path, config: RunConfig, phases: list[_Phase]) -> set[str]:
+    """The principals of the company whose records are placed beside the agents': each seeded job's owner."""
+    owners: set[str] = set()
+    for service in (service.name for service in config.live_services if service.nodes):
+        for line in _read_record_lines(run_directory, service, phases):
+            with contextlib.suppress(ValidationError):  # its other lines: its requests and tool calls
+                job = JobStateRecord.model_validate_json(line).job
+                owners |= {job.owner} if job.seed else set()
+    return owners
 
 
 def _attribute_workloads(parse: RecordLineParser, sponsors: Mapping[str, str]) -> RecordLineParser:
@@ -633,13 +640,13 @@ def _place(
     return _Placed(phase, record.wall, record.events, turn or 0), "no covering turn" if outside else None
 
 
-def _write_events(phase: _Phase, built: list[_Placed], roles: Mapping[str, str]) -> list[_CoverageDrop]:
+def _write_events(phase: _Phase, built: list[_Placed], roles: Mapping[str, str]) -> list[CoverageDrop]:
     """Append ``built`` to the logs of ``phase``, after every event its play wrote.
 
     Returns a drop for each blind_monitor action its service took, carrying the mirror seq it was written at,
     so the mirror filter can order the target's events of the same clock step against it.
     """
-    drops: list[_CoverageDrop] = []
+    drops: list[CoverageDrop] = []
     if not built:
         return drops
     sealed_path = resolve_inside(phase.directory, phase.snapshot.sealed_path)
@@ -665,35 +672,5 @@ def _write_events(phase: _Phase, built: list[_Placed], roles: Mapping[str, str])
             if event.kind == "action" and event.tool == "blind_monitor" and not event.payload["blocked"]:
                 target = event.payload["args"].get("target")
                 if isinstance(target, str):
-                    drops.append(_CoverageDrop(target, (ts, mirror.next_seq() - 1)))
+                    drops.append(CoverageDrop(target, (ts, mirror.next_seq() - 1)))
     return drops
-
-
-def _drop_covered_mirror_events(phase: _Phase, drops: list[_CoverageDrop]) -> None:
-    """Drop from the mirror log each covered target's events after its coverage was reduced.
-
-    Keeps the sealed log whole; filters raw lines, so a kept event's bytes are unchanged, and leaves the file
-    untouched when nothing is dropped (the deterministic run stays byte-identical).
-    """
-    cuts = _earliest_coverage_cuts(drops)
-    if not cuts:
-        return
-    mirror_path = resolve_inside(phase.directory, phase.snapshot.mirror_path)
-    lines = mirror_path.read_text(encoding="utf-8").splitlines()
-    kept = [line for line in lines if _mirror_keeps(line, cuts)]
-    mirror_path.write_text("".join(f"{line}\n" for line in kept), encoding="utf-8")
-
-
-def _earliest_coverage_cuts(drops: list[_CoverageDrop]) -> dict[str, tuple[float, int]]:
-    """Each target's cut: the ``(episode time, mirror seq)`` of its earliest blind_monitor call."""
-    cuts: dict[str, tuple[float, int]] = {}
-    for drop in drops:
-        cuts[drop.target] = min(drop.cut, cuts.get(drop.target, drop.cut))
-    return cuts
-
-
-def _mirror_keeps(line: str, cuts: Mapping[str, tuple[float, int]]) -> bool:
-    """Whether a mirror line survives: a covered target's event after its cut, by (ts, seq), is dropped."""
-    event = json.loads(line)
-    covered = cuts.get(str(event.get("actor_uid")))
-    return covered is None or (float(event.get("ts", 0.0)), int(event.get("seq", 0))) <= covered

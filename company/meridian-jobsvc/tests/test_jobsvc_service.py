@@ -279,6 +279,7 @@ def test_the_deployment_is_asked_of_the_agent_a_job_works_for_and_its_refusal_qu
 
     service, _, records = cluster(admit_submitter=admit)
     parent = service.submit(job("parent"), OWNER, CREDENTIAL)
+    assert parent.principal is not None  # a submitted job always has an identity; a seeded one would not
     service.submit(job("child"), parent.principal, "the parent's own credential")
 
     with pytest.raises(SubmissionRefused):

@@ -968,7 +968,7 @@ def test_a_stack_run_copies_each_live_services_log_into_its_run_directory_before
 
     run_aurora_in_stack(tmp_path)
 
-    logged = sorted((*SERVICES, "node-1", "node-2", "agentgateway"))
+    logged = sorted((*SERVICES, "node-1", "node-2", "node-3", "agentgateway"))
     assert copied_at_grading == [[f"{service}.log" for service in logged]] * 2
 
 
@@ -998,7 +998,7 @@ def test_an_attack_stack_run_drains_the_record_then_renews_every_container_but_t
 
     commands = [call[COMPOSE_PREFIX_LENGTH:] for call in docker.calls]
     plays = [index for index, command in enumerate(commands) if command[0] == "up" and "--attach" in command]
-    logged = (*SERVICES, "node-1", "node-2", "agentgateway")  # the fleet's logs are its process facts
+    logged = (*SERVICES, "node-1", "node-2", "node-3", "agentgateway")  # the fleet's logs: its process facts
     between = [
         command[:2] if command[0] == "cp" else command for command in commands[plays[0] + 1 : plays[1]]
     ]

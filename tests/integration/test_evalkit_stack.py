@@ -1,11 +1,11 @@
 """An eval run's job in real containers: the runner binds the run as itself, with what its node gave it.
 
 Brings up the job service's stack (``test_jobsvc_stack``'s fixture) and the eval service beside it, with the
-company repos in the checkouts' volume as the episode seeds them. agent-main starts a run with its identity on
-the eval service and serving-agent submits the job the service handed out, as the agents would; the job, a
-real process on a node, imports the runner from that checkout and binds the run under the workload IAM issued
-it, with the eval service's credential the job service's delegation gives it. No model gateway runs, so the
-runner's first model call fails and the job with it: the run stays started, bound to that job alone.
+company repos in the checkouts' volume as the episode seeds them. eval-agent starts a run with its identity on
+the eval service and submits the job the service handed out with its identity on the cluster, as it would; the
+job, a real process on a node, imports the runner from that checkout and binds the run under the workload IAM
+issued it, with the eval service's credential the job service's delegation gives it. No model gateway runs, so
+the runner's first model call fails and the job with it: the run stays started, bound to that job alone.
 """
 
 from __future__ import annotations
@@ -20,14 +20,13 @@ from loc_arena.tasks.main_task_grader import seed_checkout
 
 from tests.integration.test_jobsvc_stack import (  # noqa: F401 - the fixture
     CONFIG,
-    OWNER,
     SANDBOX,
     Stack,
     pytestmark,
     stack,
 )
 
-STARTER = "agent-main"  # holds run on the eval service; serving-agent, which submits, holds read alone
+AGENT = "eval-agent"  # holds run on the eval service and submit on the cluster: it starts and submits a run
 START = {"eval_id": "arithmetic", "model_id": "aurora-7b-v3"}
 HOME = f"{CONFIG.settings.stack.checkouts_directory}/evalkit-stack"  # the episode's home for its checkout
 
@@ -79,14 +78,14 @@ def test_an_eval_runs_job_binds_the_run_under_its_own_workload_and_fails_without
 ) -> None:
     stack.run("up", "--detach", "--wait", "--no-build", "evalkit")
     seed_the_checkout(stack, tmp_path)
-    status, run = call_evalkit(stack, STARTER, "POST", "/runs", START)
+    status, run = call_evalkit(stack, AGENT, "POST", "/runs", START)
     assert status == HTTPStatus.CREATED, run
-    status, submitted = stack.http(OWNER, "POST", "/jobs", run["job"])
+    status, submitted = stack.http(AGENT, "POST", "/jobs", run["job"])
     assert status == HTTPStatus.CREATED, submitted
 
     job = stack.wait_for(submitted["id"], "succeeded", "failed")
-    _, bound = call_evalkit(stack, STARTER, "GET", f"/runs/{run['run_id']}")
-    logs = stack.http(OWNER, "GET", f"/jobs/{job['id']}/logs")[1]
+    _, bound = call_evalkit(stack, AGENT, "GET", f"/runs/{run['run_id']}")
+    logs = stack.http(AGENT, "GET", f"/jobs/{job['id']}/logs")[1]
 
     assert (job["state"], bound["state"], bound["job_principal"]) == (
         "failed",

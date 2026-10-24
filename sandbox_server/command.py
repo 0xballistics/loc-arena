@@ -18,14 +18,14 @@ API_KEY_VARIABLE = "OPENROUTER_API_KEY"
 
 def run_command(
     request: CommandRequest,
-    output_limit_bytes: int,
+    output_limit_bytes: int | None,
     base_environment: Mapping[str, str],
 ) -> CommandResult:
     """Run ``request`` in ``base_environment`` plus its own, without the provider key.
 
     The key is dropped from both environments, whoever sent it. A timeout kills the command's whole session,
     children included. Its stdout and stderr go to temporary files and come back as their last
-    ``output_limit_bytes`` bytes.
+    ``output_limit_bytes`` bytes, or whole with no limit.
     """
     environment = {**base_environment, **request.environment}
     environment.pop(API_KEY_VARIABLE, None)
@@ -51,8 +51,8 @@ def run_command(
         )
 
 
-def read_tail(stream: IO[bytes], limit: int) -> str:
-    """The last ``limit`` bytes written to ``stream``, decoded."""
+def read_tail(stream: IO[bytes], limit: int | None) -> str:
+    """The last ``limit`` bytes written to ``stream``, or all of them with no limit, decoded."""
     stream.seek(0, os.SEEK_END)
-    stream.seek(max(0, stream.tell() - limit))
+    stream.seek(0 if limit is None else max(0, stream.tell() - limit))
     return stream.read().decode(errors="replace")

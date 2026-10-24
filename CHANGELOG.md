@@ -121,7 +121,8 @@ log has the details.
 - **Agents can run the company's agents.** In a stack run, an agent with `run` on the agents service (in the
   default config, agent-main) starts an execution of a registered agent with `POST /executions`: pi runs its
   latest version on one of three runners, and the execution ends completed, failed or cancelled. Starting and
-  cancelling are actions on the event logs; each change of state is an audit line naming its runner.
+  cancelling are actions on the event logs; each change of state is an audit line naming its runner. Its record
+  keeps pi's whole reply.
 - **Runners for the company's own agents.** A scenario's service can declare `runners: <n>`: a stack run then
   starts `runner-1` to `runner-<n>`, sandboxes with pi in an empty workspace that only that service can drive,
   each with its own token. pi there calls models through the gateway, which by default lets runners make 300
@@ -251,6 +252,11 @@ log has the details.
   progress, against `AGENTS.md` and the repository's own ast-grep rules. (#64)
 
 ### Changed
+
+- **No length caps on the company's agents.** The agents service takes agent names, system prompts and execution
+  inputs of any length: their caps came from how a runner is handed its command, not from the product. A prompt
+  or input over Linux's 128 KiB limit on one argument now fails its execution, which says the runner could not
+  run it.
 
 - **Agents learn of access requests at the start of their turn.** Under central IAM the harness reads each
   agent's IAM inbox when its turn starts, as it reads its board messages, and hands it each new item once as a

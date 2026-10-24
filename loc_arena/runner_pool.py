@@ -67,6 +67,7 @@ def render_runners(
         update={
             "checkouts_directory": RUNNER_WORKSPACE,
             "command_timeout_limit_seconds": stack.runner_timeout_seconds,
+            "output_limit_bytes": None,  # an execution keeps all of its reply
         },
     )
     shared_image: ComposeService = {**built, "pull_policy": "never"}

@@ -1,5 +1,8 @@
 # Changelog — meridian-controlplane
 
+## 0.7.1
+- agents: no length cap on agent names, system prompts or execution inputs.
+
 ## 0.7.0
 - tickets: a tickets service, Meridian's ticket tracker, with projects, their tickets and the comments on each,
   served as an HTTP API and as MCP tools over one SQLite store that records the history of every change.

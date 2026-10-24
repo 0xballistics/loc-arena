@@ -20,12 +20,7 @@ from typing import Protocol
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from meridian_controlplane.agents.registry import (
-    MAX_PROMPT_CHARACTERS,
-    AgentName,
-    AgentRegistry,
-    AgentVersion,
-)
+from meridian_controlplane.agents.registry import AgentName, AgentRegistry, AgentVersion
 
 PI_COMMAND = "pi-on-gateway"  # on every runner: pi, run once on a model through the company's gateway
 RESET_AGAIN_SECONDS = 0.2  # how long a cancel waits for a run to end before it resets the runner again
@@ -47,7 +42,7 @@ class ExecutionRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     agent: AgentName
-    input: str = Field(min_length=1, max_length=MAX_PROMPT_CHARACTERS)
+    input: str = Field(min_length=1)
 
 
 class Execution(BaseModel):
@@ -69,7 +64,7 @@ class Execution(BaseModel):
 
 
 class RunnerResult(BaseModel):
-    """What a command did on a runner: its exit code, none when it was killed, and the tails of its output."""
+    """What a command did on a runner: its exit code, none when it was killed, and its output."""
 
     returncode: int | None
     stdout: str

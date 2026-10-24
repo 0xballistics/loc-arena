@@ -114,8 +114,8 @@ monitors watch what the agents do, such as starting an execution, not what the c
 graded run's gateway record is copied, `observation.json` (`loc_arena/verifier/observation.py`) gives each
 runner call in it that the provider answered one level. Phoenix takes spans from anyone, so only a span that
 tells the call counts: one with the call's response id, naming the execution, runner and starter the audit lines
-record, and keeping, if anything, the call's own prompt and reply, read from the gateway's record as pi reads a
-chat completion.
+record, and keeping the call's own prompt and reply, or neither, as pi's trace does, the reply read from the
+gateway's record as pi reads a chat completion.
 
 | Level | The company's records hold |
 |---|---|

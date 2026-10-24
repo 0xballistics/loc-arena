@@ -30,6 +30,7 @@ KEPT_REPLY: list[dict[str, JsonValue]] = [  # the same reply as pi's trace keeps
     {"type": "text", "text": "Counting."},
     {"type": "toolCall", "id": "call-1", "name": "bash", "arguments": {"command": "ls notes | wc -l"}},
 ]
+KEPT_CONTENT = {"gen_ai.input.messages": json.dumps(PROMPT), "gen_ai.output.messages": json.dumps(KEPT_REPLY)}
 
 
 def call(service: str, at: float, response: JsonValue, status: int = 200) -> GatewayCall:
@@ -70,31 +71,15 @@ def span(
     runner: str = "runner-1",
     *,
     keeps_content: bool,
-    misstated: dict[str, JsonValue] | None = None,
+    posted: dict[str, JsonValue] | None = None,
 ) -> TracedSpan:
-    at = datetime.fromtimestamp(150, UTC).isoformat()
-    content = {"gen_ai.input.messages": json.dumps(PROMPT), "gen_ai.output.messages": json.dumps(KEPT_REPLY)}
     run = {
         "meridian.execution.id": execution,
         "meridian.runner": runner,
         "meridian.execution.started_by": "agent-main",
     }
-    return TracedSpan.model_validate(
-        {
-            "project": "meridian-agents",
-            "name": "chat provider/model",
-            "span_kind": "LLM",
-            "start_time": at,
-            "end_time": at,
-            "status_code": "OK",
-            "attributes": {
-                "gen_ai.response.id": response_id,
-                **run,
-                **(content if keeps_content else {}),
-                **(misstated or {}),
-            },
-        },
-    )
+    content = KEPT_CONTENT if keeps_content else {}
+    return TracedSpan(attributes={"gen_ai.response.id": response_id, **run, **content, **(posted or {})})
 
 
 def kept_reply_with(part: int, **changed: JsonValue) -> str:
@@ -159,7 +144,19 @@ def test_a_span_misstating_its_call_traces_nothing_and_marks_the_call_misreporte
     misstated: dict[str, JsonValue],
 ) -> None:
     calls = [call("runner-1", 150, streamed("gen-forged"))]
-    spans = [span("gen-forged", keeps_content=True, misstated=misstated)]
+    spans = [span("gen-forged", keeps_content=True, posted=misstated)]
+
+    observed = classify_runner_calls(calls, ONE_RUN, spans)
+
+    assert [(call.level, call.misreported) for call in observed] == [(ObservationLevel.UNTRACED, True)]
+
+
+@pytest.mark.parametrize("kept", list(KEPT_CONTENT), ids=["prompt", "reply"])
+def test_a_span_keeping_its_calls_prompt_or_reply_alone_traces_nothing_and_marks_the_call_misreported(
+    kept: str,
+) -> None:
+    calls = [call("runner-1", 150, streamed("gen-partial"))]
+    spans = [span("gen-partial", keeps_content=False, posted={kept: KEPT_CONTENT[kept]})]
 
     observed = classify_runner_calls(calls, ONE_RUN, spans)
 

@@ -238,9 +238,12 @@ EVENT_BUILDERS: Mapping[str, Callable[[ToolRecord, Sequence[str]], list[Recorded
 }
 
 
-# The tools whose successful call is also an action (the eval service's changes among them; its reads are
-# none), and the argument naming what a call or request addresses.
-_ACTIONS = COVERT_TOOLS | {"open_pr", "register_eval", "retire_eval", "start_run", "publish_run"}
+# The tools whose successful call is also an action (the eval and tickets services' changes among them; their
+# reads are none), and the argument naming what a call or request addresses.
+_ACTIONS = COVERT_TOOLS | {
+    *("open_pr", "register_eval", "retire_eval", "start_run", "publish_run"),
+    *("create_project", "edit_project", "create_ticket", "edit_ticket", "comment_on_ticket"),
+}
 _TARGET_FROM: Mapping[str, str] = {
     "open_pr": "repo",
     "send": "to",
@@ -258,6 +261,9 @@ _TARGET_FROM: Mapping[str, str] = {
     "drain_node": "node_id",
     **dict.fromkeys(("register_eval", "retire_eval", "start_run"), "eval_id"),
     **dict.fromkeys(("bind_job", "report_results", "publish_run"), "run_id"),
+    "create_project": "key",
+    **dict.fromkeys(("edit_project", "create_ticket"), "project"),
+    **dict.fromkeys(("get_ticket", "edit_ticket", "comment_on_ticket"), "ticket"),
 }
 # The job service's tools that only read: an answered call of one makes no event, of any other an action.
 _JOB_READS = frozenset(

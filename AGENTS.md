@@ -17,12 +17,12 @@ requests from central IAM; they do not keep their own.
   shared IAM integration ([how to](docs/iam-service/agent.md)). Do not add a per-service identity store, a
   bearer-token comparison for agents, a rights table, a grant endpoint that keeps state, or an access-request
   queue.
-- The notes service, the agents service, the job service and the forge, board, jobs, scratch and coverage
-  services run under IAM and keep no rights of their own: a stack run refuses a config that turns
-  `iam.enabled` off, which only the in-process deterministic fixture does, and each service refuses to start
-  outside IAM. A config whose scenario lets agents reach a service outside its `iam:` block, or names a service
-  without an approver (a principal of the company that decides its access requests, never an agent under
-  test), does not load.
+- The notes service, the agents service, the job service, the eval service, the tickets service and the forge,
+  board, jobs, scratch and coverage services run under IAM and keep no rights of their own: a stack run refuses
+  a config that turns `iam.enabled` off, which only the in-process deterministic fixture does, and each service
+  refuses to start outside IAM. A config whose scenario lets agents reach a service outside its `iam:` block, or
+  names a service without an approver (a principal of the company that decides its access requests, never an
+  agent under test), does not load.
 - `company/meridian-*` repos are what the agents edit, and they must not import `meridian_iam`: take a
   protocol and let the engine supply the implementation (the guide shows how).
 - [`docs/iam-service/spec.md`](docs/iam-service/spec.md), section 11, says what is under IAM and what is not.
@@ -48,7 +48,7 @@ Component specs cannot weaken the contract's isolation, authorization or evidenc
 | `loc_arena/forge/`, `loc_arena/npcs/` | the git forge and the seeded company world, and its MCP service (`service.py`); the scripted coworkers |
 | `loc_arena/scaffold/mcp_client.py`, `loc_arena/tool_records.py`, `loc_arena/mcp_service.py` | each agent's MCP client; every MCP service's record of the tool calls made to it; who calls a service, and how it is served |
 | `loc_arena/agents_service.py`, `company/meridian-controlplane/meridian_controlplane/agents/`, `docs/agents-service.md` | the agents service: Meridian's registry of its agents, company code a stack run serves as a live service with rights; its plan |
-| `company/meridian-controlplane/meridian_controlplane/tickets/`, `docs/tickets-service.md` | the tickets service: Meridian's ticket tracker, company code serving MCP tools and an HTTP API over one SQLite store; no run serves it yet |
+| `loc_arena/tickets_service.py`, `company/meridian-controlplane/meridian_controlplane/tickets/`, `docs/tickets-service.md` | the tickets service: Meridian's ticket tracker, company code a stack run serves with MCP tools and an HTTP API over one SQLite store under central IAM, seeded from the scenario's `tickets.yaml` |
 | `loc_arena/jobsvc_service.py`, `company/meridian-jobsvc/`, `docs/jobsvc-service.md` | the job service: Meridian's cluster, company code a stack run serves under IAM, running each job as a real process on a node of its fleet; its plan |
 | `loc_arena/evalkit_service.py`, `company/meridian-evalkit/meridian_evalkit/service/`, `company/meridian-evalkit/meridian_evalkit/run.py`, `docs/evalkit-service.md` | the eval service: Meridian's evals, the runs on them, their results and leaderboards, company code a stack run serves with MCP tools and an HTTP API under central IAM; and the runner, the job a run hands out, which scores the model under test through the inference API |
 | `loc_arena/recording_service.py` | the `jobs`, `scratch` and `coverage` services: each tool enforces the caller's scope, records the request and returns a canned result |

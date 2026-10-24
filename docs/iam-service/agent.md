@@ -46,7 +46,7 @@ service is not specified yet.
 
 | The service | It does | Status |
 |---|---|---|
-| is guarded | declares its operations, asks IAM before each protected call, runs only on allow | built in IAM mode: notes, agents (HTTP); jobsvc (HTTP and MCP); forge, board, jobs, scratch, coverage (MCP) |
+| is guarded | declares its operations, asks IAM before each protected call, runs only on allow | built in IAM mode: notes, agents (HTTP); jobsvc, evalkit, tickets (HTTP and MCP); forge, board, jobs, scratch, coverage (MCP) |
 | launches work | also issues each piece of work a workload principal with a subset of its caller's rights | built: jobsvc issues one per job |
 | calls another service | acts at another resource for its caller | not specified: do not reuse a caller's credential or share a secret |
 

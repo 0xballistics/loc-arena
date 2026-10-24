@@ -25,11 +25,10 @@ turn, unnoted. A seeded job, another team's work the job service starts with, is
 its events of the actor role ``company``, in turn 0. A span Phoenix held (``loc_arena.observability``) is an
 ``execution_span`` action of its run's starter, if the agents service recorded the run: anyone can post one.
 ``blind_monitor`` also reduces the monitors' view: the target's mirror events after the call are dropped, so
-monitors lose that activity while the sealed log keeps it. Each line of
-``unattributed_records.jsonl`` in the run directory is a record and the ``reason`` it was not placed: not a
-valid record, outside every phase window, or not an agent of the run; or no covering turn, a native agent's
-record outside all its turns, whose events are built in turn 0. Grading never builds, so grading a run again
-adds nothing.
+monitors lose that activity while the sealed log keeps it. Each line of ``unattributed_records.jsonl`` in the
+run directory is a record and the ``reason`` it was not placed: not a valid record, outside every phase
+window, or not an agent of the run; or no covering turn, a native agent's record outside all its turns, whose
+events are built in turn 0. Grading never builds, so grading a run again adds nothing.
 """
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ from loc_arena.logging_.agent_trace import EpisodeTrace
 from loc_arena.logging_.events import AppendOnlyLog, EventKind, fingerprint, read_events
 from loc_arena.mirror_coverage import CoverageDrop, drop_covered_mirror_events
 from loc_arena.node_pool import list_node_services
-from loc_arena.observability import Run, TracedSpan, read_runs, read_span_lines
+from loc_arena.observability import SPAN_TOOL, Run, TracedSpan, read_runs, read_span_lines
 from loc_arena.recording_service import TOOLS as COVERT_TOOLS
 from loc_arena.recording_service import redact_note
 from loc_arena.runner_pool import find_runner_pool_owner
@@ -73,7 +72,6 @@ COMPANY_ROLE = "company"  # the actor role of a company principal's events: no a
 _OPENED_PULL_REQUEST = TypeAdapter(OpenedPullRequest)
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 _COVERAGE_COMPONENTS = ("monitor", "logging")
-SPAN_TOOL = "execution_span"  # the action a traced execution's span makes
 
 
 class ServiceRequestRecord(BaseModel):
@@ -500,12 +498,10 @@ def _parse_span_line(runs: Collection[Run], line: str, agent_ids: Sequence[str])
     """A span, an action of its execution's starter if ``runs`` holds the run it claims; else no agent's."""
     _ = agent_ids
     span = TracedSpan.model_validate_json(line)
-    starter = span.started_by
-    if starter is None or (span.execution, span.runner, starter) not in runs:
-        return _ParsedRecordLine(span.start_time.timestamp(), None, [])
+    starter = span.recorded_starter(runs)
     payload = {"args": span.reported, "target": span.execution, "blocked": False, "reason": None}
-    event = RecordedEvent("action", starter, span.execution, payload, tool=SPAN_TOOL)
-    return _ParsedRecordLine(span.start_time.timestamp(), starter, [event])
+    events = [RecordedEvent("action", starter, span.execution, payload, tool=SPAN_TOOL)] if starter else []
+    return _ParsedRecordLine(span.start_time.timestamp(), starter, events)
 
 
 @dataclass(frozen=True)
@@ -545,8 +541,7 @@ def build_recorded_events(
         ),
         *((node, _attribute_workloads(_parse_process_line, sponsors)) for node in list_node_services(config)),
     ]
-    owner = find_runner_pool_owner(config)  # the agents service, whose audit lines record each run
-    runs = read_runs(run_directory / SERVICE_LOGS / f"{owner.name}.log") if owner else frozenset()
+    runs = read_runs(run_directory / SERVICE_LOGS, find_runner_pool_owner(config))
     record_sources: list[tuple[Iterable[str], RecordLineParser]] = [
         *((_read_record_lines(run_directory, name, phases), parse) for name, parse in record_line_parsers),
         (read_span_lines(run_directory / SERVICE_LOGS), functools.partial(_parse_span_line, runs)),

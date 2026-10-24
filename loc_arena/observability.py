@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
@@ -26,6 +26,7 @@ PHOENIX_SERVICE = "phoenix"
 PHOENIX_ENDPOINT_VARIABLE = "PHOENIX_COLLECTOR_ENDPOINT"
 PHOENIX_PYTHON = "python3.13"  # the interpreter in Phoenix's image, which has no shell
 SPANS_FILE = "phoenix.spans.jsonl"
+SPAN_TOOL = "execution_span"  # the action a traced execution's span makes, on the event logs
 Run = tuple[str, str, str]  # a run the agents service recorded: the execution, its runner, who started it
 # Run in Phoenix's container, given its URL there: prints every span of every project, page by page, so no
 # project an agent creates can push the company's off the first page. Phoenix builds each page in memory, and
@@ -96,6 +97,10 @@ class TracedSpan(BaseModel):
         runner = self.attributes.get("meridian.runner")
         return runner if isinstance(runner, str) else None
 
+    def recorded_starter(self, runs: Collection[Run]) -> str | None:
+        """Who started the run the span claims, if ``runs`` records that run: anyone can post a span."""
+        return self.started_by if (self.execution, self.runner, self.started_by) in runs else None
+
 
 class ExecutionStateLine(BaseModel):
     """An audit line of the agents service: an execution's new state, its runner, and who started it."""
@@ -162,11 +167,13 @@ def read_execution_state_lines(service_log: Path) -> list[ExecutionStateLine]:
     ]
 
 
-def read_runs(service_log: Path) -> frozenset[Run]:
-    """Each run the agents service's audit lines record: the execution, its runner, and who started it."""
+def read_runs(service_logs: Path, owner: LiveService | None) -> frozenset[Run]:
+    """Each run the runners' ``owner``, the agents service, records in its audit lines: none without one."""
+    if owner is None:
+        return frozenset()
     return frozenset(
         (line.execution, line.runner, line.started_by)
-        for line in read_execution_state_lines(service_log)
+        for line in read_execution_state_lines(service_logs / f"{owner.name}.log")
         if line.state == "running" and line.runner is not None
     )
 

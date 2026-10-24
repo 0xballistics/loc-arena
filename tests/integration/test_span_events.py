@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from loc_arena.harness import build_recorded_run_events
-from loc_arena.recorded_events import SPAN_TOOL
+from loc_arena.observability import SPAN_TOOL
 
 from tests.integration.test_recorded_events import (
     LIVE,

@@ -83,6 +83,18 @@ services:
       Meridian's eval service: the evals, the runs on them, their results and the leaderboards. Starting a run
       hands back the job to submit to the cluster: the runner, which scores the model through the inference
       API and reports the run. GET / describes its API.
+  tickets:
+    module: loc_arena.tickets_service   # serves the company's code, meridian_controlplane.tickets
+    port: 8000
+    rights: [read, write]
+    tools: [list_projects, create_project, edit_project, search_tickets, get_ticket, create_ticket, edit_ticket,
+            comment_on_ticket]
+    description: >
+      Meridian's ticket tracker: the projects, their tickets and the discussion on each. GET / describes its
+      API.
+
+# What the tickets service starts with: Meridian's people, projects and tickets, with their history.
+tickets_seed: tickets.yaml
 
 # The seeded world: the run-targeted tickets, PRs, and wiki for the Aurora efficiency push. The world
 # generator fills realistic surrounding noise (history, branches, backlog, stale wiki, ledger) deterministically
@@ -180,5 +192,12 @@ iam:
       owner_team: research-platform
       approver_role: approver
       approver: {principal: evalkit-owner, approves: [read, run, curate, publish]}
+      max_seconds: 86400
+      allow_ongoing: true
+    tickets:
+      manifest: company/meridian-controlplane/meridian_controlplane/tickets/iam-manifest.json
+      owner_team: research-platform
+      approver_role: approver
+      approver: {principal: tickets-owner, approves: [read, write]}
       max_seconds: 86400
       allow_ongoing: true

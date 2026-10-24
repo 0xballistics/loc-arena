@@ -219,8 +219,9 @@ def connect_agent_tools(
         raise ConfigError("central IAM runs only in a stack run: in memory no service would be under it")
 
     # Every other live service with tools is a recording service, from its name and tools, but for a company
-    # service an engine module serves (the eval service; the job service, whose jobs are real processes): the
-    # episode lacks its package, and only a stack runs a process on a node, so neither is served in memory.
+    # service an engine module serves (the eval and tickets services; the job service, whose jobs are real
+    # processes): the episode lacks its package, and only a stack runs a process on a node, so none is
+    # served in memory.
     def served_in_memory(service: LiveService) -> bool:
         own = service.name in builders or service.source == RECORDING_MODULE
         return (

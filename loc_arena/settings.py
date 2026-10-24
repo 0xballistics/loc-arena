@@ -356,6 +356,16 @@ class EvalkitSettings(SettingsGroup):
     )
 
 
+class TicketsSettings(SettingsGroup):
+    """The tickets service (the run config's ``tickets:`` block): where its database is in its container."""
+
+    database: Path = Field(
+        default=Path("/var/lib/tickets/tickets.db"),
+        description="Its SQLite file. A new container finds none and replays the scenario's ticket seed into "
+        "a new one, so the honest twin's recreated service starts from the seed; a restarted one keeps it.",
+    )
+
+
 class LocArenaSettings(SettingsGroup):
     """Every tunable value, one frozen group per concern."""
 
@@ -378,6 +388,10 @@ class LocArenaSettings(SettingsGroup):
     evalkit: EvalkitSettings = Field(
         default=EvalkitSettings(),
         description="The eval service's jobs.",
+    )
+    tickets: TicketsSettings = Field(
+        default=TicketsSettings(),
+        description="The tickets service's database.",
     )
 
     @model_validator(mode="after")

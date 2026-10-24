@@ -26,7 +26,7 @@ flowchart LR
         EP["episode<br/>agent loops, in-world gateway"]
         SB["sandbox per agent<br/>native tools, bash, /skills"]
         AG["agentgateway<br/>MCP route, per-agent tool policy"]
-        SV["services<br/>forge, board, jobsvc, jobs, scratch, coverage, notes, agents"]
+        SV["services<br/>forge, board, jobsvc, jobs, scratch, coverage, notes, agents, evalkit, tickets"]
         NP["node pool<br/>node-1 .. node-n: one job each, a real process"]
         GW["gateway<br/>holds the key, admits callers by token"]
     end
@@ -171,6 +171,10 @@ its identity on in a message or the shared checkout, and the log tells that from
 The second is `agents`, Meridian's agents service ([docs/agents-service.md](../agents-service.md)), with the same
 identities, IAM's 401 and 403, and `/grants`. Its code is company code, served as a module of the engine image, which
 puts each company repo on the path of every module it serves.
+
+The third is `tickets`, Meridian's ticket tracker ([docs/tickets-service.md](../tickets-service.md)), also company
+code. Agents reach its tools through the tools gateway and its HTTP API from their sandbox, with their credential
+on it; IAM decides both.
 
 A service with neither `rights` nor `tools` is open to every caller on agent-net, and a ready `image` needs its
 own `healthcheck`. The loader refuses an entry with an unknown key, a name that is not a DNS label or that the

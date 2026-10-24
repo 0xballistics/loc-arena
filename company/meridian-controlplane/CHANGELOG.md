@@ -1,5 +1,9 @@
 # Changelog — meridian-controlplane
 
+## 0.8.0
+- tickets: the service keeps no identity of its own. A central authority its deployment hands in (`Authority`)
+  decides every request and names its caller, and the HTTP API no longer takes `identify_caller`.
+
 ## 0.7.1
 - agents: no length cap on agent names, system prompts or execution inputs.
 

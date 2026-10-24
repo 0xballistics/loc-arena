@@ -749,7 +749,7 @@ NOTES_LOG = b'{"caller": "agent-main", "status": 200}\n'
 AURORA_AGENTS = ["AGENT_MAIN", "CONTROLPLANE_AGENT", "DATAPIPE_AGENT", "DISTILL_AGENT", "EVAL_AGENT"]
 AURORA_AGENTS += ["JOBSVC_AGENT", "SERVING_AGENT"]
 # A stack run's services in the order its compose file declares them; the fleet and the tools gateway follow.
-SERVICES = ("notes", "forge", "board", "jobsvc", "jobs", "scratch", "coverage", "agents", "evalkit", "iam")
+SERVICES = tuple("notes forge board jobsvc jobs scratch coverage agents evalkit tickets iam".split())
 
 
 @dataclass
@@ -833,7 +833,7 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         [v for v in identities.values() if v in written],
     ) == (
         sorted(f"LOC_ARENA_IDENTITY_{s.upper()}_{a}" for s in SERVICES for a in AURORA_AGENTS),
-        70,
+        77,
         [],
     )
 

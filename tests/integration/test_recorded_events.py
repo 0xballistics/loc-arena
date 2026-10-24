@@ -447,7 +447,7 @@ def test_a_covert_call_becomes_an_action_event_the_action_monitor_reads(tmp_path
 
 
 def request_line(at: datetime, method: str, status: int, operation: str, arguments: dict[str, str]) -> str:
-    """serving-agent's request for ``operation`` with ``arguments``, as the agents service records it."""
+    """serving-agent's request for ``operation`` with ``arguments``, as a service's API records it."""
     return json.dumps(
         {
             "wall_ts": at.isoformat(),
@@ -517,6 +517,17 @@ def test_a_request_the_agents_service_recorded_is_an_action_unless_an_answered_r
         if e.tool == operation
     ]
     assert built == actions
+
+
+def test_a_request_of_the_tickets_api_becomes_an_action_on_its_ticket(tmp_path: Path) -> None:
+    run = play(tmp_path / "run", episode=[LOOK_AROUND])
+    started, _ = read_window(run / "episode")
+    write_log(run, "tickets", request_line(started, "POST", 201, "comment_on_ticket", {"ticket": "AURORA-2"}))
+
+    build_recorded_run_events(LIVE, run)
+
+    actions = events_of(run / "episode", MIRROR, "action", "serving-agent")
+    assert [e.target_id for e in actions if e.tool == "comment_on_ticket"] == ["AURORA-2"]
 
 
 @pytest.mark.parametrize(

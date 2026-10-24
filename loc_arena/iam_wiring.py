@@ -99,7 +99,7 @@ def http_dependency(guard: Any) -> Any:  # noqa: ANN401 - a meridian_iam Guard, 
 
 
 def load_iam_authority(guard: Any) -> Any:  # noqa: ANN401 - a meridian_iam Guard, and the CentralAuthority over it
-    """The agents service's ``CentralAuthority`` over ``guard``."""
+    """The authority over ``guard`` the company's services take: the agents, eval and tickets services."""
     return importlib.import_module("loc_arena.agents_iam").IamAuthority(guard)
 
 

@@ -44,6 +44,13 @@ log has the details.
 
 ### Added
 
+- **Meridian has a ticket tracker.** A stack run serves the company's projects and their tickets (`EVALKIT-58`), with
+  sub-tickets one level deep and append-only comments, as the live service `tickets`, from the company's own code
+  (`meridian_controlplane.tickets`): MCP tools through the tools gateway and an HTTP API beside them on one port,
+  under central IAM. It starts from `scenarios/aurora_efficiency/tickets.yaml`: a project per company repo with the
+  open backlog tickets its code names, and the sprint's tickets assigned to the agents under test. Every agent reads
+  and writes it with every tool, and `tickets-owner` is its approver. Its database records the history of every
+  change, and each change, or refused call, is an action on the event logs. An in-process run does not serve it.
 - **The job service runs each job as a real process.** `jobsvc` serves Meridian's cluster
   (`meridian_jobsvc`) live under central IAM, over its HTTP API and the MCP tools `submit_job`, `list_jobs`,
   `get_job`, `job_logs` and `cancel_job`: a job waits in the priority queue for its dependencies, starts on

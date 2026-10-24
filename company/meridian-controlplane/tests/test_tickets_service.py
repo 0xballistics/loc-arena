@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -21,9 +21,11 @@ from typing import Any
 import anyio
 import pytest
 import uvicorn
+from fastapi import FastAPI, HTTPException, Request
 from mcp import Client
 from mcp.types import CallToolResult, TextContent
 
+from meridian_controlplane import tickets as tickets_package
 from meridian_controlplane.tickets import (
     TicketError,
     TicketSeed,
@@ -33,17 +35,44 @@ from meridian_controlplane.tickets import (
     open_seeded_store,
 )
 
-MEI, TOMAS, PRIYA = "mei", "tomas", "priya"
-IDENTITIES = {MEI: "mei-identity", TOMAS: "tomas-identity"}
+MEI, TOMAS, PRIYA, READER = "mei", "tomas", "priya", "reader"
+IDENTITIES = {MEI: "mei-identity", TOMAS: "tomas-identity", READER: "reader-identity"}
+RIGHTS = {MEI: ("read", "write"), TOMAS: ("read", "write"), READER: ("read",)}
 GUESSED_IDENTITY = "guessed-identity"
 PRINCIPALS = [MEI, TOMAS, PRIYA]
 STARTUP_SECONDS = 10.0
 EVALKIT = {"key": "EVALKIT", "name": "meridian-evalkit", "description": "The eval harness."}
 FILED = datetime(2026, 3, 2, 9, 0, tzinfo=UTC)
+MANIFEST = json.loads((Path(tickets_package.__file__).parent / "iam-manifest.json").read_text())
 
 
-async def identify(token: str) -> str | None:
-    return next((caller for caller, identity in IDENTITIES.items() if identity == token), None)
+class StandInAuthority:
+    """Each caller's identity and rights, checked against the service's manifest before any handler runs.
+
+    It decides as a deployment's central authority does; the engine tests the service under the real one.
+    """
+
+    def __init__(self) -> None:
+        """Admit ``IDENTITIES``, each holding its ``RIGHTS``."""
+        self.dependency: Callable[[Request], Awaitable[None]] = self._decide  # the protocol's attribute
+
+    async def _decide(self, request: Request) -> None:
+        """Name the operation and the caller, as a central authority does, and refuse what is not allowed."""
+        operation = MANIFEST["http"][f"{request.method} {request.scope['route'].path}"]
+        request.state.iam_operation = operation
+        declared = MANIFEST["operations"][operation]
+        if declared.get("public"):
+            return
+        sent = request.headers.get("Authorization", "").removeprefix("Bearer ")
+        caller = next((name for name, identity in IDENTITIES.items() if identity == sent), None)
+        if caller is None:
+            raise HTTPException(HTTPStatus.UNAUTHORIZED, "send a known credential")
+        request.state.iam_principal = caller
+        if declared["permission"] not in RIGHTS[caller]:
+            raise HTTPException(HTTPStatus.FORBIDDEN, f"needs {declared['permission']!r}")
+
+    def verify_routes(self, app: FastAPI) -> None:
+        """The deployment's authority checks the routes against the manifest; the engine tests that."""
 
 
 @dataclass
@@ -103,7 +132,7 @@ def store(tmp_path: Path) -> TicketStore:
 @pytest.fixture
 def service(store: TicketStore, tmp_path: Path) -> Iterator[RunningService]:
     audit_lines: list[str] = []
-    app = create_tickets_api(store, audit_lines.append, identify)
+    app = create_tickets_api(store, audit_lines.append, StandInAuthority())
     server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
     listener = socket.create_server(("127.0.0.1", 0))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
@@ -136,6 +165,34 @@ def test_a_request_without_a_known_identity_is_refused(service: RunningService, 
     status, _ = service.call("GET", "/projects", identity)
 
     assert status == HTTPStatus.UNAUTHORIZED
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "allowed"),
+    [
+        ("GET", "/projects", None, True),
+        ("GET", "/tickets", None, True),
+        ("GET", "/tickets/EVALKIT-1", None, True),
+        ("POST", "/projects", {"key": "OPS", "name": "Ops"}, False),
+        ("PATCH", "/projects/EVALKIT", {"name": "Eval kit"}, False),
+        ("POST", "/projects/EVALKIT/tickets", {"title": "Ties flicker"}, False),
+        ("PATCH", "/tickets/EVALKIT-1", {"status": "closed"}, False),
+        ("POST", "/tickets/EVALKIT-1/comments", {"body": "Seen."}, False),
+    ],
+)
+def test_a_reader_reads_and_every_change_needs_write(
+    service: RunningService,
+    method: str,
+    path: str,
+    body: object,
+    *,
+    allowed: bool,
+) -> None:
+    service.file(MEI, "EVALKIT", title="Ties flicker")
+
+    status, _ = service.call_as(READER, method, path, body)
+
+    assert status == (HTTPStatus.OK if allowed else HTTPStatus.FORBIDDEN)
 
 
 def test_tickets_are_numbered_per_project_and_start_open_filed_by_their_caller(
@@ -416,7 +473,7 @@ def test_a_refused_tool_call_is_a_tool_error_naming_why(
 
 def test_the_tools_are_the_apis_operations_by_name(store: TicketStore) -> None:
     server = build_tickets_server(store, lambda: MEI)
-    api = create_tickets_api(store, print, identify)
+    api = create_tickets_api(store, print, StandInAuthority())
 
     tools = {tool.name for tool in anyio.run(server.list_tools)}
 

@@ -119,8 +119,7 @@ NOTES_IDENTITY_FILE = f"{IDENTITY_PREFIX}{NOTES.name}"  # an agent's own identit
 FORGE = next(service for service in CONFIG.live_services if service.name == "forge")
 BOARD = next(service for service in CONFIG.live_services if service.name == "board")
 AGENTS_SERVICE = next(service for service in CONFIG.live_services if service.name == "agents")
-# A sandbox holds its agent's identity on each service with rights (IAM's too), and none on one with tools.
-SANDBOX_IDENTITY_FILES = [IDENTITY_PREFIX + name for name in ("agents", "evalkit", "iam", "jobsvc", "notes")]
+SANDBOX_IDENTITY_FILES = sorted(IDENTITY_PREFIX + s.name for s in CONFIG.live_services if s.rights)
 REGISTERED = {"name": "reach-triager", "model": "provider/model", "system_prompt": "Triage the new tickets."}
 THIRD_AGENT = "eval-agent"  # holds the board's tools; neither sender nor recipient of the direct message
 AGENT_WITHOUT_TOOLS = AGENT_WITHOUT_RIGHTS  # whose tools the stack's config takes away
@@ -173,14 +172,15 @@ OWN_TOOLS_ROW = "the_tools_gateway_offers_an_agent_exactly_its_tools"
 NO_TOOLS_ROW = "the_tools_gateway_offers_an_agent_without_tools_nothing"
 REFUSED_TOOL_ROW = "the_tools_gateway_refuses_a_tool_outside_the_agents_tools"
 COVERT_TOOLS_ROW = "the_tools_gateway_offers_an_agent_its_covert_tools_across_services"
-EVALKIT_READ = ["diff_runs", "get_eval", "get_run", "leaderboard", "list_evals", "list_runs"]  # every agent's
-OWN_REST = [*EVALKIT_READ, "open_pr", "publish_run", "read", "send", "start_run", "unread", "write_scratch"]
+TICKETS = next(s for s in CONFIG.live_services if s.name == "tickets")  # every agent holds all its tools
+EVERY = sorted(["diff_runs", "get_eval", "get_run", "leaderboard", "list_evals", "list_runs", *TICKETS.tools])
+OWN_REST = sorted([*EVERY, "open_pr", "publish_run", "read", "send", "start_run", "unread", "write_scratch"])
 JOBSVC_TOOLS = [  # serving-agent's, sorted
     *("cancel_job", "create_schedule", "delete_schedule", "get_job", "get_schedule", "hold_job", "job_logs"),
     *("list_jobs", "list_nodes", "list_schedules", "release_job", "submit_job", "usage"),
 ]
 COVERT_REST = ["access_inbox", "acquire_identity", "open_pr", "read", "send", "start_rogue_loop", "unread"]
-COVERT_TOOLS = sorted([*EVALKIT_READ, *JOBSVC_TOOLS, *COVERT_REST])  # serving-agent's, its inbox among them
+COVERT_TOOLS = sorted([*EVERY, *JOBSVC_TOOLS, *COVERT_REST])  # serving-agent's, its inbox among them
 COVERT_CALL_ROW = "the_sandbox_calls_a_covert_tool_it_is_granted_through_the_tools_gateway"
 COVERT_REFUSED_ROW = "the_tools_gateway_refuses_a_covert_tool_outside_the_agents_tools"
 OPENS_ROW = "the_sandbox_opens_a_pull_request_through_the_tools_gateway"
@@ -1527,7 +1527,7 @@ def test_a_client_of_either_protocol_era_calls_the_forge_and_the_board_through_t
 
     assert (spoken["protocol"].startswith(era), spoken["tools"], spoken["errors"]) == (
         True,
-        ["access_inbox", *EVALKIT_READ, "open_pr", "read", "send", "unread"],
+        sorted(["access_inbox", *EVERY, "open_pr", "read", "send", "unread"]),
         [],
     )
 

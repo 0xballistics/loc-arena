@@ -14,7 +14,7 @@ service, since the episode does not have the company's packages.
 ## What it holds
 
 - **Projects.** A key such as `EVALKIT` (2 to 12 capitals or digits) that never changes, a name and a Markdown
-  description. Anyone can create one and edit its name and description.
+  description. Anyone with `write` can create one and edit its name and description.
 - **Tickets.** Each belongs to one project and is `<KEY>-<n>`, numbered in the order it was filed. A title, a
   Markdown description, a status (`open`, `in_progress` or `closed`, in any order), its creator, an optional
   assignee and its created and updated times. The assignee is someone the tracker knows: an agent under test or

@@ -7,9 +7,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import socket
-import threading
-import time
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -19,12 +16,12 @@ from typing import Any
 import anyio
 import httpx2
 import pytest
-import uvicorn
-from loc_arena.config import load_run_config
+from loc_arena.config import RunConfig, load_run_config
 from loc_arena.iam_seed import REPOSITORY
-from loc_arena.recorded_events import _record_line_parser
+from loc_arena.recorded_events import ServiceRequestRecord, build_events, build_events_from_service_request
 from loc_arena.settings import TicketsSettings
 from loc_arena.tickets_service import build_tickets_app
+from loc_arena.tool_records import ToolRecord
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
@@ -34,10 +31,12 @@ from meridian_iam.contracts import ManifestError, load_manifest
 from meridian_iam.core import Iam
 from meridian_iam.integration import Guard
 from meridian_iam.service import create_app
+from tests.unit._jobsvc_support import serve
 
 CFG = load_run_config("configs/aurora-efficiency.iam.yaml")
 TICKETS = next(service for service in CFG.live_services if service.name == "tickets")
-MANIFEST = REPOSITORY / "company/meridian-controlplane/meridian_controlplane/tickets/iam-manifest.json"
+TICKETS_PACKAGE = REPOSITORY / "company/meridian-controlplane/meridian_controlplane/tickets"
+MANIFEST = json.loads((TICKETS_PACKAGE / "iam-manifest.json").read_text())
 SERVICE = TICKETS.name
 URL = f"http://{SERVICE}:{TICKETS.port}"
 WRITER, READER = "serving-agent", "eval-agent"
@@ -46,24 +45,14 @@ AGENTS = [agent.id for agent in CFG.agents]
 Exchange = Callable[[httpx2.AsyncClient, Client], Awaitable[Any]]
 
 
-def serve(app: Any) -> tuple[uvicorn.Server, str]:  # noqa: ANN401
-    server = uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False))
-    listener = socket.create_server(("127.0.0.1", 0))
-    threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True).start()
-    while not server.started:
-        time.sleep(0.01)
-    return server, f"http://127.0.0.1:{listener.getsockname()[1]}"
-
-
 @dataclass
 class World:
     """Central IAM on a local port, credentials of its principals, and the tickets app a stack run serves."""
 
     iam: Iam
-    iam_url: str
     tokens: dict[str, str]
     guard: Guard
-    config: Any  # noqa: ANN401 - the run config, its database in the test's directory
+    config: RunConfig  # its database in the test's directory
     lines: list[str]
     app: Starlette
 
@@ -100,7 +89,7 @@ def world(tmp_path: Path) -> Iterator[World]:
     iam.add_principal("tickets-svc", "service")
     iam.add_member("lead", "platform", "owner", {SERVICE: ["read", "write"]})
     iam.register_resource(
-        load_manifest(json.loads(MANIFEST.read_text())),
+        load_manifest(MANIFEST),
         owner_team="platform",
         approver_role="owner",
         max_seconds=3600,
@@ -111,13 +100,12 @@ def world(tmp_path: Path) -> Iterator[World]:
     tokens["admin"] = iam.issue_credential("lead", ["iam"])
     tokens["svc"] = iam.issue_credential("tickets-svc", ["iam"])
     iam_server, iam_url = serve(create_app(iam))
-    client = IamClient(iam_url, tokens["svc"], timeout=1)
-    guard = Guard(load_manifest(json.loads(MANIFEST.read_text())), client)
+    guard = Guard(load_manifest(MANIFEST), IamClient(iam_url, tokens["svc"], timeout=1))
     settings = CFG.settings.model_copy(update={"tickets": TicketsSettings(database=tmp_path / "tickets.db")})
     config = dataclasses.replace(CFG, settings=settings)
     lines: list[str] = []
     app = build_tickets_app(config, SERVICE, guard, lines.append)
-    yield World(iam, iam_url, tokens, guard, config, lines, app)
+    yield World(iam, tokens, guard, config, lines, app)
     iam_server.should_exit = True
 
 
@@ -175,18 +163,26 @@ def test_each_change_or_refusal_is_an_action_on_its_ticket_and_an_answered_read_
 
     world.run((WRITER, work), (READER, overreach))
 
-    parse = _record_line_parser(TICKETS, world.config)
-    events = [event for line in world.lines if (parsed := parse(line, AGENTS)) for event in parsed.events]
+    records = [json.loads(line) for line in world.lines]
+    events = [
+        event
+        for record in records
+        for event in (
+            build_events(ToolRecord.model_validate(record), AGENTS)
+            if "gen_ai.tool.name" in record
+            else build_events_from_service_request(ServiceRequestRecord.model_validate(record))
+        )
+    ]
     assert [(e.kind, e.tool, e.actor_uid, e.target_id, e.payload["blocked"]) for e in events] == [
         ("action", "edit_ticket", WRITER, "AURORA-2", False),
         ("action", "comment_on_ticket", WRITER, "AURORA-2", False),
         ("action", "comment_on_ticket", READER, "AURORA-3", True),
     ]
-    assert all("iam.decision.id" in line or '"decision"' in line for line in world.lines)
+    assert all("iam.decision.id" in record or "decision" in record for record in records)
 
 
 def test_startup_refuses_a_manifest_that_binds_no_tool_to_a_served_one(world: World) -> None:
-    declared = json.loads(MANIFEST.read_text())
+    declared = {**MANIFEST, "tools": {**MANIFEST["tools"]}}
     del declared["tools"]["comment_on_ticket"]
     guard = Guard(load_manifest(declared), world.guard.client)
 

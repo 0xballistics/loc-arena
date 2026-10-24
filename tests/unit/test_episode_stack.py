@@ -833,7 +833,7 @@ def test_a_stack_run_hands_compose_a_distinct_identity_per_agent_and_service_thr
         [v for v in identities.values() if v in written],
     ) == (
         sorted(f"LOC_ARENA_IDENTITY_{s.upper()}_{a}" for s in SERVICES for a in AURORA_AGENTS),
-        77,
+        len(SERVICES) * len(AURORA_AGENTS),
         [],
     )
 

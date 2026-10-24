@@ -50,20 +50,13 @@ pytestmark = pytest.mark.skipif(
     reason="needs a reachable Docker daemon and the stack image",
 )
 
+# The engine's own MCP client, as the episode's: each call's structured result, or ``{"error": ...}``.
 CALL_TOOLS = """
 import json, sys
-import anyio, httpx2
-from mcp import Client
-from mcp.client.streamable_http import streamable_http_client
+from loc_arena.scaffold.mcp_client import McpTools, over_http
 url, token, calls = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-async def play():
-    async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=30) as http:
-        async with Client(streamable_http_client(url, http_client=http)) as client:
-            return [
-                [result.is_error, result.structured_content]
-                for result in [await client.call_tool(name, arguments) for name, arguments in calls]
-            ]
-print(json.dumps(anyio.run(play)))
+tools = McpTools(lambda: over_http(url, token, 30))
+print(json.dumps([tools.call(name, arguments) for name, arguments in calls]))
 """
 CALL_API = """
 import json, sys, urllib.request, urllib.error
@@ -94,13 +87,13 @@ TWIN_LOOKS = [["get_ticket", {"ticket": SPRINT_TICKET}], ["get_ticket", {"ticket
 class Played:
     """What the stack left: the agent's results, the service's records and history, the twin's look."""
 
-    worked: list[list[Any]]
+    worked: list[dict[str, Any]]
     api_with_credential: list[Any]
     api_with_a_guess: list[Any]
     records: list[ToolRecord]
     requests: list[ServiceRequestRecord]
     history: list[list[str | None]]
-    twin_looked: list[list[Any]]
+    twin_looked: list[dict[str, Any]]
 
 
 @pytest.fixture(scope="module")
@@ -109,8 +102,8 @@ def played(tmp_path_factory: pytest.TempPathFactory) -> Played:
     compose_file = directory / "compose.yaml"
     compose_file.write_text(yaml.safe_dump(render_compose(CONFIG, REPOSITORY, RUN, [])))
     project = f"locarena-tickets-{secrets.token_hex(3)}"
-    compose = ["docker", "compose", "-p", project, "-f", str(compose_file)]
-    compose += ["--project-directory", str(REPOSITORY)]
+    command = ["docker", "compose", "-p", project, "-f", str(compose_file)]
+    command += ["--project-directory", str(REPOSITORY)]
     attack, twin = issue_secrets(CONFIG)
     attack["OPENROUTER_API_KEY"] = twin["OPENROUTER_API_KEY"] = "scripted-no-calls-dummy"
     environment, twin_environment = {**os.environ, **attack}, {**os.environ, **twin}
@@ -119,29 +112,26 @@ def played(tmp_path_factory: pytest.TempPathFactory) -> Played:
     tickets = next(service for service in CONFIG.live_services if service.name == "tickets")
     identity = next(i for i in issue_identities(CONFIG) if (i.service, i.agent_id) == (tickets.name, AGENT))
 
-    def run_in_tickets(script: str, *arguments: str, play: dict[str, str] = environment) -> Any:  # noqa: ANN401
-        """What ``script`` prints last, run with ``arguments`` in the tickets container of ``play``."""
+    def compose(*arguments: str, play: dict[str, str] = environment) -> str:
+        """The output of ``docker compose`` with ``arguments``, run in the environment of ``play``."""
         done = subprocess.run(
-            [*compose, "exec", "-T", tickets.name, "python", "-c", script, *arguments],
+            [*command, *arguments],
             env=play,
             capture_output=True,
             text=True,
             timeout=TIMEOUT,
-            check=False,
         )
         assert done.returncode == 0, done.stderr[-3000:]
-        return json.loads(done.stdout.strip().splitlines()[-1])
+        return done.stdout
+
+    def run_in_tickets(script: str, *arguments: str, play: dict[str, str] = environment) -> Any:  # noqa: ANN401
+        """What ``script`` prints last, run with ``arguments`` in the tickets container of ``play``."""
+        output = compose("exec", "-T", tickets.name, "python", "-c", script, *arguments, play=play)
+        return json.loads(output.strip().splitlines()[-1])
 
     try:
-        for step in (["build"], ["up", "--detach", "--wait", TOOLS_GATEWAY_SERVICE, MODEL_GATEWAY_SERVICE]):
-            done = subprocess.run(
-                [*compose, *step],
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT,
-            )
-            assert done.returncode == 0, done.stderr[-3000:]
+        compose("build")
+        compose("up", "--detach", "--wait", TOOLS_GATEWAY_SERVICE, MODEL_GATEWAY_SERVICE)
         worked = run_in_tickets(CALL_TOOLS, tools_url, attack[token_variable(AGENT)], json.dumps(WORK))
         ticket_url = f"http://{tickets.name}:{tickets.port}/tickets/{SPRINT_TICKET}"
         api_with_credential = run_in_tickets(CALL_API, ticket_url, attack[identity.variable])
@@ -149,7 +139,7 @@ def played(tmp_path_factory: pytest.TempPathFactory) -> Played:
         history = run_in_tickets(READ_HISTORY, str(CONFIG.settings.tickets.database), AGENT)
         service_logs = directory / "services"
         service_logs.mkdir()
-        renew_services(CONFIG, compose, service_logs, environment, twin_environment)
+        renew_services(CONFIG, command, service_logs, environment, twin_environment)
         twin_looked = run_in_tickets(
             CALL_TOOLS,
             tools_url,
@@ -159,7 +149,7 @@ def played(tmp_path_factory: pytest.TempPathFactory) -> Played:
         )
     finally:
         subprocess.run(
-            [*compose, "down", "--volumes", "--remove-orphans"],
+            [*command, "down", "--volumes", "--remove-orphans"],
             env=environment,
             capture_output=True,
         )
@@ -182,17 +172,14 @@ def played(tmp_path_factory: pytest.TempPathFactory) -> Played:
 def test_an_agent_finds_works_and_files_tickets_through_the_tools_gateway(played: Played) -> None:
     found, edited, commented, filed, read = played.worked
 
-    assert [error for error, _ in played.worked] == [False] * len(WORK)
-    assert [ticket["id"] for ticket in found[1]["tickets"]] == [SPRINT_TICKET]
-    assert (edited[1]["status"], commented[1]["author"], filed[1]["id"], filed[1]["creator"]) == (
+    assert [ticket["id"] for ticket in found["tickets"]] == [SPRINT_TICKET]
+    assert (edited["status"], commented["author"], filed["id"], filed["creator"]) == (
         "in_progress",
         AGENT,
         FILED_TICKET,
         AGENT,
     )
-    assert [(comment["author"], comment["body"]) for comment in read[1]["comments"]] == [
-        (AGENT, COMMENT),
-    ]
+    assert [(comment["author"], comment["body"]) for comment in read["comments"]] == [(AGENT, COMMENT)]
 
 
 def test_the_services_record_names_the_agent_and_the_iam_decision_of_each_call(played: Played) -> None:
@@ -225,6 +212,7 @@ def test_the_history_in_the_container_holds_each_change_the_agent_made(played: P
 
 
 def test_the_honest_twin_finds_the_tracker_as_the_seed_left_it(played: Played) -> None:
-    (sprint_error, sprint), (filed_error, _) = played.twin_looked
+    sprint, filed = played.twin_looked
 
-    assert (sprint_error, sprint["status"], sprint["comments"], filed_error) == (False, "open", [], True)
+    assert (sprint["status"], sprint["comments"]) == ("open", [])
+    assert f"no ticket {FILED_TICKET}" in filed["error"]

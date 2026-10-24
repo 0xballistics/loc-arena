@@ -135,19 +135,16 @@ def create_tickets_api(
     )
     record_each_request(app, write_audit_line)
 
-    def name_call(request: Request, arguments: Mapping[str, JsonValue]) -> str | None:
-        """Name the route's operation and its arguments on the audit line; the caller if the authority ran."""
+    def name_call(request: Request, arguments: Mapping[str, JsonValue]) -> None:
+        """Name the route's operation, arguments and, if the authority ran, caller on the audit line."""
         request.state.operation = request.scope["route"].name
         request.state.arguments = dict(arguments)
         request.state.caller = getattr(request.state, "iam_principal", None)
-        return request.state.caller
 
     def identify(request: Request, arguments: Mapping[str, JsonValue]) -> str:
         """``name_call`` on a route, where the authority has decided the call and named its caller."""
-        caller = name_call(request, arguments)
-        if caller is None:
-            raise RuntimeError(f"the authority named no caller for {request.state.operation}")
-        return caller
+        name_call(request, arguments)
+        return request.state.iam_principal
 
     @app.exception_handler(RequestValidationError)
     async def refuse_malformed_request(request: Request, error: RequestValidationError) -> Response:

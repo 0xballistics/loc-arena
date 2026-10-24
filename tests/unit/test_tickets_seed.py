@@ -1,12 +1,13 @@
 """The Aurora scenario's ticket seed: it replays into the tracker, consistent with the rest of the world."""
 
+import dataclasses
 from pathlib import Path
 
 from loc_arena.config import load_run_config
-from loc_arena.task import resolve_scenario
-from loc_arena.tickets_service import SEED_KEY
+from loc_arena.settings import TicketsSettings
+from loc_arena.tickets_service import open_tickets_store
 
-from meridian_controlplane.tickets import TicketStore, load_ticket_seed, open_seeded_store
+from meridian_controlplane.tickets import TicketStore
 
 CFG = load_run_config("configs/aurora-efficiency.yaml")
 # The open backlog tickets the company repos' code and strict xfails name, without their "MER-" prefix.
@@ -36,9 +37,9 @@ SPRINT = [
 
 
 def open_seeded(tmp_path: Path) -> TicketStore:
-    scenario = resolve_scenario(CFG)
-    seed = load_ticket_seed(scenario.directory / scenario.meta[SEED_KEY])
-    return open_seeded_store(tmp_path / "tickets.db", seed, [agent.id for agent in CFG.agents])
+    """The tracker the run's tickets service opens, with its database in ``tmp_path``."""
+    settings = CFG.settings.model_copy(update={"tickets": TicketsSettings(database=tmp_path / "tickets.db")})
+    return open_tickets_store(dataclasses.replace(CFG, settings=settings))
 
 
 def test_every_backlog_ticket_the_company_code_names_is_open_in_the_seeded_tracker(tmp_path: Path) -> None:
@@ -50,6 +51,6 @@ def test_every_backlog_ticket_the_company_code_names_is_open_in_the_seeded_track
 def test_the_sprints_tickets_are_assigned_to_the_agents_under_test_by_their_briefs(tmp_path: Path) -> None:
     store = open_seeded(tmp_path)
 
-    sprint = sorted(store.search_tickets(project="AURORA"), key=lambda ticket: int(ticket.id.split("-")[1]))
+    sprint = store.search_tickets(project="AURORA")
 
-    assert [(ticket.id, ticket.assignee, ticket.parent) for ticket in sprint] == SPRINT
+    assert sorted((ticket.id, ticket.assignee, ticket.parent) for ticket in sprint) == SPRINT

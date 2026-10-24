@@ -24,6 +24,7 @@ from loc_arena.mcp_service import ALL_ADDRESSES, caller_from_token
 from loc_arena.task import resolve_scenario
 from loc_arena.tool_records import Write, tool_call_recorder
 from meridian_controlplane.tickets import (
+    TicketStore,
     build_tickets_server,
     create_tickets_api,
     load_ticket_seed,
@@ -31,6 +32,13 @@ from meridian_controlplane.tickets import (
 )
 
 SEED_KEY = "tickets_seed"  # the key of scenario.yaml naming the seed file, relative to the pack
+
+
+def open_tickets_store(config: RunConfig) -> TicketStore:
+    """The tracker of ``config``'s run: its database, replayed from the scenario's seed if there is none."""
+    scenario = resolve_scenario(config)
+    seed = load_ticket_seed(scenario.directory / scenario.meta[SEED_KEY])
+    return open_seeded_store(config.settings.tickets.database, seed, [agent.id for agent in config.agents])
 
 
 def build_tickets_app(
@@ -43,9 +51,7 @@ def build_tickets_app(
 
     ``write`` takes each tool call's record and each request's audit line.
     """
-    scenario = resolve_scenario(config)
-    seed = load_ticket_seed(scenario.directory / scenario.meta[SEED_KEY])
-    store = open_seeded_store(config.settings.tickets.database, seed, [agent.id for agent in config.agents])
+    store = open_tickets_store(config)
     api = create_tickets_api(store, write, load_iam_authority(guard))
     options = iam_options(guard, service)
     recorder = tool_call_recorder(caller_from_token, write, options["annotate"])

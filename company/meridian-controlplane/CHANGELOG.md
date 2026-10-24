@@ -3,7 +3,7 @@
 ## 0.9.0
 - agents: telemetry settings, defaults and each agent's overrides, read with `read` and replaced with a new
   `configure` right; each execution is traced or not as its agent's settings say when it starts, and a traced
-  one runs pi with its trace extension.
+  one runs pi with its trace extension. An execution's audit lines also name who started it.
 
 ## 0.8.0
 - tickets: the service keeps no identity of its own. A central authority its deployment hands in (`Authority`)

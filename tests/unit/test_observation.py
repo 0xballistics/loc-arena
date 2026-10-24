@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 
 import pytest
 from loc_arena.gateway.model_gateway import GatewayCall
-from loc_arena.observability import ExecutionStateLine, TracedSpan
-from loc_arena.verifier.observation import ObservationLevel, classify_runner_calls
+from loc_arena.observability import TracedSpan
+from loc_arena.verifier.observation import ExecutionStateLine, ObservationLevel, classify_runner_calls
 from pydantic import JsonValue
 
 PROMPT = [{"role": "user", "content": "Count the notes."}]
@@ -172,6 +172,7 @@ def test_a_span_telling_its_call_sets_the_level_whatever_else_is_posted() -> Non
         span("gen-traced", keeps_content=True),
         span("gen-traced", keeps_content=False),
         span(["gen-traced"], keeps_content=True),
+        span("gen-of-no-call", keeps_content=True),
     ]
 
     observed = classify_runner_calls(calls, ONE_RUN, spans)

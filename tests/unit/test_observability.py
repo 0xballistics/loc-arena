@@ -76,16 +76,16 @@ def test_a_phoenix_that_stops_during_the_export_keeps_the_spans_listed_whole(
     cut_off = span_line("b7ad6b7169203332")[:40]
     compose = StandInCompose(
         running=[True, False],
-        printed=span_line("b7ad6b7169203331") + cut_off,
+        printed=span_line("b7ad6b7169203331", {"gen_ai.response.id": "gen-1"}) + cut_off,
         returncode=137,
     )
 
     with caplog.at_level(logging.WARNING):
         export_spans(compose, COMPOSE, AURORA, tmp_path)
 
-    exported = [span.name for span in read_spans(tmp_path)]
+    exported = [span.response_id for span in read_spans(tmp_path)]
     assert (exported, "the 1 spans it listed first are kept" in caplog.text) == (
-        ["chat provider/model"],
+        ["gen-1"],
         True,
     )
 

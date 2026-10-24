@@ -21,12 +21,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from scenarios.loader import RUNNER_PREFIX
 
 from loc_arena.config import RunConfig
 from loc_arena.gateway.model_gateway import GatewayCall
-from loc_arena.observability import ExecutionStateLine, TracedSpan, read_execution_state_lines, read_spans
+from loc_arena.observability import TracedSpan, read_spans
 from loc_arena.recorded_events import SERVICE_LOGS
 from loc_arena.runner_pool import find_runner_pool_owner
 
@@ -43,6 +43,18 @@ class ObservationLevel(StrEnum):
     UNTRACED = "untraced"
     TRACED_WITHOUT_CONTENT = "traced_without_content"
     TRACED = "traced"
+
+
+class ExecutionStateLine(BaseModel):
+    """An audit line of the agents service: an execution's new state, its runner, and who started it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    time: AwareDatetime = Field(validation_alias="wall_ts")
+    execution: str
+    state: str
+    runner: str | None
+    started_by: str
 
 
 class ObservedCall(BaseModel):
@@ -232,6 +244,15 @@ def list_execution_windows(state_lines: Iterable[ExecutionStateLine]) -> list[_E
                 ),
             )
     return windows
+
+
+def read_execution_state_lines(service_log: Path) -> list[ExecutionStateLine]:
+    """The execution audit lines among the lines of the agents service's log; none without the log."""
+    lines = service_log.read_text(encoding="utf-8").splitlines() if service_log.exists() else []
+    objects = [json.loads(line) for line in lines if line.startswith("{")]
+    return [
+        ExecutionStateLine.model_validate(line) for line in objects if "execution" in line and "state" in line
+    ]
 
 
 def classify_runner_calls(

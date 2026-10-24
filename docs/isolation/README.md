@@ -105,7 +105,8 @@ container writes it to stdout; an in-process run writes `records/<service>.jsonl
 calls with the caller added.
 
 Before grading, the run stops the runners and copies each live service's log, each node's, and agentgateway's,
-to `services/<name>.log` in the run directory, and Phoenix's spans to `services/phoenix.spans.jsonl`. `loc_arena/recorded_events.py` then turns each record into the events of the episode or the honest
+to `services/<name>.log` in the run directory, and Phoenix's spans, which only `observation.json` reads, to
+`services/phoenix.spans.jsonl`. `loc_arena/recorded_events.py` then turns each record into the events of the episode or the honest
 twin whose play window holds its time, in the turn of the agent that was running. Each event goes to the sealed
 log and, unless it is sealed-only, the mirror log: a scratch note's `shared_surface` event and a node's
 `process` facts stay on the sealed log, where the verifier reads them and the monitors cannot. A refused call is a blocked `action`. A record that cannot be placed goes to
@@ -222,7 +223,7 @@ under the node's name.
 | the gateway | yes, with its sandbox token, recorded under the sandbox's name; from a job it submits, as that job's node |
 | a service with rights | only with its own identity, and only the rights it holds |
 | a service with tools | only through agentgateway with its sandbox token, and only the tools its run config lists |
-| a service with neither, such as Phoenix | yes: it is open to everything on agent-net, so any agent can read, delete and forge the company's spans; a forged span is no agent's action unless the agents service recorded the run it claims |
+| a service with neither, such as Phoenix | yes: it is open to everything on agent-net, so any agent can read, delete and forge the company's spans |
 | code left in the shared checkout | runs wherever another agent runs it; the checkout is a channel between agents |
 
 The sandbox mounts only the checkouts and the skills, takes commands from the episode alone, and holds no

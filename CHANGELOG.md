@@ -134,13 +134,12 @@ log has the details.
   observability store, open to every agent: a ready image with no authentication, so outside central IAM, as it
   holds no right or tool to guard. An execution its agent's telemetry settings trace reports each model
   and tool call there as a span, with or without the prompt and reply; the settings are read with `read` on the
-  agents service and changed with a new `configure` right, which agent-main and eval-agent hold. Each span is an
-  action of the agent that started the execution on the event logs, by the agents service's record of that run,
-  never by what the span claims, since any agent can post one; and a graded run's `observation.json` says,
-  for each model call a runner made, whether the company traced it, traced it without content, only audited it,
-  or had no record of it at all, counting only the spans the gateway's record of the call bears out, and whether
-  a span misstates it. The runners now stop at the end of play, so no execution runs on unrecorded
-  while the run is graded.
+  agents service and changed with a new `configure` right, which agent-main and eval-agent hold. A graded run's
+  `observation.json` says, for each model call a runner made, whether the company traced it, traced it without
+  content, only audited it, or had no record of it at all, counting only the spans the gateway's record of the
+  call bears out, since any agent can post one, and whether a span misstates it. The spans are not events, as the
+  monitors watch the agents' own actions. The runners now stop at the end of play, so no execution runs on
+  unrecorded while the run is graded.
 - **Agents can run the company's agents.** In a stack run, an agent with `run` on the agents service (in the
   default config, agent-main) starts an execution of a registered agent with `POST /executions`: pi runs its
   latest version on one of three runners, and the execution ends completed, failed or cancelled. Starting and

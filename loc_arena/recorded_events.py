@@ -22,13 +22,13 @@ call, so either may fall outside every turn, unnoted. A job's own calls carry it
 ``workload_issued`` audit line, and each of its events names the ``workload``; it too may fall outside every
 turn, unnoted. A seeded job, another team's work the job service starts with, is marked ``seed`` on its
 ``job`` events, and its owner is a principal of the company: each record of one is placed as an agent's is,
-its events of the actor role ``company``, in turn 0. A span Phoenix held (``loc_arena.observability``) is an
-``execution_span`` action of its run's starter, if the agents service recorded the run: anyone can post one.
+its events of the actor role ``company``, in turn 0.
 ``blind_monitor`` also reduces the monitors' view: the target's mirror events after the call are dropped, so
-monitors lose that activity while the sealed log keeps it. Each line of ``unattributed_records.jsonl`` in the
-run directory is a record and the ``reason`` it was not placed: not a valid record, outside every phase
-window, or not an agent of the run; or no covering turn, a native agent's record outside all its turns, whose
-events are built in turn 0. Grading never builds, so grading a run again adds nothing.
+monitors lose that activity while the sealed log keeps it. Each line of
+``unattributed_records.jsonl`` in the run directory is a record and the ``reason`` it was not placed: not a
+valid record, outside every phase window, or not an agent of the run; or no covering turn, a native agent's
+record outside all its turns, whose events are built in turn 0. Grading never builds, so grading a run again
+adds nothing.
 """
 
 from __future__ import annotations
@@ -36,10 +36,9 @@ from __future__ import annotations
 import bisect
 import contextlib
 import dataclasses
-import functools
 import json
 import logging
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPMethod, HTTPStatus
 from pathlib import Path
@@ -56,10 +55,8 @@ from loc_arena.logging_.agent_trace import EpisodeTrace
 from loc_arena.logging_.events import AppendOnlyLog, EventKind, fingerprint, read_events
 from loc_arena.mirror_coverage import CoverageDrop, drop_covered_mirror_events
 from loc_arena.node_pool import list_node_services
-from loc_arena.observability import SPAN_TOOL, Run, TracedSpan, read_runs, read_span_lines
 from loc_arena.recording_service import TOOLS as COVERT_TOOLS
 from loc_arena.recording_service import redact_note
-from loc_arena.runner_pool import find_runner_pool_owner
 from loc_arena.scaffold.bus import Recorder
 from loc_arena.task import SNAPSHOT_FILE, SnapshotFile, read_snapshot_file, resolve_scenario
 from loc_arena.tool_records import ToolRecord
@@ -494,16 +491,6 @@ def _parse_service_request_line(line: str, agent_ids: Sequence[str]) -> _ParsedR
     )
 
 
-def _parse_span_line(runs: Collection[Run], line: str, agent_ids: Sequence[str]) -> _ParsedRecordLine:
-    """A span, an action of its execution's starter if ``runs`` holds the run it claims; else no agent's."""
-    _ = agent_ids
-    span = TracedSpan.model_validate_json(line)
-    starter = span.recorded_starter(runs)
-    payload = {"args": span.reported, "target": span.execution, "blocked": False, "reason": None}
-    events = [RecordedEvent("action", starter, span.execution, payload, tool=SPAN_TOOL)] if starter else []
-    return _ParsedRecordLine(span.start_time.timestamp(), starter, events)
-
-
 @dataclass(frozen=True)
 class _Placed:
     """A record's events, placed: its episode, its wall time, its agent's turn, and the events themselves."""
@@ -541,15 +528,10 @@ def build_recorded_events(
         ),
         *((node, _attribute_workloads(_parse_process_line, sponsors)) for node in list_node_services(config)),
     ]
-    runs = read_runs(run_directory / SERVICE_LOGS, find_runner_pool_owner(config))
-    record_sources: list[tuple[Iterable[str], RecordLineParser]] = [
-        *((_read_record_lines(run_directory, name, phases), parse) for name, parse in record_line_parsers),
-        (read_span_lines(run_directory / SERVICE_LOGS), functools.partial(_parse_span_line, runs)),
-    ]
     unattributed: list[str] = []
     built: dict[Path, list[_Placed]] = {phase.directory: [] for phase in phases}
-    for record_lines, parse_record_line in record_sources:
-        for line in record_lines:
+    for service, parse_record_line in record_line_parsers:
+        for line in _read_record_lines(run_directory, service, phases):
             placed, reason = _place(line, parse_record_line, phases, roles, agent_ids)
             unattributed += [json.dumps({"reason": reason, "line": line})] if reason else []
             if placed:

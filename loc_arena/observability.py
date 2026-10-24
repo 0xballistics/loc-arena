@@ -10,13 +10,12 @@ spans the company can read and exports none, and one that stops during the expor
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
-from collections.abc import Callable, Collection
+from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 from scenarios.loader import LiveService
 
 from loc_arena.config import RunConfig
@@ -26,8 +25,6 @@ PHOENIX_SERVICE = "phoenix"
 PHOENIX_ENDPOINT_VARIABLE = "PHOENIX_COLLECTOR_ENDPOINT"
 PHOENIX_PYTHON = "python3.13"  # the interpreter in Phoenix's image, which has no shell
 SPANS_FILE = "phoenix.spans.jsonl"
-SPAN_TOOL = "execution_span"  # the action a traced execution's span makes, on the event logs
-Run = tuple[str, str, str]  # a run the agents service recorded: the execution, its runner, who started it
 # Run in Phoenix's container, given its URL there: prints every span of every project, page by page, so no
 # project an agent creates can push the company's off the first page. Phoenix builds each page in memory, and
 # a span can hold a long conversation, so a page is a hundred spans, as Phoenix pages its projects.
@@ -53,25 +50,14 @@ for project in list(list_all("/projects", limit=100, **every_kind)):
 
 
 class TracedSpan(BaseModel):
-    """A span Phoenix holds, as its REST API lists it: what it reports, when, and its attributes.
+    """A span Phoenix holds, as its REST API lists it: its attributes.
 
     Phoenix takes spans from anyone, so an attribute holds whatever its sender wrote.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    project: str
-    name: str
-    span_kind: str
-    start_time: AwareDatetime
-    end_time: AwareDatetime
-    status_code: str
     attributes: dict[str, JsonValue]
-
-    @property
-    def reported(self) -> dict[str, JsonValue]:
-        """What the span reports: its name, kind and status, and its attributes."""
-        return {"name": self.name, "kind": self.span_kind, "status": self.status_code, **self.attributes}
 
     @property
     def response_id(self) -> str | None:
@@ -96,22 +82,6 @@ class TracedSpan(BaseModel):
         """The runner the span says its execution ran on, if it says."""
         runner = self.attributes.get("meridian.runner")
         return runner if isinstance(runner, str) else None
-
-    def recorded_starter(self, runs: Collection[Run]) -> str | None:
-        """Who started the run the span claims, if ``runs`` records that run: anyone can post a span."""
-        return self.started_by if (self.execution, self.runner, self.started_by) in runs else None
-
-
-class ExecutionStateLine(BaseModel):
-    """An audit line of the agents service: an execution's new state, its runner, and who started it."""
-
-    model_config = ConfigDict(frozen=True)
-
-    time: AwareDatetime = Field(validation_alias="wall_ts")
-    execution: str
-    state: str
-    runner: str | None
-    started_by: str
 
 
 def find_phoenix(config: RunConfig) -> LiveService | None:
@@ -158,32 +128,8 @@ def _is_phoenix_running(
     return bool(run_compose(running, capture_output=True, check=True).stdout.strip())
 
 
-def read_execution_state_lines(service_log: Path) -> list[ExecutionStateLine]:
-    """The execution audit lines among the lines of the agents service's log; none without the log."""
-    lines = service_log.read_text(encoding="utf-8").splitlines() if service_log.exists() else []
-    objects = [json.loads(line) for line in lines if line.startswith("{")]
-    return [
-        ExecutionStateLine.model_validate(line) for line in objects if "execution" in line and "state" in line
-    ]
-
-
-def read_runs(service_logs: Path, owner: LiveService | None) -> frozenset[Run]:
-    """Each run the runners' ``owner``, the agents service, records in its audit lines: none without one."""
-    if owner is None:
-        return frozenset()
-    return frozenset(
-        (line.execution, line.runner, line.started_by)
-        for line in read_execution_state_lines(service_logs / f"{owner.name}.log")
-        if line.state == "running" and line.runner is not None
-    )
-
-
-def read_span_lines(service_logs: Path) -> list[str]:
-    """The lines of every span exported to ``service_logs``; none when nothing was."""
-    spans_file = service_logs / SPANS_FILE
-    return spans_file.read_text(encoding="utf-8").splitlines() if spans_file.exists() else []
-
-
 def read_spans(service_logs: Path) -> list[TracedSpan]:
-    """Every span exported to ``service_logs``."""
-    return [TracedSpan.model_validate_json(line) for line in read_span_lines(service_logs)]
+    """Every span exported to ``service_logs``; none when nothing was."""
+    spans_file = service_logs / SPANS_FILE
+    lines = spans_file.read_text(encoding="utf-8").splitlines() if spans_file.exists() else []
+    return [TracedSpan.model_validate_json(line) for line in lines]

@@ -178,7 +178,7 @@ def test_each_change_or_refusal_is_an_action_on_its_ticket_and_an_answered_read_
         ("action", "comment_on_ticket", WRITER, "AURORA-2", False),
         ("action", "comment_on_ticket", READER, "AURORA-3", True),
     ]
-    assert all("iam.decision.id" in record or "decision" in record for record in records)
+    assert all(record.get("iam.decision.id") or record.get("decision") for record in records)
 
 
 def test_startup_refuses_a_manifest_that_binds_no_tool_to_a_served_one(world: World) -> None:

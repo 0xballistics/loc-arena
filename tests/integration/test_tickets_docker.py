@@ -50,17 +50,18 @@ pytestmark = pytest.mark.skipif(
     reason="needs a reachable Docker daemon and the stack image",
 )
 
-# The engine's own MCP client, as the episode's: each call's structured result, or ``{"error": ...}``.
+# Each script takes its credential on stdin, never in a command line. The engine's own MCP client, as the
+# episode's: each call's structured result, or ``{"error": ...}``.
 CALL_TOOLS = """
 import json, sys
 from loc_arena.scaffold.mcp_client import McpTools, over_http
-url, token, calls = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+url, calls, token = sys.argv[1], json.loads(sys.argv[2]), sys.stdin.read()
 tools = McpTools(lambda: over_http(url, token, 30))
 print(json.dumps([tools.call(name, arguments) for name, arguments in calls]))
 """
 CALL_API = """
 import json, sys, urllib.request, urllib.error
-url, token = sys.argv[1:3]
+url, token = sys.argv[1], sys.stdin.read()
 request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
 try:
     with urllib.request.urlopen(request, timeout=10) as reply:
@@ -112,10 +113,11 @@ def played(tmp_path_factory: pytest.TempPathFactory) -> Played:
     tickets = next(service for service in CONFIG.live_services if service.name == "tickets")
     identity = next(i for i in issue_identities(CONFIG) if (i.service, i.agent_id) == (tickets.name, AGENT))
 
-    def compose(*arguments: str, play: dict[str, str] = environment) -> str:
-        """The output of ``docker compose`` with ``arguments``, run in the environment of ``play``."""
+    def compose(*arguments: str, play: dict[str, str] = environment, stdin: str | None = None) -> str:
+        """The output of ``docker compose`` with ``arguments`` and ``stdin``, in ``play``'s environment."""
         done = subprocess.run(
             [*command, *arguments],
+            input=stdin,
             env=play,
             capture_output=True,
             text=True,
@@ -124,18 +126,28 @@ def played(tmp_path_factory: pytest.TempPathFactory) -> Played:
         assert done.returncode == 0, done.stderr[-3000:]
         return done.stdout
 
-    def run_in_tickets(script: str, *arguments: str, play: dict[str, str] = environment) -> Any:  # noqa: ANN401
-        """What ``script`` prints last, run with ``arguments`` in the tickets container of ``play``."""
-        output = compose("exec", "-T", tickets.name, "python", "-c", script, *arguments, play=play)
-        return json.loads(output.strip().splitlines()[-1])
+    def run_in_tickets(
+        script: str,
+        *arguments: str,
+        credential: str = "",
+        play: dict[str, str] = environment,
+    ) -> Any:  # noqa: ANN401
+        """What ``script`` prints last, run in ``play``'s tickets container, ``credential`` on its stdin."""
+        python = ["exec", "-T", tickets.name, "python", "-c", script]
+        return json.loads(compose(*python, *arguments, play=play, stdin=credential).strip().splitlines()[-1])
 
     try:
         compose("build")
         compose("up", "--detach", "--wait", TOOLS_GATEWAY_SERVICE, MODEL_GATEWAY_SERVICE)
-        worked = run_in_tickets(CALL_TOOLS, tools_url, attack[token_variable(AGENT)], json.dumps(WORK))
+        worked = run_in_tickets(
+            CALL_TOOLS,
+            tools_url,
+            json.dumps(WORK),
+            credential=attack[token_variable(AGENT)],
+        )
         ticket_url = f"http://{tickets.name}:{tickets.port}/tickets/{SPRINT_TICKET}"
-        api_with_credential = run_in_tickets(CALL_API, ticket_url, attack[identity.variable])
-        api_with_a_guess = run_in_tickets(CALL_API, ticket_url, "guessed")
+        api_with_credential = run_in_tickets(CALL_API, ticket_url, credential=attack[identity.variable])
+        api_with_a_guess = run_in_tickets(CALL_API, ticket_url, credential="guessed")
         history = run_in_tickets(READ_HISTORY, str(CONFIG.settings.tickets.database), AGENT)
         service_logs = directory / "services"
         service_logs.mkdir()
@@ -143,8 +155,8 @@ def played(tmp_path_factory: pytest.TempPathFactory) -> Played:
         twin_looked = run_in_tickets(
             CALL_TOOLS,
             tools_url,
-            twin[token_variable(AGENT)],
             json.dumps(TWIN_LOOKS),
+            credential=twin[token_variable(AGENT)],
             play=twin_environment,
         )
     finally:

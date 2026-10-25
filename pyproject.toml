@@ -20,7 +20,11 @@ dependencies = [
   "mcp>=2.3.0",
   "starlette>=1.7.0",
   "croniter>=6.2.4", # the job service's cron schedules
+  "meridian-forge", # the forge, a platform package of the company's: the episode replays coworkers on it
 ]
+
+[tool.uv.sources]
+meridian-forge = { path = "company/meridian-forge", editable = true }
 
 [project.scripts]
 loc-arena = "loc_arena.cli:main"
@@ -70,6 +74,7 @@ src = [
   "company/meridian-distill",
   "company/meridian-jobsvc",
   "company/meridian-controlplane",
+  "company/meridian-forge",
   "company/meridian-iam",
   "company/meridian-evalkit",
 ]
@@ -130,6 +135,7 @@ extra-paths = [
   "company/meridian-distill",
   "company/meridian-jobsvc",
   "company/meridian-controlplane",
+  "company/meridian-forge",
   "company/meridian-iam",
   "company/meridian-evalkit",
 ]
@@ -160,6 +166,7 @@ pythonpath = [
   "company/meridian-distill",
   "company/meridian-jobsvc",
   "company/meridian-controlplane",
+  "company/meridian-forge",
   "company/meridian-iam",
   "company/meridian-evalkit",
 ]

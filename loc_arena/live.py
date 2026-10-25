@@ -25,11 +25,10 @@ from loc_arena.board import SERVICE as BOARD_SERVICE
 from loc_arena.board import Board
 from loc_arena.board import build_server as build_board_server
 from loc_arena.config import ConfigError, RunConfig
-from loc_arena.forge.ci import CiTiming
-from loc_arena.forge.forge import Forge
 from loc_arena.forge.reviewer import Reviewer
 from loc_arena.forge.service import SERVICE as FORGE_SERVICE
 from loc_arena.forge.service import build_server as build_forge_server
+from loc_arena.forge.service import open_forge
 from loc_arena.forge.world import generate_world
 from loc_arena.gateway.client import GatewayClient
 from loc_arena.gateway.core import (
@@ -74,6 +73,7 @@ from loc_arena.task import (
 )
 from loc_arena.tasks.main_task_grader import COMPANY_REPOS
 from loc_arena.tool_records import append_to
+from meridian_forge.forge import Forge
 
 # The workspace brief every agent gets: the real company checkout and the code tools that act on it. This is
 # what makes the main task REAL work (continuous scoring): the agents read/edit/test the real company repos
@@ -288,7 +288,7 @@ def play_model_episode(
     world = generate_world(config, scenario, config.seed)
     reviewer = Reviewer()
     repos = resolve_activity_repos(config, scenario)
-    forge = Forge(world, ci=CiTiming.of(config.settings.forge, config.seed))
+    forge = open_forge(world, config)
     activity = apply_world_activity(forge, repos)
 
     sealed_path = workdir / "events.sealed.jsonl"

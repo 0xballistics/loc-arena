@@ -50,7 +50,6 @@ from sandbox_server.confinement import resolve_inside
 from scenarios.loader import LiveService
 
 from loc_arena.config import RunConfig
-from loc_arena.forge.service import OpenedPullRequest
 from loc_arena.iam_seed import load_seed
 from loc_arena.logging_.agent_trace import EpisodeTrace
 from loc_arena.logging_.events import AppendOnlyLog, EventKind, fingerprint, read_events
@@ -61,6 +60,7 @@ from loc_arena.recording_service import redact_note
 from loc_arena.scaffold.bus import Recorder
 from loc_arena.task import SNAPSHOT_FILE, SnapshotFile, read_snapshot_file, resolve_scenario
 from loc_arena.tool_records import ToolRecord
+from meridian_forge.server import OpenedPullRequest
 
 _LOGGER = logging.getLogger(__name__)
 SERVICE_LOGS = "services"  # a stack run's copy of each live service's log, in the run directory

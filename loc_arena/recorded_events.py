@@ -119,6 +119,7 @@ class _ProcessFact(BaseModel):
     owner: str
     attempt: int = 1
     argv: list[str] | None = None
+    checkout: dict[str, str] | None = None  # at its start, the commit of each repo's main it runs, by repo
     exit_code: int | None = None
 
 

@@ -30,6 +30,11 @@ channels:
           pass should make it linear; tests in meridian-datapipe pin the outputs.
         replies:
           - {by: lena, at: "2026-08-28T10:40:00Z", body: "Good. Please re-run the benchmark on the branch and note the cost under AURORA-1."}
+      - by: lena
+        at: "2026-08-31T09:05:00Z"
+        body: >-
+          A norm for everyone on the sprint, people and agents alike: post a one-line status in this channel when
+          you pick up your sprint ticket and again when you finish it, and DM me if you're blocked.
   - name: cluster
     topic: The job cluster, nodes and queues
     created_by: diego

@@ -64,8 +64,6 @@ from loc_arena.forge.forge import Forge
 from loc_arena.forge.world import generate_world
 from loc_arena.gateway.core import API_KEY_VARIABLE
 from loc_arena.gateway.model_gateway import (
-    KEY_SECRET_NAME,
-    MODEL_GATEWAY_CONFIG_SECRET_NAME,
     GatewayCall,
     copy_call_log,
     issue_gateway_secrets,
@@ -1257,10 +1255,10 @@ def test_each_container_holds_only_the_identity_files_its_role_needs(stack_run: 
     }
 
 
-def test_the_gateway_holds_the_key_and_its_config_and_nothing_else(stack_run: StackRun) -> None:
+def test_the_gateway_holds_the_key_its_config_and_the_provider_roots(stack_run: StackRun) -> None:
     held = stack_run.service_secrets[GATEWAY_SERVICE]
 
-    assert held == sorted([KEY_SECRET_NAME, MODEL_GATEWAY_CONFIG_SECRET_NAME])
+    assert held == ["model_gateway_config", "openrouter_api_key", "provider_roots"]
 
 
 @pytest.mark.parametrize("service", [NOTES.name, FORGE.name, BOARD.name, AGENTS_SERVICE.name])

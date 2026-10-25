@@ -22,7 +22,7 @@ RUN mkdir /checkouts && chown nobody /checkouts
 USER nobody
 
 # pi, the coding agent the runners run, installed with the dependencies its own shrinkwrap pins.
-FROM node:22.20.0-bookworm-slim AS pi
+FROM node:22.23.4-bookworm-slim AS pi
 RUN npm install --global --prefix /opt/pi @earendil-works/pi-coding-agent@0.99.2
 
 # Its command server serves the agents service alone and runs pi in an empty /workspace. pi calls nothing but the

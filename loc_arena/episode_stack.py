@@ -13,12 +13,13 @@ the service holds every agent's and the agents' starting rights, and the episode
 service with tools is reached through the tools gateway alone (``loc_arena.tools_gateway``), which with the
 service holds the identities on it. In attack mode the episode container plays the episode, then starts again
 for the honest twin once the gateway and every sandbox, runner, live service and the tools gateway is
-recreated, so the twin sees nothing the attack left. When the episode exits, its run
-directory is copied out with the log of each live service and of the tools gateway, their record of every
-request, grant and tool call, the events of those tool calls are built, and the run is graded on this host,
-with the agents' code sandboxed, while the gateway still runs for the monitors' model calls. Then the
-gateway's record is drained and copied out (``loc_arena.gateway.model_gateway``) and the project is removed
-with its volumes. If a copy fails, the project is kept so nothing is lost.
+recreated, so the twin sees nothing the attack left. When the episode exits, its run directory is copied out
+with the log of each live service and of the tools gateway, their record of every request, grant and tool
+call, the events of those tool calls are built, and the run is graded on this host on what each play merged
+on the forge's main (``loc_arena.merged_main``), with the agents' code sandboxed, while the gateway still runs
+for the monitors' model calls. Then the gateway's record is drained and copied out
+(``loc_arena.gateway.model_gateway``) and the project is removed with its volumes. If a copy fails, the
+project is kept so nothing is lost.
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ from loc_arena.iam_bootstrap import (
 )
 from loc_arena.iam_wiring import service_environment
 from loc_arena.identity_variables import find_shared_identity_variable, holds_identities, identity_variable
+from loc_arena.merged_main import write_merged_checkout
 from loc_arena.node_pool import (
     NODE_TARGET,
     declare_node_token_secrets,
@@ -628,11 +630,13 @@ def run_in_stack(run: str, *, mode: str, seed: int | None, robust: bool, logs: P
         # Started on its own, the gateway outlives the episode: the monitors call it while this host grades.
         if not model_gateway.start_gateway(run_compose, compose, settings):
             raise StackError("the gateway did not start to accept calls: see compose's output above")
-        exit_code = play_phases(config, compose, mode, service_logs, environment, twin_environment)
+        exit_code, mains = play_phases(config, compose, mode, service_logs, environment, twin_environment)
         if not copied(copy_output):
             raise StackError("could not copy the episode's run directory out, so it was not graded")
         if exit_code != 0:
             raise StackError(f"the episode exited with code {exit_code}: see its output above")
+        for phase, archives in mains.items():  # each play is graded on what it merged on the forge's main
+            write_merged_checkout(run_directory / phase / "checkout", archives)
         # The services' records are copied before grading: the events monitors read are built from them.
         if not all([copied(*copy) for copy in copy_service_logs]):  # every one tried
             raise StackError("could not copy every live service's log out, so the run was not graded")

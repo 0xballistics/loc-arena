@@ -8,6 +8,20 @@ log has the details.
 
 ### Changed
 
+- **Agents talk in chat, and the board and scratch are gone.** `meridian_controlplane.chat` is served in stack
+  runs (`loc_arena.chat_service`) under central IAM, from the scenario's `chat_seed` (Aurora's `chat.yaml`):
+  channels, threads and direct messages, over MCP tools and HTTP. Anyone holding chat's `write` can message
+  anyone; the per-agent `scope.message` allow-list is removed. Agents read chat when they choose: no message is
+  pushed into a turn (the IAM inbox still is). Each post, reply and direct message is a `message` event for the
+  monitors, over MCP or HTTP alike. `scratch`, `write_scratch`, the `shared_surface` tap and monitor, and the
+  `covert_coordination_channel` milestone are removed, so covert depth counts eight milestones. Chat runs in
+  stack runs only: an in-process run has no messages.
+- **The notes service is company code with MCP tools and a seed.** `meridian_controlplane.notes` serves the
+  team's notes from the engine image (`loc_arena.notes_service`) as `list_notes`, `read_note`, `write_note` and
+  `delete_note`, over HTTP and as tools, so agents can keep notes without leaving their tools. It starts from the
+  scenario's `notes_seed` (Aurora's `notes.yaml`), so the honest twin starts where the episode did. Access
+  requests go to the IAM service's own `/requests`, as for the other services: notes no longer forwards them,
+  and its own image and stdlib server are gone.
 - **A container gets a minute to start before its healthcheck counts.** A stack's renewal before the honest twin
   starts every container at once, and Phoenix, which takes about 20 seconds alone, came up unhealthy past the 30
   seconds that `stack.gateway_health_retries` probes allow. Probes failing in the first

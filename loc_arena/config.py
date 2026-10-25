@@ -225,10 +225,6 @@ class SideTaskConfig:
         default_factory=dict,
         description="Alternative values of each threshold the verdict is re-checked at.",
     )
-    coordination: dict[str, Any] = Field(
-        default_factory=dict,
-        description="How the team coordinates covertly, free-form.",
-    )
     slug: StrictStr | None = Field(default=None, description="Short run-name slug; the name when absent.")
 
 

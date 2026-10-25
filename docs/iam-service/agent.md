@@ -14,7 +14,7 @@ How to change `company/meridian-iam/` and how to put a service under it. The con
 | `company/meridian-iam/meridian_iam/integration/` | `Guard` (one decision per call), `asgi.py` (FastAPI dependency), `mcp.py` (verifier and tool middleware) |
 | `loc_arena/iam_service.py`, `iam_bootstrap.py`, `iam_seed.py`, `iam_wiring.py` | the launcher, the per-play seed document, the scenario's `iam:` block, how a service joins by environment |
 | `loc_arena/agents_iam.py` | the engine's implementation of the agents service's `CentralAuthority` |
-| `scenarios/aurora_efficiency/services/notes/notes_service.py` | the notes service, under IAM |
+| `company/meridian-controlplane/meridian_controlplane/notes/`, `loc_arena/notes_service.py` | the notes service, under IAM |
 
 ## Rules that are easy to break
 
@@ -46,7 +46,7 @@ service is not specified yet.
 
 | The service | It does | Status |
 |---|---|---|
-| is guarded | declares its operations, asks IAM before each protected call, runs only on allow | built in IAM mode: notes, agents (HTTP); jobsvc, evalkit, tickets (HTTP and MCP); forge, board, jobs, scratch, coverage (MCP) |
+| is guarded | declares its operations, asks IAM before each protected call, runs only on allow | built in IAM mode: agents (HTTP); jobsvc, evalkit, tickets, notes, chat (HTTP and MCP); forge, jobs, coverage (MCP) |
 | launches work | also issues each piece of work a workload principal with a subset of its caller's rights | built: jobsvc issues one per job |
 | calls another service | acts at another resource for its caller | not specified: do not reuse a caller's credential or share a secret |
 
@@ -66,7 +66,7 @@ service is not specified yet.
    its principal is bound to the service's resource, so it decides for that resource only. An engine-module
    service builds its `Guard` once with `iam_wiring.guard_from_environment` and hands it to both `iam_options`
    and `build_service_app`; a service built from a scenario directory has no `loc_arena`, so its `Dockerfile`
-   copies in `meridian_iam` from the `meridian-iam` build context the stack passes, as notes' does.
+   copies in `meridian_iam` from the `meridian-iam` build context the stack passes.
 3. **Check at startup.** FastAPI: `integration.asgi.verify_app(guard, app)`, which also refuses a route
    without the guard's dependency. MCP: `iam_wiring.build_service_app`. Both on one port (the job service):
    `build_service_app(guard, server, service, api)`, which checks the routes and the tools together against
@@ -98,7 +98,7 @@ service is not specified yet.
    approves; the requester sees the outcome in its inbox. On an MCP
    tool service an approval makes nothing new callable, because the tools gateway offers each agent exactly its
    `sandbox: tools:`, each already granted. Do not add a local queue.
-7. **Test** the way `tests/unit/test_notes_service.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM
+7. **Test** the way `tests/unit/test_tickets_iam.py`, `test_agents_iam.py` and `test_mcp_iam.py` do: a real IAM
    server, real SQLite, and the cases in spec section 10. Break each new protection once and watch its test fail.
 
 ### A service that launches work
@@ -149,7 +149,7 @@ service is not specified yet.
 7. **Test** the refusals `company/meridian-iam/tests/test_workloads.py` checks on the core (a caller without
    the launch permission, a grant outside the delegation, a grant the caller lacks, a revoked or disabled
    caller, a disabled issuer, a retry under the same key with different content) through a real IAM server, as
-   `tests/unit/test_notes_service.py` does for guarding.
+   `tests/unit/test_tickets_iam.py` does for guarding.
 
 ## Checks
 

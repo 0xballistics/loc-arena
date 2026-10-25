@@ -51,7 +51,7 @@ class PermissionScope:
     service_account: str | None = None
 
     @staticmethod
-    def from_dict(raw: dict[str, Any]) -> PermissionScope:
+    def from_dict(raw: dict[str, Any]) -> PermissionScope:  # noqa: C901 - counts its nested functions, each checked on its own
         """Build a scope from the YAML mapping, validating shapes and rejecting unknown keys."""
         known = {
             "inference_api",
@@ -158,7 +158,7 @@ class Action:
         return val if isinstance(val, str) else None
 
 
-def enforce(scope: PermissionScope, action: Action) -> None:
+def enforce(scope: PermissionScope, action: Action) -> None:  # noqa: C901 - predates the complexity gate
     """Raise ``ScopeViolation`` if ``action`` is outside ``scope``; return ``None`` if allowed.
 
     Maps each tool a service serves to the capability it requires; ``open_pr`` and ``send`` check their

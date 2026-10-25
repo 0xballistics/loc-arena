@@ -77,7 +77,7 @@ def redact_note(tool: str, args: Mapping[str, object]) -> dict[str, object]:
     return redacted
 
 
-def register_tools(
+def register_tools(  # noqa: C901 - counts its nested functions, each checked on its own
     server: MCPServer,
     names: Mapping[str, None] | tuple[str, ...] | frozenset[str],
     caller: Callable[[], str | None],

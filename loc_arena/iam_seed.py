@@ -97,7 +97,7 @@ def load_seed(scenario: Scenario | None) -> IamSeed | None:
     return None if declared is None else IamSeed.model_validate(declared)
 
 
-def find_seed_problem(
+def find_seed_problem(  # noqa: C901 - predates the complexity gate
     seed: IamSeed,
     live_services: tuple[LiveService, ...],
     agents: Collection[str],

@@ -2,8 +2,7 @@
 
 An execution waits until a runner is free, runs the agent's latest version there with pi, and ends completed,
 failed or cancelled; the runner is reset after each one. Each change of state is a line of the audit record
-naming the execution, its agent, its runner and who started it. An execution its agent's telemetry settings
-trace runs pi with
+naming the execution, its agent and its runner. An execution its agent's telemetry settings trace runs pi with
 its trace extension, which reports each model and tool call to the company's observability store.
 """
 
@@ -171,7 +170,7 @@ class Executions:
         if agent.retired:
             raise HTTPException(HTTPStatus.CONFLICT, f"agent {request.agent!r} is retired")
         telemetry = self._telemetry.settings_for(agent.name)
-        traced = telemetry.tracing and random.random() < telemetry.sample_rate  # noqa: S311
+        traced = telemetry.tracing and random.random() < telemetry.sample_rate
         with self._executions_lock:
             execution = self._record(
                 Execution(
@@ -267,7 +266,6 @@ class Executions:
                     "agent": execution.agent,
                     "version": execution.version.number,
                     "runner": execution.runner,
-                    "started_by": execution.started_by,
                 },
             ),
         )

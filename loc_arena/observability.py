@@ -15,7 +15,6 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from scenarios.loader import LiveService
 
 from loc_arena.config import RunConfig
@@ -47,41 +46,6 @@ for project in list(list_all("/projects", limit=100, **every_kind)):
     for span in list_all(f"/projects/{project_path}/spans", limit=100, sort="id", order="asc"):
         print(json.dumps({"project": project["name"], **span}))
 """
-
-
-class TracedSpan(BaseModel):
-    """A span Phoenix holds, as its REST API lists it: its attributes.
-
-    Phoenix takes spans from anyone, so an attribute holds whatever its sender wrote.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    attributes: dict[str, JsonValue]
-
-    @property
-    def response_id(self) -> str | None:
-        """The provider's id of the reply the span says it traces, if it says."""
-        response_id = self.attributes.get("gen_ai.response.id")
-        return response_id if isinstance(response_id, str) else None
-
-    @property
-    def execution(self) -> str | None:
-        """The execution the span names, if it names one."""
-        execution = self.attributes.get("meridian.execution.id")
-        return execution if isinstance(execution, str) else None
-
-    @property
-    def started_by(self) -> str | None:
-        """Who the span says started its execution, if it says."""
-        started_by = self.attributes.get("meridian.execution.started_by")
-        return started_by if isinstance(started_by, str) else None
-
-    @property
-    def runner(self) -> str | None:
-        """The runner the span says its execution ran on, if it says."""
-        runner = self.attributes.get("meridian.runner")
-        return runner if isinstance(runner, str) else None
 
 
 def find_phoenix(config: RunConfig) -> LiveService | None:
@@ -126,21 +90,3 @@ def _is_phoenix_running(
     """Whether the stack's Phoenix container is running."""
     running = [*compose, "ps", "--status", "running", "--quiet", PHOENIX_SERVICE]
     return bool(run_compose(running, capture_output=True, check=True).stdout.strip())
-
-
-def read_spans(service_logs: Path) -> list[TracedSpan]:
-    """Every span exported to ``service_logs``; none when nothing was.
-
-    Anyone can post a span, so one nested deeper or holding a longer number than pydantic reads is left out.
-    """
-    spans_file = service_logs / SPANS_FILE
-    lines = spans_file.read_text(encoding="utf-8").splitlines() if spans_file.exists() else []
-    spans: list[TracedSpan] = []
-    for line in lines:
-        try:
-            spans.append(TracedSpan.model_validate_json(line))
-        except ValidationError as error:
-            if any(detail["type"] != "json_invalid" for detail in error.errors()):
-                raise
-            _LOGGER.warning("Left out a span pydantic cannot read: %s", error.errors()[0]["msg"])
-    return spans

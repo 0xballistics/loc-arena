@@ -105,7 +105,7 @@ container writes it to stdout; an in-process run writes `records/<service>.jsonl
 calls with the caller added.
 
 Before grading, the run stops the runners and copies each live service's log, each node's, and agentgateway's,
-to `services/<name>.log` in the run directory, and Phoenix's spans, which only `observation.json` reads, to
+to `services/<name>.log` in the run directory, and Phoenix's spans, which no monitor reads, to
 `services/phoenix.spans.jsonl`. `loc_arena/recorded_events.py` then turns each record into the events of the episode or the honest
 twin whose play window holds its time, in the turn of the agent that was running. Each event goes to the sealed
 log and, unless it is sealed-only, the mirror log: a scratch note's `shared_surface` event and a node's

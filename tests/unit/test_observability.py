@@ -10,19 +10,18 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import pytest
 from loc_arena.config import load_run_config
 from loc_arena.episode_stack import REPOSITORY
-from loc_arena.observability import SPANS_FILE, TracedSpan, export_spans, read_spans
+from loc_arena.observability import SPANS_FILE, export_spans
 from loc_arena.stack_play import play_phases
 
 AURORA = load_run_config(REPOSITORY / "configs" / "aurora-efficiency.yaml")  # its scenario runs Phoenix
 COMPOSE = ["docker", "compose", "-p", "locarena-test"]
 
 
-def span_line(span_id: str, attributes: dict[str, Any] | None = None) -> bytes:
+def span_line(span_id: str) -> bytes:
     span = {
         "project": "meridian-agents",
         "name": "chat provider/model",
@@ -31,7 +30,7 @@ def span_line(span_id: str, attributes: dict[str, Any] | None = None) -> bytes:
         "start_time": "2026-10-24T12:00:00+00:00",
         "end_time": "2026-10-24T12:00:01+00:00",
         "status_code": "OK",
-        "attributes": attributes or {},
+        "attributes": {},
     }
     return f"{json.dumps(span)}\n".encode()
 
@@ -69,35 +68,22 @@ def test_a_phoenix_not_running_exports_no_span(tmp_path: Path, caplog: pytest.Lo
     )
 
 
-def test_a_span_nested_deeper_than_pydantic_reads_is_left_out_of_the_spans_read(tmp_path: Path) -> None:
-    nested = span_line("b7ad6b7169203331", {"x": "deep"}).replace(b'"deep"', b"[" * 1000 + b"]" * 1000)
-    readable = span_line("b7ad6b7169203332", {"gen_ai.response.id": "gen-1"})
-    (tmp_path / SPANS_FILE).write_bytes(nested + readable)
-
-    read = read_spans(tmp_path)
-
-    assert [span.response_id for span in read] == ["gen-1"]
-
-
 def test_a_phoenix_that_stops_during_the_export_keeps_the_spans_listed_whole(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    cut_off = span_line("b7ad6b7169203332")[:40]
+    listed_whole = span_line("b7ad6b7169203331")
     compose = StandInCompose(
         running=[True, False],
-        printed=span_line("b7ad6b7169203331", {"gen_ai.response.id": "gen-1"}) + cut_off,
+        printed=listed_whole + span_line("b7ad6b7169203332")[:40],
         returncode=137,
     )
 
     with caplog.at_level(logging.WARNING):
         export_spans(compose, COMPOSE, AURORA, tmp_path)
 
-    exported = [span.response_id for span in read_spans(tmp_path)]
-    assert (exported, "the 1 spans it listed first are kept" in caplog.text) == (
-        ["gen-1"],
-        True,
-    )
+    exported = (tmp_path / SPANS_FILE).read_bytes()
+    assert (exported, "the 1 spans it listed first are kept" in caplog.text) == (listed_whole, True)
 
 
 def test_an_export_that_fails_while_phoenix_runs_raises(tmp_path: Path) -> None:
@@ -105,23 +91,6 @@ def test_an_export_that_fails_while_phoenix_runs_raises(tmp_path: Path) -> None:
 
     with pytest.raises(subprocess.CalledProcessError):
         export_spans(compose, COMPOSE, AURORA, tmp_path)
-
-
-def test_a_span_names_its_execution_and_starter_only_as_text() -> None:
-    written = TracedSpan.model_validate_json(
-        span_line("b7ad6b7169203331", {"meridian.execution.id": "execution-1"}),
-    )
-    odd = TracedSpan.model_validate_json(
-        span_line(
-            "b7ad6b7169203332",
-            {"meridian.execution.id": 7, "meridian.execution.started_by": ["agent-main"]},
-        ),
-    )
-
-    assert [(span.execution, span.started_by) for span in (written, odd)] == [
-        ("execution-1", None),
-        (None, None),
-    ]
 
 
 def test_play_ends_with_the_runners_stopped_then_phoenixs_spans_exported(

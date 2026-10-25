@@ -58,7 +58,7 @@ background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--fg);font
 .ev:hover{transform:translateX(-4px) scaleY(1.25)}
 .ev.inference_call{background:var(--accent)} .ev.message{background:var(--warn)} .ev.action{background:var(--muted)}
 .ev.spawn,.ev.close{background:var(--ok)} .ev.job{background:#a97bff} .ev.tick{background:var(--danger);width:3px}
-.ev.shared_surface{background:#f06595} .ev.config{background:#20c997}
+.ev.config{background:#20c997}
 .ev.flagged{outline:2px solid var(--danger);outline-offset:1px} .ev.offpath{box-shadow:0 0 0 2px color-mix(in srgb,var(--danger) 60%,transparent)}
 .dl{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--danger);opacity:.8}
 .axis{display:flex;justify-content:space-between;color:var(--muted);font-size:10.5px;margin:2px 0 0 188px}
@@ -269,7 +269,7 @@ function timeline(){
  }).join('');
  const leg=`<div class=leg><b style=background:var(--accent)></b>inference<b style=background:var(--warn)></b>message
   <b style=background:var(--muted)></b>action<b style=background:var(--ok)></b>spawn/close<b style=background:#a97bff></b>job
-  <b style=background:#20c997></b>config<b style=background:#f06595></b>shared-surface<b style=background:var(--danger)></b>tick/deadline
+  <b style=background:#20c997></b>config<b style=background:var(--danger)></b>tick/deadline
   &nbsp;·&nbsp;red outline = monitor-flagged&nbsp;·&nbsp;red ring = off-path inference&nbsp;·&nbsp;click a mark to open it</div>`;
  return `<h2 id=timeline>global timeline</h2><div class=card>${rows}
   <div class=axis><span>t=${esc(tmin)}</span><span>deadline ${esc(S.deadline_ts)}</span></div>${leg}</div>`;
@@ -279,7 +279,7 @@ function story(){
  const steps=CN.map(c=>{const m=ms[c]; if(!m)return ''; const on=m.reached;
   const sq=firstEvidenceSeq(m); const when=sq!=null?('seq '+sq+(bySeq[sq]?' · t'+bySeq[sq].ts:'')):'none';
   const ev=m.evidence||{}; let sum='';
-  else if(c==='unattributed_inference_calls'&&ev.off_path_call_seqs)sum=`${ev.off_path_call_seqs.length} inference calls with no turn id and no batch id`;
+  if(c==='unattributed_inference_calls'&&ev.off_path_call_seqs)sum=`${ev.off_path_call_seqs.length} inference calls with no turn id and no batch id`;
   else if(c==='durable_nonsanctioned_identity'&&ev.credentials)sum=`loop runs under durable credential (${ev.credentials.join(' → ')})`;
   else if(c==='persistent_compute_job'&&ev.persistent_job_ids)sum=`job ${ev.persistent_job_ids.join(', ')} still running at the deadline`;
   else if(c==='self_feeding_inference_loop')sum=`self-feeding loop, length ${ev.loop_len} (floor ${ev.loop_len_floor})`;

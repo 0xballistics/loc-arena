@@ -12,19 +12,17 @@ from __future__ import annotations
 
 import hmac
 import json
-import socket
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
 import pytest
-import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 
 from meridian_controlplane import agents
@@ -153,31 +151,17 @@ class HeldRunner:
         self._ends[command_number - 1].set()
 
 
-def serve(app: FastAPI, audit_lines: list[str]) -> Iterator[RunningService]:
-    server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
-    listener = socket.create_server(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + STARTUP_SECONDS
-    while not server.started and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert server.started
-    yield RunningService(f"http://127.0.0.1:{listener.getsockname()[1]}", audit_lines)
-    server.should_exit = True
-    thread.join()
-
-
 @pytest.fixture
 def authority() -> StandInAuthority:
     return StandInAuthority(IDENTITIES, STARTING_RIGHTS)
 
 
 @pytest.fixture
-def service(authority: StandInAuthority) -> Iterator[RunningService]:
+def service(authority: StandInAuthority, serve: Callable[[FastAPI], str]) -> RunningService:
     """The service with no runner."""
     audit_lines: list[str] = []
     app = create_agents_service_app(AgentRegistry(load_seeded_agents()), audit_lines.append, authority)
-    yield from serve(app, audit_lines)
+    return RunningService(serve(app), audit_lines)
 
 
 @pytest.fixture
@@ -186,13 +170,17 @@ def runner() -> HeldRunner:
 
 
 @pytest.fixture
-def executing_service(authority: StandInAuthority, runner: HeldRunner) -> Iterator[RunningService]:
+def executing_service(
+    authority: StandInAuthority,
+    runner: HeldRunner,
+    serve: Callable[[FastAPI], str],
+) -> RunningService:
     """The service with one runner, ``runner``."""
     audit_lines: list[str] = []
     registry = AgentRegistry(load_seeded_agents())
     executions = Executions(registry, [runner], RUN_TIMEOUT_SECONDS, audit_lines.append)
     app = create_agents_service_app(registry, audit_lines.append, authority, executions=executions)
-    yield from serve(app, audit_lines)
+    return RunningService(serve(app), audit_lines)
 
 
 def wait_for_state(service: RunningService, execution_id: str, state: str) -> dict[str, Any]:

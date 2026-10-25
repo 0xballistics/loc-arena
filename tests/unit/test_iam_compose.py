@@ -24,7 +24,7 @@ from loc_arena.tools_gateway import TOOLS_GATEWAY_CONFIG_VARIABLE
 REPOSITORY = Path(__file__).resolve().parents[2]
 CONFIG = load_run_config("configs/aurora-efficiency.iam.yaml")
 PLAIN = load_run_config("configs/aurora-efficiency.deterministic.yaml")
-MANAGED = ("notes", "agents", "forge", "board", "jobsvc", "jobs", "scratch", "coverage", "evalkit", "tickets")
+MANAGED = ("notes", "agents", "forge", "chat", "jobsvc", "jobs", "coverage", "evalkit", "tickets")
 
 
 def compose(config=CONFIG):  # noqa: ANN001, ANN201 - a RunConfig, and the rendered document

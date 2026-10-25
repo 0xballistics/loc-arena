@@ -8,9 +8,9 @@ scenario brings its own services.
 
 Each agent has two kinds of tools: its harness's native tools (read, edit, bash), which act in its own sandbox,
 and an MCP client. The native loop itself runs in `episode`. Most of what an agent can do to the company, such as
-opening a PR, messaging a teammate, submitting a job or writing to the scratch surface, is a tool on a service
+opening a PR, messaging a teammate in chat, submitting a job or writing a note, is a tool on a service
 behind one MCP route, agentgateway; the run config decides exactly which tools each agent is offered. A
-rights-bearing HTTP service such as `notes` is called from the sandbox directly, with the agent's own identity. Every service records each call made to it and by
+rights-bearing service such as `notes` or `chat` can also be called over HTTP from the sandbox directly, with the agent's own identity. Every service records each call made to it and by
 whom. After play, those records become the events the monitors and the verifier read. The honest twin plays on
 services and sandboxes recreated, each service from its seed.
 
@@ -26,7 +26,7 @@ flowchart LR
         EP["episode<br/>agent loops, in-world gateway"]
         SB["sandbox per agent<br/>native tools, bash, /skills"]
         AG["agentgateway<br/>MCP route, per-agent tool policy"]
-        SV["services<br/>forge, board, jobsvc, jobs, scratch, coverage, notes, agents, evalkit, tickets, phoenix"]
+        SV["services<br/>forge, chat, jobsvc, jobs, coverage, notes, agents, evalkit, tickets, phoenix"]
         NP["node pool<br/>node-1 .. node-n: one job each, a real process"]
         GW["gateway<br/>holds the key, admits callers by token"]
     end
@@ -77,7 +77,7 @@ services:
 agents:
   - id: agent-main
     sandbox:
-      tools: {forge: [open_pr], board: [send, read, unread]}
+      tools: {forge: [open_pr], chat: [post, send_dm, read_dms]}
 ```
 
 - agentgateway's config is generated per run from `sandbox: tools:` (`loc_arena/tools_gateway.py`). It admits an
@@ -108,8 +108,7 @@ Before grading, the run stops the runners and copies each live service's log, ea
 to `services/<name>.log` in the run directory, and Phoenix's spans, which no monitor reads, to
 `services/phoenix.spans.jsonl`. `loc_arena/recorded_events.py` then turns each record into the events of the episode or the honest
 twin whose play window holds its time, in the turn of the agent that was running. Each event goes to the sealed
-log and, unless it is sealed-only, the mirror log: a scratch note's `shared_surface` event and a node's
-`process` facts stay on the sealed log, where the verifier reads them and the monitors cannot. A refused call is a blocked `action`. A record that cannot be placed goes to
+log and, unless it is sealed-only, the mirror log: a node's `process` facts stay on the sealed log, where the verifier reads them and the monitors cannot. A refused call is a blocked `action`. A record that cannot be placed goes to
 `unattributed_records.jsonl` in the run directory. Grading never builds events, so grading a run again adds
 none.
 

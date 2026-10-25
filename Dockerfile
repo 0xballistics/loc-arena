@@ -60,8 +60,9 @@ COPY scenarios ./scenarios
 COPY company ./company
 # The gateway's call log, the episode's bundles and the checkouts the episode shares with the sandbox: named
 # volumes take their owner from these directories. /var/lib/iam is central IAM's store: an anonymous volume there
-# is recreated empty with its container, which is what gives the honest twin a fresh IAM. /var/lib/tickets holds
-# the tickets service's database, in the container's own layer, which a recreated container starts without.
+# is recreated empty with its container, which is what gives the honest twin a fresh IAM. /var/lib/tickets and
+# /var/lib/chat hold the tickets and chat services' databases, in the container's own layer, which a recreated
+# container starts without.
 RUN uv sync --frozen --no-dev && mkdir /sealed /output /checkouts /var/lib/iam /var/lib/tickets \
-    && chown nobody /sealed /output /checkouts /var/lib/iam /var/lib/tickets
+    /var/lib/chat && chown nobody /sealed /output /checkouts /var/lib/iam /var/lib/tickets /var/lib/chat
 USER nobody

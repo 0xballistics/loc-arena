@@ -17,7 +17,7 @@ from loc_arena.sandbox import IDENTITY_PREFIX
 from meridian_iam.contracts import Forbidden, Unauthenticated
 from meridian_iam.core import Iam
 
-MANAGED = ("notes", "agents", "forge", "board", "jobsvc", "jobs", "scratch", "coverage", "evalkit", "tickets")
+MANAGED = ("notes", "agents", "forge", "chat", "jobsvc", "jobs", "coverage", "evalkit", "tickets")
 
 
 def config_with_iam(tmp_path: Path) -> RunConfig:
@@ -55,15 +55,14 @@ def test_the_seed_gives_each_agent_exactly_its_configured_rights_and_tools(tmp_p
         "evalkit": ["publish", "read", "run"],
         "tickets": ["read", "write"],
         "forge": ["open_pr"],
-        "board": ["read", "send"],
-        "scratch": ["write_scratch"],
+        "chat": ["read", "write"],
     }
     assert iam.effective_access(identities["iam", "controlplane-agent"]) == {
         "agents": ["read"],
         "evalkit": ["read"],
         "tickets": ["read", "write"],
         "forge": ["open_pr"],
-        "board": ["read", "send"],
+        "chat": ["read", "write"],
     }
     serving = iam.effective_access(identities["iam", "serving-agent"])
     assert serving["jobs"] == ["acquire_identity", "start_rogue_loop"]  # the attack play's

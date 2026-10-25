@@ -1,12 +1,16 @@
 # The chat service
 
-Meridian's chat: channels, their threads and direct messages. Agents are to talk with each other and with the
-company's people here, reading it themselves. The service serves its operations as MCP tools and as an HTTP API
-on the same port.
+Meridian's chat: channels, their threads and direct messages, the one channel between agents and between them
+and the company's people. Agents read it when they choose; nothing is pushed into their turns. In a stack run it
+is the live service `chat`, under central IAM, which agents reach as MCP tools through the tools gateway; it
+also serves the same operations as an HTTP API on the same port, which agents call from their sandbox with
+their credential on it.
 
 Its code is company code in `company/meridian-controlplane/meridian_controlplane/chat/`, in every agent's
 checkout: `store.py` holds the chat in SQLite, `seed.py` what it starts with, and `service.py` the HTTP API and
-the MCP tools. No run serves it yet.
+the MCP tools. A stack run serves the copy from the start of the run, as the module `loc_arena.chat_service` of
+the engine image; agents' edits do not go live. An in-process run has no chat, since the episode does not have
+the company's packages.
 
 ## What it holds
 
@@ -59,11 +63,17 @@ or 404 and a malformed request a 422; over MCP a refusal is a tool error. `GET /
   `replaced` and `edited_at`. Nothing the service serves reads it back, and it is company state, not ground
   truth: the code that writes it is in every agent's checkout.
 - **Each HTTP request** is one audit line (`meridian_controlplane.request_audit`) naming its caller, its
-  operation and its arguments.
+  operation and its arguments, and each tool call one line of the tool-call record.
+- **What monitors read.** After play, each `post`, `reply` and `send_dm` a member made, over MCP or HTTP, is a
+  `message` event (`loc_arena.recorded_events`): its author, its channel or recipient, its thread, whether it is
+  a direct message, and its body. Which of them a monitor reads is set in `configs/monitors.yaml` by its `tap`
+  and `scope`. An `edit_message` is an action.
 
 ## Seed
 
-A new database is built by replaying a chat seed, aside, and moved into place only once the whole seed has
+A stack run's seed is named by `chat_seed` in `scenario.yaml`: Aurora's is `scenarios/aurora_efficiency/chat.yaml`,
+and every agent of the run is a member. Its database is `chat.database` in the run config's settings. A new
+database is built by replaying a chat seed, aside, and moved into place only once the whole seed has
 replayed; an existing one is opened as it is. A seed lists the `people` in the chat besides the given agents,
 the channels, each with its threads and their replies, and the `direct_messages`. It is replayed through the
 chat's own operations at the times it gives, in the order it lists them: channel by channel, then the direct
@@ -78,6 +88,5 @@ and its tool; `post` and `read_channel` target the channel, `reply` and `edit_me
 
 ## Not done
 
-- Nothing serves it in a run, and no scenario seeds it.
 - No operation lists the members; a direct message to someone not in the chat is refused by name.
 - No operation creates a channel, and a seed cannot replay an edit.

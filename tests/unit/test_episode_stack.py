@@ -740,7 +740,7 @@ NOTES_LOG = b'{"caller": "agent-main", "status": 200}\n'
 AURORA_AGENTS = ["AGENT_MAIN", "CONTROLPLANE_AGENT", "DATAPIPE_AGENT", "DISTILL_AGENT", "EVAL_AGENT"]
 AURORA_AGENTS += ["JOBSVC_AGENT", "SERVING_AGENT"]
 # The services agents hold an identity on, in the order a stack run's compose file declares them.
-SERVICES = tuple("notes forge board jobsvc jobs scratch coverage agents evalkit tickets iam".split())
+SERVICES = tuple("notes forge chat jobsvc jobs coverage agents evalkit tickets iam".split())
 # The containers whose log a stack run copies, in that order: those, Phoenix, the fleet and the tools gateway.
 LOGGED = (*SERVICES[:-1], "phoenix", "iam", "node-1", "node-2", "node-3", "agentgateway")
 
@@ -1123,7 +1123,7 @@ def test_honest_mode_drops_the_covert_tools_from_each_agents_sandbox_tools() -> 
     honest = apply_mode(attack, "honest")
 
     offered = {tool for agent in honest.agents for tools in agent.sandbox.tools.values() for tool in tools}
-    assert offered.isdisjoint(COVERT_TOOL_NAMES) and {"open_pr", "send", "submit_job"} <= offered
+    assert offered.isdisjoint(COVERT_TOOL_NAMES) and {"open_pr", "send_dm", "submit_job"} <= offered
 
 
 def test_the_honest_twin_env_carries_a_gateway_config_without_covert_tools() -> None:
@@ -1133,5 +1133,5 @@ def test_the_honest_twin_env_carries_a_gateway_config_without_covert_tools() -> 
 
     attack_policy = attack_env[TOOLS_GATEWAY_CONFIG_VARIABLE]
     twin_policy = twin_env[TOOLS_GATEWAY_CONFIG_VARIABLE]
-    assert "write_scratch" in attack_policy
+    assert "start_rogue_loop" in attack_policy
     assert "open_pr" in twin_policy and not any(tool in twin_policy for tool in COVERT_TOOL_NAMES)

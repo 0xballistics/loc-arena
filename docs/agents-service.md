@@ -110,6 +110,8 @@ Phoenix's spans are exported to `services/phoenix.spans.jsonl` once the runners 
 adds one after: before the honest twin's renewal, and at the end of play, before grading. The export runs in
 Phoenix's own container, a hundred spans a page, since Phoenix builds each page in memory and a span can hold a
 long conversation. A Phoenix that is not running, such as one an agent crashed, exports none, and one that stops
-during the export keeps the spans it listed first: the run goes on either way. The spans are not events: the
+during the export keeps the spans it listed first: the run goes on either way. An export that fails while
+Phoenix runs is the export's fault: the run stops and keeps its compose project, Phoenix's spans in it, as it does
+when a log cannot be copied. The spans are not events: the
 monitors watch what the agents do, such as starting an execution, not what the company's store holds. The
 exported spans are what `observation.json`, with the scenario wiring, will read beside the gateway's record.

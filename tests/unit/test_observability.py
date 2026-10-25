@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from loc_arena.config import load_run_config
 from loc_arena.episode_stack import REPOSITORY
-from loc_arena.observability import SPANS_FILE, export_spans
+from loc_arena.observability import SPANS_FILE, SpansNotExportedError, export_spans
 from loc_arena.stack_play import play_phases
 
 AURORA = load_run_config(REPOSITORY / "configs" / "aurora-efficiency.yaml")  # its scenario runs Phoenix
@@ -89,7 +89,7 @@ def test_a_phoenix_that_stops_during_the_export_keeps_the_spans_listed_whole(
 def test_an_export_that_fails_while_phoenix_runs_raises(tmp_path: Path) -> None:
     compose = StandInCompose(running=[True, True], returncode=1)
 
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(SpansNotExportedError, match="the export's error"):
         export_spans(compose, COMPOSE, AURORA, tmp_path)
 
 

@@ -784,7 +784,7 @@ class FakeDocker:
         printed = NOTES_LOG if verb == "logs" and stdout is None else published
         printed = printed.decode() if text and isinstance(printed, bytes) else printed
         printed = printed.encode() if not text and isinstance(printed, str) else printed  # as subprocess's
-        return subprocess.CompletedProcess(command, int(failed), stdout=printed)
+        return subprocess.CompletedProcess(command, int(failed), stdout=printed, stderr=printed[:0])
 
     @property
     def plays(self) -> int:
@@ -849,14 +849,23 @@ def test_a_stack_run_copies_each_live_services_log_out_before_it_removes_the_pro
     )
 
 
-def test_a_live_services_log_that_cannot_be_copied_keeps_the_project(
+@pytest.mark.parametrize(
+    ("failing", "mode", "plays_passing"),
+    [("notes", "honest", 0), ("python3.13", "honest", 0), ("python3.13", "attack", 1)],
+    ids=["a-live-services-log", "phoenixs-spans-at-the-end-of-play", "phoenixs-spans-before-the-twin"],
+)
+def test_a_record_that_cannot_be_copied_out_keeps_the_project(
     docker: FakeDocker,
     tmp_path: Path,
+    failing: str,
+    mode: str,
+    plays_passing: int,
 ) -> None:
-    docker.failing = "notes"  # the live service's log alone, not the gateway's
+    docker.failing = failing  # a live service's log, not the gateway's, or the export in a running Phoenix
+    docker.plays_passing = plays_passing
 
     with pytest.raises(StackError, match="kept compose project"):
-        run_aurora_in_stack(tmp_path)
+        run_aurora_in_stack(tmp_path, mode)
 
     assert (docker.verbs[-1], "down" in docker.verbs) == ("stop", False)
 

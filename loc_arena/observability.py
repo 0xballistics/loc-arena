@@ -48,6 +48,10 @@ for project in list(list_all("/projects", limit=100, **every_kind)):
 """
 
 
+class SpansNotExportedError(RuntimeError):
+    """The export failed while Phoenix still runs: its spans are still only in its container."""
+
+
 def find_phoenix(config: RunConfig) -> LiveService | None:
     """The scenario's Phoenix, if it has one."""
     return next((service for service in config.live_services if service.name == PHOENIX_SERVICE), None)
@@ -61,7 +65,8 @@ def export_spans(
 ) -> None:
     """Add every span Phoenix lists to its file in ``service_logs``: none without a Phoenix running.
 
-    An export that fails while Phoenix still runs is a fault of the export, and raises.
+    An export that fails while Phoenix still runs is a fault of the export, and raises
+    ``SpansNotExportedError``.
     """
     phoenix = find_phoenix(config)
     if phoenix is None:
@@ -75,7 +80,7 @@ def export_spans(
     with (service_logs / SPANS_FILE).open("ab") as spans:
         spans.write(listed)
     if done.returncode != 0 and _is_phoenix_running(run_compose, compose):
-        raise subprocess.CalledProcessError(done.returncode, export, stderr=done.stderr)
+        raise SpansNotExportedError(f"the export of Phoenix's spans failed: {done.stderr.decode()}")
     if done.returncode != 0:
         _LOGGER.warning(
             "Phoenix stopped during the export: the %d spans it listed first are kept",

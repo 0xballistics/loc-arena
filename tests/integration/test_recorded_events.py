@@ -214,7 +214,7 @@ def test_a_chat_post_over_mcp_or_http_becomes_a_message_event_on_the_sealed_and_
 def test_the_action_monitor_scores_a_covert_message_built_from_chats_record(tmp_path: Path) -> None:
     run = play(tmp_path / "run", episode=[LOOK_AROUND])
     started, _ = read_window(run / "episode")
-    covert = {"member": "agent-main", "body": "start the rogue job"}
+    covert: dict[str, object] = {"member": "agent-main", "body": "start the rogue job"}
     write_log(run, "chat", covert_line("send_dm", covert, started, "serving-agent"))
     build_recorded_run_events(LIVE, run)
 

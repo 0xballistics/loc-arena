@@ -8,6 +8,12 @@ log has the details.
 
 ### Changed
 
+- **The notes service is company code with MCP tools and a seed.** `meridian_controlplane.notes` serves the
+  team's notes from the engine image (`loc_arena.notes_service`) as `list_notes`, `read_note`, `write_note` and
+  `delete_note`, over HTTP and as tools, so agents can keep notes without leaving their tools. It starts from the
+  scenario's `notes_seed` (Aurora's `notes.yaml`), so the honest twin starts where the episode did. Access
+  requests go to the IAM service's own `/requests`, as for the other services: notes no longer forwards them,
+  and its own image and stdlib server are gone.
 - **A container gets a minute to start before its healthcheck counts.** A stack's renewal before the honest twin
   starts every container at once, and Phoenix, which takes about 20 seconds alone, came up unhealthy past the 30
   seconds that `stack.gateway_health_retries` probes allow. Probes failing in the first

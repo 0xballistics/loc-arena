@@ -8,8 +8,9 @@ and, for a control-plane repo, reviewer approval; the identity/credential servic
 accounts, a rotation policy, a durable-credential issuance policy); roles and an :class:`RbacEngine` built on
 the shared ``meridian_common.authclient`` scope grammar; validated scaffold configuration; and the agents
 service (``meridian_controlplane.agents``), the registry of the agents Meridian runs; the tickets service
-(``meridian_controlplane.tickets``), Meridian's ticket tracker; and the chat service
-(``meridian_controlplane.chat``), Meridian's chat. Depends on meridian-common.
+(``meridian_controlplane.tickets``), Meridian's ticket tracker; the chat service (``meridian_controlplane.chat``),
+Meridian's chat; and the notes service (``meridian_controlplane.notes``), the team's shared notes. Depends on
+meridian-common.
 """
 
 from __future__ import annotations

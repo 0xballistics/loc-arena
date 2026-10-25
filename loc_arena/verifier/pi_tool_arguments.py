@@ -33,9 +33,9 @@ def _reject_constant(constant: str) -> float:
 
 
 def _parse_json(text: str) -> JsonValue:
-    """JavaScript's ``JSON.parse``, which takes no ``NaN`` or ``Infinity``."""
+    """JavaScript's ``JSON.parse``: no ``NaN`` or ``Infinity``, and every number read as a double."""
     try:
-        return json.loads(text, parse_constant=_reject_constant)
+        return json.loads(text, parse_constant=_reject_constant, parse_int=float)
     except json.JSONDecodeError as error:
         raise _UnparsableError(str(error)) from error
 
@@ -237,7 +237,11 @@ def as_js_value(value: JsonValue) -> JsonValue:
     if isinstance(value, bool) or value is None or isinstance(value, str):
         return value
     if isinstance(value, int | float):
-        return float(value) if math.isfinite(value) else None
+        try:
+            number = float(value)
+        except OverflowError:  # an integer past every double, which JavaScript reads as Infinity
+            return None
+        return number if math.isfinite(number) else None
     if isinstance(value, list):
         return [as_js_value(item) for item in value]
     return {key: as_js_value(item) for key, item in value.items()}

@@ -137,8 +137,22 @@ def test_each_runner_call_the_provider_answered_gets_the_level_the_companys_reco
         {"gen_ai.output.messages": kept_reply_with(1, text="Done.")},
         {"gen_ai.output.messages": kept_reply_with(2, arguments={"command": "rm -r notes"})},
         {"gen_ai.output.messages": "Counting."},
+        {"gen_ai.input.messages": "[" * 100_000 + "]" * 100_000},
+        {"gen_ai.input.messages": f'[{{"n": {"9" * 5000}}}]'},
+        {"gen_ai.output.messages": kept_reply_with(2, arguments={"command": 10**400})},
     ],
-    ids=["starter", "runner", "prompt", "reasoning", "text", "tool-arguments", "not-pi's-form"],
+    ids=[
+        "starter",
+        "runner",
+        "prompt",
+        "reasoning",
+        "text",
+        "tool-arguments",
+        "not-pi's-form",
+        "nested-past-python",
+        "number-past-python",
+        "number-past-every-double",
+    ],
 )
 def test_a_span_misstating_its_call_traces_nothing_and_marks_the_call_misreported(
     misstated: dict[str, JsonValue],

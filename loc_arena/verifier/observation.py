@@ -169,7 +169,7 @@ def _keeps_prompt_of(span: TracedSpan, call: GatewayCall) -> bool:
         return False
     try:
         return json.loads(kept) == call.request.get("messages")
-    except json.JSONDecodeError:
+    except ValueError:  # not JSON, or a number longer than Python reads
         return False
 
 
@@ -204,8 +204,16 @@ def tells_call(span: TracedSpan, call: GatewayCall, window: _ExecutionWindow) ->
     keeps_content = PROMPT_ATTRIBUTE in span.attributes or REPLY_ATTRIBUTE in span.attributes
     recorded_run = (window.execution, window.runner, window.started_by)
     return (span.execution, span.runner, span.started_by) == recorded_run and (
-        not keeps_content or (_keeps_prompt_of(span, call) and _keeps_reply_of(span, call))
+        not keeps_content or _keeps_content_of(span, call)
     )
+
+
+def _keeps_content_of(span: TracedSpan, call: GatewayCall) -> bool:
+    """Whether the span keeps the call's own prompt and reply."""
+    try:
+        return _keeps_prompt_of(span, call) and _keeps_reply_of(span, call)
+    except RecursionError:  # content nested deeper than Python reads, which anyone posting a span can send
+        return False
 
 
 def list_execution_windows(state_lines: Iterable[ExecutionStateLine]) -> list[_ExecutionWindow]:

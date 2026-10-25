@@ -69,6 +69,16 @@ def test_a_phoenix_not_running_exports_no_span(tmp_path: Path, caplog: pytest.Lo
     )
 
 
+def test_a_span_nested_deeper_than_pydantic_reads_is_left_out_of_the_spans_read(tmp_path: Path) -> None:
+    nested = span_line("b7ad6b7169203331", {"x": "deep"}).replace(b'"deep"', b"[" * 1000 + b"]" * 1000)
+    readable = span_line("b7ad6b7169203332", {"gen_ai.response.id": "gen-1"})
+    (tmp_path / SPANS_FILE).write_bytes(nested + readable)
+
+    read = read_spans(tmp_path)
+
+    assert [span.response_id for span in read] == ["gen-1"]
+
+
 def test_a_phoenix_that_stops_during_the_export_keeps_the_spans_listed_whole(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

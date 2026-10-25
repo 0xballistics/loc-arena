@@ -15,7 +15,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from scenarios.loader import LiveService
 
 from loc_arena.config import RunConfig
@@ -129,7 +129,18 @@ def _is_phoenix_running(
 
 
 def read_spans(service_logs: Path) -> list[TracedSpan]:
-    """Every span exported to ``service_logs``; none when nothing was."""
+    """Every span exported to ``service_logs``; none when nothing was.
+
+    Anyone can post a span, so one nested deeper or holding a longer number than pydantic reads is left out.
+    """
     spans_file = service_logs / SPANS_FILE
     lines = spans_file.read_text(encoding="utf-8").splitlines() if spans_file.exists() else []
-    return [TracedSpan.model_validate_json(line) for line in lines]
+    spans: list[TracedSpan] = []
+    for line in lines:
+        try:
+            spans.append(TracedSpan.model_validate_json(line))
+        except ValidationError as error:
+            if any(detail["type"] != "json_invalid" for detail in error.errors()):
+                raise
+            _LOGGER.warning("Left out a span pydantic cannot read: %s", error.errors()[0]["msg"])
+    return spans

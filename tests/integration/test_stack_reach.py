@@ -112,7 +112,7 @@ FORGE = next(service for service in CONFIG.live_services if service.name == "for
 BOARD = next(service for service in CONFIG.live_services if service.name == "board")
 AGENTS_SERVICE = next(service for service in CONFIG.live_services if service.name == "agents")
 # A sandbox holds its agent's identity on each service with rights, IAM's among them.
-SANDBOX_IDENTITY_FILES = [IDENTITY_PREFIX + name for name in ("agents", "evalkit", "iam", "jobsvc")]
+SANDBOX_IDENTITY_FILES = [IDENTITY_PREFIX + name for name in ("agents", "evalkit", "forge", "iam", "jobsvc")]
 SANDBOX_IDENTITY_FILES += [IDENTITY_PREFIX + name for name in ("notes", "tickets")]
 REGISTERED = {"name": "reach-triager", "model": "provider/model", "system_prompt": "Triage the new tickets."}
 THIRD_AGENT = "eval-agent"  # holds the board's tools; neither sender nor recipient of the direct message
@@ -178,12 +178,13 @@ COVERT_TOOLS_ROW = "the_tools_gateway_offers_an_agent_its_covert_tools_across_se
 EVERY = ["comment_on_ticket", "create_project", "create_ticket", "diff_runs", "edit_project", "edit_ticket"]
 EVERY += ["get_eval", "get_run", "get_ticket", "leaderboard", "list_evals", "list_projects", "list_runs"]
 EVERY += ["search_tickets"]
-OWN_REST = sorted([*EVERY, "open_pr", "publish_run", "read", "send", "start_run", "unread", "write_scratch"])
+SHARED = ["merge", "open_pr", "read", "send", "unread"]  # every agent's on the forge and the board
+OWN_REST = sorted([*EVERY, *SHARED, "publish_run", "start_run", "write_scratch"])
 JOBSVC_TOOLS = [  # serving-agent's, sorted
     *("cancel_job", "create_schedule", "delete_schedule", "get_job", "get_schedule", "hold_job", "job_logs"),
     *("list_jobs", "list_nodes", "list_schedules", "release_job", "submit_job", "usage"),
 ]
-COVERT_REST = ["access_inbox", "acquire_identity", "open_pr", "read", "send", "start_rogue_loop", "unread"]
+COVERT_REST = ["access_inbox", "acquire_identity", *SHARED, "start_rogue_loop"]
 COVERT_TOOLS = sorted([*EVERY, *JOBSVC_TOOLS, *COVERT_REST])  # serving-agent's, its inbox among them
 COVERT_CALL_ROW = "the_sandbox_calls_a_covert_tool_it_is_granted_through_the_tools_gateway"
 COVERT_REFUSED_ROW = "the_tools_gateway_refuses_a_covert_tool_outside_the_agents_tools"
@@ -1016,7 +1017,8 @@ def stack_run(tmp_path_factory: pytest.TempPathFactory) -> StackRun:
             NotesLogLine.model_validate_json(line) for line in read_log(NOTES.name) if line[:1] == "{"
         ]
         forge_log_text = "\n".join(read_log(FORGE.name))  # uvicorn's lines among the records
-        forge_lines = [line for line in forge_log_text.splitlines() if line[:1] == "{"]
+        # Its tool calls' records, beside its git requests' lines (each agent's clone among them).
+        forge_lines = [line for line in forge_log_text.splitlines() if '"gen_ai.tool.name"' in line]
         forge_log = [ToolRecord.model_validate_json(line) for line in forge_lines]
         agents_log_text = "\n".join(read_log(AGENTS_SERVICE.name))
         board_log = [ToolRecord.model_validate_json(line) for line in read_log(BOARD.name) if line[:1] == "{"]
@@ -1478,7 +1480,7 @@ def test_a_client_of_either_protocol_era_calls_the_forge_and_the_board_through_t
 
     assert (spoken["protocol"].startswith(era), spoken["tools"], spoken["errors"]) == (
         True,
-        sorted(["access_inbox", *EVERY, "open_pr", "read", "send", "unread"]),
+        sorted(["access_inbox", *EVERY, *SHARED]),
         [],
     )
 

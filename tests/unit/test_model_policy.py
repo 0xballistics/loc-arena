@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 from loc_arena.board import Board
 from loc_arena.config import AgentLoopConfig, ConfigError, load_run_config
-from loc_arena.forge.reviewer import Reviewer
+from loc_arena.forge.service import open_forge
 from loc_arena.forge.world import generate_world
 from loc_arena.gateway.client import GatewayClient
 from loc_arena.gateway.core import (
@@ -45,8 +45,6 @@ from loc_arena.scaffold.tool_specs import agent_tool_specs, validate_call
 from loc_arena.scaffold.tools import AgentAction, AgentContext, Tools
 from loc_arena.settings import StackSettings
 from loc_arena.task import resolve_scenario
-
-from meridian_forge.forge import Forge
 
 SPECS = agent_tool_specs()
 FAILED_TURNS_BEFORE_END = 3
@@ -251,7 +249,7 @@ def test_validate_call_rejects_unknown_and_missing_and_mistyped() -> None:
 
 def test_an_agent_is_offered_a_pull_request_body_to_write(tmp_path: Path) -> None:
     config = load_run_config("configs/aurora-efficiency.deterministic.yaml")
-    forge = Forge(generate_world(config, resolve_scenario(config), config.seed), reviewer=Reviewer())
+    forge = open_forge(generate_world(config, resolve_scenario(config), config.seed), config)
     served = [
         spec
         for client in connect_agent_tools(forge, Board(), config, tmp_path)["agent-main"]
@@ -273,7 +271,7 @@ def test_an_in_process_agent_is_offered_only_the_tools_its_run_config_lists(tmp_
         for agent in loaded.agents
     ]
     config = dataclasses.replace(loaded, agents=tuple(without_tools))
-    forge = Forge(generate_world(config, resolve_scenario(config), config.seed), reviewer=Reviewer())
+    forge = open_forge(generate_world(config, resolve_scenario(config), config.seed), config)
     clients = connect_agent_tools(forge, Board(), config, tmp_path)
 
     offered = {
@@ -448,7 +446,7 @@ def test_an_agent_whose_model_calls_failed_acts_on_its_next_reply(tmp_path: Path
 
 def test_in_memory_tools_refuse_a_config_with_central_iam_on(tmp_path: Path) -> None:
     config = load_run_config("configs/aurora-efficiency.iam.yaml")
-    forge = Forge(generate_world(config, resolve_scenario(config), config.seed), reviewer=Reviewer())
+    forge = open_forge(generate_world(config, resolve_scenario(config), config.seed), config)
 
     with pytest.raises(ConfigError, match="in memory no service would be under it"):
         connect_agent_tools(forge, Board(), config, tmp_path)
@@ -461,7 +459,7 @@ def test_in_process_a_service_with_rights_as_well_as_tools_still_serves_its_tool
         for service in loaded.live_services
     )
     config = dataclasses.replace(loaded, live_services=services)
-    forge = Forge(generate_world(config, resolve_scenario(config), config.seed), reviewer=Reviewer())
+    forge = open_forge(generate_world(config, resolve_scenario(config), config.seed), config)
 
     clients = connect_agent_tools(forge, Board(), config, tmp_path)
 
@@ -470,7 +468,7 @@ def test_in_process_a_service_with_rights_as_well_as_tools_still_serves_its_tool
 
 def test_an_in_process_run_offers_no_tool_of_a_company_service(tmp_path: Path) -> None:
     config = load_run_config("configs/aurora-efficiency.deterministic.yaml")
-    forge = Forge(generate_world(config, resolve_scenario(config), config.seed), reviewer=Reviewer())
+    forge = open_forge(generate_world(config, resolve_scenario(config), config.seed), config)
     company = [service for service in config.live_services if service.name in ("evalkit", "tickets")]
 
     clients = connect_agent_tools(forge, Board(), config, tmp_path)

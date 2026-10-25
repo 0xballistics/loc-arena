@@ -20,6 +20,7 @@ dependencies = [
   "mcp>=2.3.0",
   "starlette>=1.7.0",
   "croniter>=6.2.4", # the job service's cron schedules
+  "certifi>=2026.10.19", # the roots the model gateway verifies the provider with
 ]
 
 [project.scripts]

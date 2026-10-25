@@ -672,6 +672,7 @@ version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
+    { name = "certifi" },
     { name = "croniter" },
     { name = "fastapi" },
     { name = "httpx2" },
@@ -708,6 +709,7 @@ sandbox = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.15.1" },
+    { name = "certifi", specifier = ">=2026.10.19" },
     { name = "croniter", specifier = ">=6.2.4" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx2", specifier = ">=2.13.1" },

@@ -215,7 +215,7 @@ def test_the_gateway_holds_the_key_and_the_episode_every_sandbox_token() -> None
     holders = {name: compose["services"][name]["secrets"] for name in ("gateway", "episode")}
 
     assert holders == {
-        "gateway": ["openrouter_api_key", "model_gateway_config"],
+        "gateway": ["openrouter_api_key", "model_gateway_config", "provider_roots"],
         "episode": ["gateway_token", "sandbox_token_agent_main", "sandbox_token_serving_agent"],
     }
 
@@ -223,7 +223,7 @@ def test_the_gateway_holds_the_key_and_the_episode_every_sandbox_token() -> None
 def test_compose_reads_each_secret_from_its_own_host_variable() -> None:
     compose = render()
 
-    sources = compose["secrets"]
+    sources = {name: source for name, source in compose["secrets"].items() if "file" not in source}
 
     assert sources == {
         "openrouter_api_key": {"environment": "OPENROUTER_API_KEY"},
@@ -499,7 +499,7 @@ def test_neither_the_gateway_nor_the_episode_holds_an_identity(
     holders = {name: compose["services"][name]["secrets"] for name in ("gateway", "episode")}
 
     assert holders == {
-        "gateway": ["openrouter_api_key", "model_gateway_config"],
+        "gateway": ["openrouter_api_key", "model_gateway_config", "provider_roots"],
         "episode": ["gateway_token", "sandbox_token_agent_main", "sandbox_token_controlplane_agent"],
     }
 

@@ -33,7 +33,7 @@ from loc_arena.mcp_service import ALL_ADDRESSES, caller_from_token
 from loc_arena.tool_records import Write, tool_call_recorder
 
 SERVICE = "board"  # its entry in the scenario's services, and its compose service
-# The SDK requires an issuer with a token verifier; see loc_arena.forge.service.
+# The SDK requires an issuer with a token verifier; see meridian_forge.server.
 ISSUER = "http://board"
 
 

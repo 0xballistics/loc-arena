@@ -7,8 +7,8 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from loc_arena.forge.service import open_forge
-from loc_arena.forge.world import generate_world
+from loc_arena.forge_seed import generate_world
+from loc_arena.forge_service import open_forge
 from loc_arena.gateway.core import ProviderError
 from loc_arena.live import connect_agent_tools
 from loc_arena.logging_.events import fingerprint, read_events

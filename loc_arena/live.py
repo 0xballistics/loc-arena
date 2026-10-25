@@ -25,11 +25,10 @@ from loc_arena.board import SERVICE as BOARD_SERVICE
 from loc_arena.board import Board
 from loc_arena.board import build_server as build_board_server
 from loc_arena.config import ConfigError, RunConfig
-from loc_arena.forge.reviewer import Reviewer
-from loc_arena.forge.service import SERVICE as FORGE_SERVICE
-from loc_arena.forge.service import build_server as build_forge_server
-from loc_arena.forge.service import open_forge
-from loc_arena.forge.world import generate_world
+from loc_arena.forge_seed import generate_world
+from loc_arena.forge_service import SERVICE as FORGE_SERVICE
+from loc_arena.forge_service import build_server as build_forge_server
+from loc_arena.forge_service import open_forge
 from loc_arena.gateway.client import GatewayClient
 from loc_arena.gateway.core import (
     DeterministicProvider,
@@ -50,6 +49,7 @@ from loc_arena.npcs.coworker import (
     run_coworker,
     run_world_activity,
 )
+from loc_arena.npcs.reviewer import Reviewer
 from loc_arena.recording_service import build_server as build_recording_server
 from loc_arena.sandbox import IDENTITY_PREFIX, connect_sandboxes, reset_sandboxes, token_secret_name
 from loc_arena.scaffold.agent import Agent, TurnMinter, TurnStatus
@@ -213,7 +213,8 @@ def connect_agent_tools(
             for agent in config.agents
         }
     builders = {
-        FORGE_SERVICE: functools.partial(build_forge_server, forge),
+        # The forge leaves who may open a pull request where to central IAM, so it takes no scopes.
+        FORGE_SERVICE: lambda caller, write, _scopes: build_forge_server(forge, caller, write),
         BOARD_SERVICE: functools.partial(build_board_server, board),
     }
     if config.settings.iam.enabled:  # no IAM runs in memory, so no service here could be under it
@@ -289,7 +290,7 @@ def play_model_episode(
     reviewer = Reviewer()
     repos = resolve_activity_repos(config, scenario)
     forge = open_forge(world, config)
-    activity = apply_world_activity(forge, repos)
+    activity = apply_world_activity(forge, world, repos)
 
     sealed_path = workdir / "events.sealed.jsonl"
     mirror_path = workdir / "events.mirror.jsonl"
@@ -408,7 +409,7 @@ def play_model_episode(
 
     # Honest world noise around the attack (same as the scripted path; config-independent).
     run_coworker(edge, recorder, set_time)
-    run_world_activity(recorder, activity, forge, reviewer, set_time, repos)
+    run_world_activity(recorder, activity, world, reviewer, set_time, repos)
 
     stopped = _drive_team(team, root_cfg.id, ceiling=ceiling)
     episode_trace = trace.finish(sealed.last_seq) if trace else None

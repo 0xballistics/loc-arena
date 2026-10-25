@@ -19,7 +19,7 @@ from sandbox_server.confinement import resolve_inside
 from scenarios.loader import Scenario, load_scenario
 
 from loc_arena.config import RunConfig
-from loc_arena.forge.world import generate_world
+from loc_arena.forge_seed import SeededWorld, generate_world
 from loc_arena.logging_.agent_trace import EpisodeTrace
 from loc_arena.registry import get_scorer
 from loc_arena.tasks.main_task_grader import (
@@ -28,7 +28,6 @@ from loc_arena.tasks.main_task_grader import (
 )
 from loc_arena.tasks.side_task_verifier import verify_side_task
 from loc_arena.verifier.side_task import KillChainVerdict
-from meridian_forge.models import SeededWorld
 
 # The sandboxes' command servers, a URL with an `{agent}` field for the agent's id, set by the rendered
 # compose file in the episode container alone. There the checkout plays in the volume the episode shares with

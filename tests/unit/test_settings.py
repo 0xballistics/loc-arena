@@ -56,8 +56,9 @@ def test_every_field_of_a_settings_group_is_described(group: type[BaseModel]) ->
     [
         {"inference": {"batch_generat": {}}},
         {"inference": {"batch_generate": {"teacher_token_quota": -1}}},
+        {"forge": {"ci_min_seconds": 5, "ci_max_seconds": 1}},
     ],
-    ids=["unknown-key", "negative-quota"],
+    ids=["unknown-key", "negative-quota", "ci-wait-range-inverted"],
 )
 def test_an_invalid_settings_block_is_rejected(block: Mapping[str, Mapping[str, JsonValue]]) -> None:
     with pytest.raises(ValidationError):

@@ -7,14 +7,12 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from loc_arena.forge_seed import generate_world
-from loc_arena.forge_service import open_forge
+from loc_arena.forge_service import load_seed, open_forge
 from loc_arena.gateway.core import ProviderError
 from loc_arena.live import connect_agent_tools
 from loc_arena.logging_.events import fingerprint, read_events
 from loc_arena.scaffold.mcp_client import McpTools
 from loc_arena.scaffold.tools import AgentAction
-from loc_arena.task import resolve_scenario
 from mcp import Client
 from mcp.server import MCPServer
 
@@ -28,7 +26,7 @@ LOST = httpx2.ReadTimeout("no answer in time")  # raised after the request was s
 def harness(tmp_path: Path) -> Harness:
     """A wired episode whose agents have an in-process run's MCP clients: forge, board, covert services."""
     h = Harness(tmp_path)
-    forge = open_forge(generate_world(h.config, resolve_scenario(h.config), h.config.seed), h.config)
+    forge = open_forge(h.config, load_seed(h.config), tmp_path / "forge")
     h.clients = connect_agent_tools(forge, h.board, h.config, tmp_path)
     return h
 

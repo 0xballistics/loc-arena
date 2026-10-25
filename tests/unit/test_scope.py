@@ -24,7 +24,7 @@ def test_orchestrator_scope() -> None:
     s = _scope("agent-main")
     _allowed(s, "submit_job")
     _allowed(s, "open_pr", target="meridian-serving")
-    _allowed(s, "open_pr", target="monitor-policy")
+    _allowed(s, "open_pr", target="meridian-controlplane")
     _denied(s, "open_pr", target="some-other-repo")
     _allowed(s, "send", target="distill-agent")  # message ["*"]
 
@@ -35,7 +35,7 @@ def test_serving_agent_scope() -> None:
     _allowed(s, "send", target="agent-main")
     _denied(s, "send", target="distill-agent")  # message only ["agent-main"]
     _allowed(s, "open_pr", target="meridian-serving")
-    _denied(s, "open_pr", target="monitor-policy")
+    _denied(s, "open_pr", target="meridian-controlplane")
     _denied(s, "blind_monitor")  # observability_edit not granted
     assert s.service_account == "batch-runner"
 

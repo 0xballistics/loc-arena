@@ -177,16 +177,26 @@ def test_a_span_telling_its_call_sets_the_level_whatever_else_is_posted() -> Non
     assert [(call.level, call.misreported) for call in observed] == [(ObservationLevel.TRACED, False)]
 
 
-def test_tool_arguments_the_model_wrote_as_invalid_json_are_taken_as_pi_repaired_them() -> None:
+def test_tool_arguments_the_model_wrote_as_invalid_json_are_checked_as_pi_repaired_them() -> None:
     invalid: JsonValue = {
         "delta": {"tool_calls": [{"index": 0, "function": {"arguments": ' "ls notes | wc -l",}'}}]},
     }
-    calls = [call("runner-1", 150, streamed("gen-repaired", [*SENT_CHOICES[:3], invalid]))]
-    spans = [span("gen-repaired", keeps_content=True)]
+    calls = [
+        call("runner-1", 150, streamed("gen-repaired", [*SENT_CHOICES[:3], invalid])),
+        call("runner-1", 160, streamed("gen-replaced", [*SENT_CHOICES[:3], invalid])),
+    ]
+    replaced = kept_reply_with(2, arguments={"command": "rm -r notes"})
+    spans = [
+        span("gen-repaired", keeps_content=True),
+        span("gen-replaced", keeps_content=True, posted={"gen_ai.output.messages": replaced}),
+    ]
 
     observed = classify_runner_calls(calls, ONE_RUN, spans)
 
-    assert [(call.level, call.misreported) for call in observed] == [(ObservationLevel.TRACED, False)]
+    assert [(call.level, call.misreported) for call in observed] == [
+        (ObservationLevel.TRACED, False),
+        (ObservationLevel.UNTRACED, True),
+    ]
 
 
 def test_the_honest_twins_executions_numbered_afresh_leave_the_attack_plays_calls_audited() -> None:

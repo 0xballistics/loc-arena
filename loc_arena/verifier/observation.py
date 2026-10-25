@@ -29,6 +29,7 @@ from loc_arena.gateway.model_gateway import GatewayCall
 from loc_arena.observability import TracedSpan, read_spans
 from loc_arena.recorded_events import SERVICE_LOGS
 from loc_arena.runner_pool import find_runner_pool_owner
+from loc_arena.verifier.pi_tool_arguments import as_js_value, read_tool_arguments
 
 OBSERVATION_FILE = "observation.json"
 PROMPT_ATTRIBUTE = "gen_ai.input.messages"
@@ -162,17 +163,6 @@ def read_sent_reply(call: GatewayCall) -> _SentReply:
     return reply
 
 
-def _are_arguments_sent(kept: JsonValue, sent: str) -> bool:
-    """Whether a span's tool arguments are those the model wrote.
-
-    Arguments that are not JSON, which pi repairs as this does not, are taken as the span gives them.
-    """
-    try:
-        return kept == (json.loads(sent, strict=False) if sent.strip() else {})
-    except json.JSONDecodeError:
-        return True
-
-
 def _keeps_prompt_of(span: TracedSpan, call: GatewayCall) -> bool:
     kept = span.attributes.get(PROMPT_ATTRIBUTE)
     if not isinstance(kept, str) or not isinstance(call.request, dict):
@@ -199,7 +189,7 @@ def _keeps_reply_of(span: TracedSpan, call: GatewayCall) -> bool:
         and [(part.id, part.name) for part in kept_calls]
         == [(made.id, made.name) for made in sent.tool_calls]
         and all(
-            _are_arguments_sent(part.arguments, made.arguments)
+            as_js_value(part.arguments) == as_js_value(read_tool_arguments(made.arguments))
             for part, made in zip(kept_calls, sent.tool_calls, strict=True)
         )
     )

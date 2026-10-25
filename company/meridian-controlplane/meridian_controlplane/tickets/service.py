@@ -116,7 +116,7 @@ class Tickets(BaseModel):
     tickets: list[TicketSummary]
 
 
-def create_tickets_api(
+def create_tickets_api(  # noqa: C901 - counts its nested functions, each checked on its own
     store: TicketStore,
     write_audit_line: Callable[[str], None],
     authority: Authority,
@@ -236,7 +236,7 @@ def create_tickets_api(
     return app
 
 
-def build_tickets_server(
+def build_tickets_server(  # noqa: C901 - counts its nested functions, each checked on its own
     store: TicketStore,
     caller: Callable[[], str | None],
     verifier: TokenVerifier | None = None,

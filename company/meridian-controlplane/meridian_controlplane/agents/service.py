@@ -40,7 +40,7 @@ stops it (run). The schema is at /openapi.json.
 """
 
 
-def create_agents_service_app(
+def create_agents_service_app(  # noqa: C901 - counts its nested functions, each checked on its own
     registry: AgentRegistry,
     write_audit_line: Callable[[str], None],
     authority: CentralAuthority,

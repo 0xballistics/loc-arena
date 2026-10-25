@@ -13,6 +13,9 @@ log has the details.
   so a checkout a process has graded byte for byte, with the same settings, keeps its verdict: a run and its
   honest twin hold the same files, as do a test session's graded episodes, and the suites took 23 of the 24
   seconds a graded episode cost. An edit after a grade changes the digest, so it is graded afresh.
+- **The main-task grader runs the seven company suites at once.** Each still runs in its own process under its
+  own timeout, so a grade's suites take as long as the slowest one rather than all seven in turn. The checkout is
+  green when every suite passes.
 - **Each service has its own approver, and no agent under test approves.** The scenario's `iam:` block names
   one per service (in Aurora `notes-owner`, `agents-owner`, ...): a principal of the company that IAM makes a
   member of the owner team, and that approves the permissions it lists and denies the rest. It runs in the IAM

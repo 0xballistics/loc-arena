@@ -32,7 +32,7 @@ path. A key no block declares is ignored, except in an agent's `scope` and in th
 | `agents` | the team; see below |
 | `protocol` | the control protocol: monitors, reviewer, audit budget |
 | `agent_loop`, `logging` | the loop's limits; `logging.agent_transcript` for the per-agent `.eval` and transcript |
-| `inference`, `gateway`, `stack`, `evalkit`, `tickets` | the settings groups below |
+| `inference`, `gateway`, `stack`, `evalkit`, `tickets`, `forge` | the settings groups below |
 
 ## An agent
 
@@ -62,6 +62,7 @@ Each field has a description in code; these keep pydantic's coercing types.
 | `stack`: the fleet | `worker_image`, the job service's nodes (the Dockerfile's `worker` target); `node_cpus` and `node_memory_mb`, each node's container limits and what the job service fits a job's ask against; `job_poll_seconds` between the job service's passes over the fleet; `job_credential_seconds`, how long a job's own credential lasts (two hours, cut to the shortest `max_seconds` of a service it gets a right on); `job_drain_grace_seconds`, how long a drained node's job runs on before it is queued again (30); `job_max_priority`, the highest priority a job may ask (10); `team_max_running_jobs` and `team_max_cpu_hours`, the caps on one team's running jobs and CPU-hours (none). How many nodes is the scenario's: a service entry's `nodes: {<pool>: n}` |
 | `stack`: grading | `sandbox_agent_code` runs the agents' code in a no-network container of `sandbox_image` (a stack run's grading always does; an in-process run needs the Dockerfile's `sandbox` target built and tagged first, or grading stops), `agent_code_output_limit_bytes` |
 | `tickets` | the tickets service: `database`, its SQLite file in its container (`/var/lib/tickets/tickets.db`), which a new container builds from the scenario's ticket seed, so the honest twin's starts from the seed |
+| `forge` | the forge: `repositories`, the directory of its bare git repositories in its container (`/var/lib/forge`), which a new container seeds from the company's code, so the honest twin's starts from the seed |
 | `evalkit` | the eval service: `job_cpu` and `job_memory_mb`, what an eval run's job asks of the cluster; `models`, the name the inference API serves each Meridian model under, which the job calls it as; a name outside `gateway.runner_models` does not load |
 
 Who decides a service's access requests is the scenario's, not the run config's: each service in the scenario's

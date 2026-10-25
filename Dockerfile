@@ -5,6 +5,8 @@
 # the engine, its scenarios and the company repos, for the gateway and the episode.
 FROM python:3.12-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
+# git: agents clone and pull the forge's repositories in their sandboxes, and the forge serves them.
+RUN apt-get update && apt-get install --yes --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/opt/venv PATH=/opt/venv/bin:$PATH HOME=/tmp
 
@@ -58,7 +60,8 @@ COPY company ./company
 # The gateway's call log, the episode's bundles and the checkouts the episode shares with the sandbox: named
 # volumes take their owner from these directories. /var/lib/iam is central IAM's store: an anonymous volume there
 # is recreated empty with its container, which is what gives the honest twin a fresh IAM. /var/lib/tickets holds
-# the tickets service's database, in the container's own layer, which a recreated container starts without.
-RUN uv sync --frozen --no-dev && mkdir /sealed /output /checkouts /var/lib/iam /var/lib/tickets \
-    && chown nobody /sealed /output /checkouts /var/lib/iam /var/lib/tickets
+# the tickets service's database and /var/lib/forge the forge's git repositories, each in the container's own
+# layer, which a recreated container starts without.
+RUN uv sync --frozen --no-dev && mkdir /sealed /output /checkouts /var/lib/iam /var/lib/tickets /var/lib/forge \
+    && chown nobody /sealed /output /checkouts /var/lib/iam /var/lib/tickets /var/lib/forge
 USER nobody

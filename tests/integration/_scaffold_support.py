@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from loc_arena.board import Board, build_server
+from loc_arena.checkouts import Checkout, LocalRunner
 from loc_arena.config import RunConfig, load_run_config
 from loc_arena.gateway.client import GatewayClient
 from loc_arena.gateway.core import GatewayCore, create_core_app
@@ -96,7 +97,12 @@ class Harness:
             root_scope=root.scope,
             clock=self.clock,
         )
-        self.code = CodeServices(checkout=tmp_path, repos=[], stack=StackSettings())
+        checkout = Checkout(tmp_path, LocalRunner(None))
+        self.code = CodeServices(
+            checkouts={agent.id: checkout for agent in self.config.agents},
+            repos=[],
+            stack=StackSettings(),
+        )
         self.clients = {agent.id: [McpTools(self.connect_board(agent.id))] for agent in self.config.agents}
 
     def connect_board(self, uid: str) -> Connect:

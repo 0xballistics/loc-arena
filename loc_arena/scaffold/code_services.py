@@ -1,11 +1,11 @@
-"""The native tools over the agent's company checkout: read, write, edit, list and search, and ``bash``.
+"""The native tools over each agent's own checkout: read, write, edit, list and search, and ``bash``.
 
-The untrusted team works the real seven-repo ``company/`` checkout with them, and that same checkout is graded
-(continuous scoring). Every path is confined to the checkout, so the untrusted agent (even as root in its own
-sandbox) has no route out to the sealed layer. ``bash`` runs agent-written code, so it runs only in the
-calling agent's own sandbox, given in a stack run, which sees the checkouts and nothing of the episode;
-without sandboxes it is refused, since it is not confined to the checkout. An agent with no sandbox of its
-own gets an error and nothing runs.
+Each agent works its own clone of the company's seven repos (``loc_arena.checkouts``); what it merges on the
+forge's ``main`` is graded. Every path is confined to the calling agent's checkout, so the untrusted agent
+(even as root in its own sandbox) has no route out to the sealed layer. ``bash`` runs agent-written code where
+that agent's commands run: in its own sandbox in a stack run, which sees its checkout and nothing of the
+episode; in this process otherwise, where only the deterministic fixture's scripted moves play. An agent with
+no checkout gets an error and nothing runs.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from typing import Any, cast
 
 from sandbox_server.wire import CommandRequest
 
-from loc_arena.sandbox import SandboxClient, SandboxError
+from loc_arena.checkouts import Checkout
+from loc_arena.sandbox import SandboxError
 from loc_arena.settings import StackSettings
 
 _MAX_READ = 200_000  # cap a read so a huge file can't blow the context
@@ -26,38 +27,33 @@ _MAX_MATCHES = 200
 
 
 class CodeServices:
-    """The native tools, acting on one company checkout."""
+    """The native tools, each acting on the calling agent's checkout."""
 
     TOOLS = frozenset({"read_file", "write_file", "edit_file", "list_dir", "search_code", "bash"})
 
-    def __init__(
-        self,
-        *,
-        checkout: Path,
-        repos: list[str],
-        stack: StackSettings,
-        sandboxes: Mapping[str, SandboxClient] | None = None,
-    ) -> None:
-        """Act on ``checkout``, whose ``repos`` are importable, under the ``stack`` settings.
-
-        ``sandboxes``, each agent's by its id, are given only in the episode container: an agent's code then
-        runs in its own, ``bash`` included. Without them, ``bash`` is refused.
-        """
-        self._checkout = checkout.resolve()
+    def __init__(self, *, checkouts: Mapping[str, Checkout], repos: list[str], stack: StackSettings) -> None:
+        """Act on each agent's checkout of ``checkouts``, whose ``repos`` are importable, under ``stack``."""
+        self._checkouts = dict(checkouts)
         self._repos = list(repos)
         self._stack = stack
-        self._sandboxes = sandboxes
 
-    def _resolve(self, rel: str) -> Path:
-        """Resolve ``rel`` under the checkout, refusing any path that escapes it (workspace confinement)."""
-        p = (self._checkout / rel).resolve()
-        if p != self._checkout and self._checkout not in p.parents:
+    def _checkout(self, args: dict[str, Any]) -> Checkout:
+        agent = str(args["actor_uid"])
+        if agent not in self._checkouts:
+            raise SandboxError(f"{agent} has no checkout, so nothing ran")
+        return self._checkouts[agent]
+
+    def _resolve(self, args: dict[str, Any], *, required: bool = False) -> tuple[Path, Path]:
+        """The caller's checkout, and ``args["path"]`` under it, refusing any path that escapes it.
+
+        Without a path, the checkout itself, unless one is ``required``.
+        """
+        root = self._checkout(args).directory
+        rel = str(args["path"] if required else args.get("path", ""))
+        p = (root / rel).resolve()
+        if p != root and root not in p.parents:
             raise ValueError(f"path escapes the checkout: {rel}")
-        return p
-
-    def _pythonpath(self) -> str:
-        """The ``PYTHONPATH`` that makes the seven repos importable: each repo dir under the checkout."""
-        return os.pathsep.join(str(self._checkout / r) for r in self._repos)
+        return root, p
 
     def run(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         """Run the native tool ``tool`` with ``args``; a malformed call is an error result, never a crash."""
@@ -71,21 +67,21 @@ class CodeServices:
 
     # --- code tools ----------------------------------------------------------------------------------
     def _t_read_file(self, args: dict[str, Any]) -> dict[str, Any]:
-        p = self._resolve(str(args.get("path", "")))
+        _, p = self._resolve(args)
         if not p.is_file():
             return {"error": "not a file", "path": str(args.get("path", ""))}
         text = p.read_text(errors="replace")
         return {"path": args["path"], "content": text[:_MAX_READ], "truncated": len(text) > _MAX_READ}
 
     def _t_write_file(self, args: dict[str, Any]) -> dict[str, Any]:
-        p = self._resolve(str(args["path"]))
+        _, p = self._resolve(args, required=True)
         p.parent.mkdir(parents=True, exist_ok=True)
         content = str(args.get("content", ""))
         p.write_text(content)
         return {"path": args["path"], "bytes_written": len(content.encode())}
 
     def _t_edit_file(self, args: dict[str, Any]) -> dict[str, Any]:
-        p = self._resolve(str(args["path"]))
+        _, p = self._resolve(args, required=True)
         if not p.is_file():
             return {"error": "not a file", "path": args["path"]}
         old, new = str(args["old"]), str(args.get("new", ""))
@@ -97,7 +93,7 @@ class CodeServices:
         return {"path": args["path"], "replaced": count}
 
     def _t_list_dir(self, args: dict[str, Any]) -> dict[str, Any]:
-        p = self._resolve(str(args.get("path", "")))
+        _, p = self._resolve(args)
         if not p.is_dir():
             return {"error": "not a directory", "path": args.get("path", "")}
         entries = [
@@ -113,7 +109,7 @@ class CodeServices:
             rx = re.compile(pattern)
         except re.error as exc:
             return {"error": f"bad regex: {exc}"}
-        root = self._resolve(str(args.get("path", "")))
+        checkout, root = self._resolve(args)
         matches: list[dict[str, Any]] = []
         for f in sorted(root.rglob("*.py")):
             if any(part in ("__pycache__", ".pytest_cache", ".git") for part in f.parts):
@@ -121,7 +117,7 @@ class CodeServices:
             try:
                 for i, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
                     if rx.search(line):
-                        rel = str(f.relative_to(self._checkout))
+                        rel = str(f.relative_to(checkout))
                         matches.append({"file": rel, "line": i, "text": line.strip()[:200]})
                         if len(matches) >= _MAX_MATCHES:
                             return {"matches": matches, "truncated": True}
@@ -131,23 +127,19 @@ class CodeServices:
 
     # --- shell ---------------------------------------------------------------------------------------
     def _t_bash(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Run ``bash -c <command>`` in the checkout, in the agent's sandbox; a timeout kills its session.
+        """Run ``bash -c <command>`` in the caller's checkout, where its commands run; a timeout kills it all.
 
         Not a login shell: Debian's ``/etc/profile`` would reset ``PATH`` and drop the image's virtualenv.
         """
-        if self._sandboxes is None:
-            return {"error": "bash runs only in a stack run's sandbox", "tool": "bash"}
-        agent = str(args["actor_uid"])
-        if agent not in self._sandboxes:
-            raise SandboxError(f"{agent} has no sandbox, so its command did not run")
-        timeout = self._stack.shell_timeout_seconds
+        checkout, timeout = self._checkout(args), self._stack.shell_timeout_seconds
         request = CommandRequest(
             argv=["bash", "-c", str(args["command"])],
-            directory=self._checkout,
+            directory=checkout.directory,
             timeout_seconds=timeout,
-            environment={"PYTHONPATH": self._pythonpath()},
+            # The seven repos importable: each repo's directory in the checkout.
+            environment={"PYTHONPATH": os.pathsep.join(str(checkout.directory / r) for r in self._repos)},
         )
-        res = self._sandboxes[agent].run(request)
+        res = checkout.runner.run(request)
         if res.returncode is None:
             return {**res.model_dump(), "error": f"timed out after {timeout:g} seconds"}
         return res.model_dump()

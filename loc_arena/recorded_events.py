@@ -7,16 +7,16 @@ episode, or the honest twin, whose play window holds its time. Its events take t
 that time and the native turn of its agent running then, else turn 0, and are written after every event of
 play to the sealed log, and to the mirror log unless sealed-only. A call its service refused (it carries
 ``error.type``) makes a blocked ``action`` with the service's reason. A successful call makes zero or more
-events: the board's ``send`` a ``message``; the forge's ``open_pr`` a ``pr`` and an ``action``; a covert
-tool an ``action``, plus ``write_scratch`` a sealed ``shared_surface`` and ``blind_monitor`` the ``config``
-pair the verifier reads; ``read`` and ``unread`` none, since each turn's delivery is a ``read``. A live
-service with rights and no tools records a request in its log as a line naming its operation
-(``ServiceRequestRecord``); its other lines, the notes service's among them, are not records. A request it
-refused makes a blocked ``action``, and one that changed something an ``action``; a read it answered makes
-none, the forge's git fetch among them, though it is a POST. A service with tools and rights both (the eval
-service, the forge) records a tool call or a request per line, and each line is read as what it names. The
-job service, reached both ways, writes both kinds of record, and each change of a job's state is a ``job``
-event of its owner; the process facts each node of its fleet writes
+events: the board's ``send`` a ``message``; the forge's ``open_pr`` a ``pr`` and an ``action``, its ``merge``
+an ``action``; a covert tool an ``action``, plus ``write_scratch`` a sealed ``shared_surface`` and
+``blind_monitor`` the ``config`` pair the verifier reads; ``read`` and ``unread`` none, since each turn's
+delivery is a ``read``. A live service with rights and no tools records a request in its log as a line naming
+its operation (``ServiceRequestRecord``); its other lines, the notes service's among them, are not records. A
+request it refused makes a blocked ``action``, and one that changed something an ``action``; a read it
+answered makes none, the forge's git fetch among them, though it is a POST, while its git push is an action. A
+service with tools and rights both (the eval service, the forge) records a tool call or a request per line,
+and each line is read as what it names. The job service, reached both ways, writes both kinds of record, and
+each change of a job's state is a ``job`` event of its owner; the process facts each node of its fleet writes
 (``services/node-<n>.log``) are ``process`` events on the sealed log alone. Neither comes from an agent's
 call, so either may fall outside every turn, unnoted. A job's own calls carry its workload principal
 (``job-<id>``), which is no agent of the run: each record a workload made is its sponsor's, by IAM's
@@ -176,7 +176,7 @@ def build_pull_request(record: ToolRecord, agent_ids: Sequence[str]) -> list[Rec
                 "target_repo": opened["repo"],
                 "pr_title": opened["title"],
                 "pr_body": str(record.arguments.get("body", "")),
-                "diff": str(record.arguments.get("diff", "")),
+                "diff": opened["diff"],
                 "ci": opened["ci"],
             },
         ),
@@ -243,11 +243,11 @@ EVENT_BUILDERS: Mapping[str, Callable[[ToolRecord, Sequence[str]], list[Recorded
 # The tools whose successful call is also an action (the eval and tickets services' changes among them; their
 # reads are none), and the argument naming what a call or request addresses.
 _ACTIONS = COVERT_TOOLS | {
-    *("open_pr", "register_eval", "retire_eval", "start_run", "publish_run"),
+    *("open_pr", "merge", "register_eval", "retire_eval", "start_run", "publish_run"),
     *("create_project", "edit_project", "create_ticket", "edit_ticket", "comment_on_ticket"),
 }
 _TARGET_FROM: Mapping[str, str] = {
-    "open_pr": "repo",
+    **dict.fromkeys(("open_pr", "merge"), "repo"),
     "send": "to",
     "blind_monitor": "target",
     "register_agent": "name",
@@ -266,7 +266,7 @@ _TARGET_FROM: Mapping[str, str] = {
     "create_project": "key",
     **dict.fromkeys(("edit_project", "create_ticket"), "project"),
     **dict.fromkeys(("get_ticket", "edit_ticket", "comment_on_ticket"), "ticket"),
-    **dict.fromkeys(("info_refs", "upload_pack"), "repo"),
+    **dict.fromkeys(("info_refs", "upload_pack", "receive_pack"), "repo"),
 }
 # Requests that read though they are no GET: git's fetch, a POST answering with the commits it asks for.
 _POST_READS = frozenset({"upload_pack"})

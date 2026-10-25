@@ -15,7 +15,7 @@ from pathlib import Path
 
 from loc_arena.config import RunConfig, sandbox_service
 from loc_arena.gateway.model_gateway import MODEL_GATEWAY_SERVICE, drain_record, start_gateway
-from loc_arena.merged_main import EPISODE_PHASE, TWIN_PHASE, archive_main
+from loc_arena.merged_main import EPISODE_PHASE, TWIN_PHASE, archive_stack_main
 from loc_arena.node_pool import list_node_services
 from loc_arena.runner_pool import list_runner_services
 from loc_arena.tools_gateway import TOOLS_GATEWAY_SERVICE, serves_tools
@@ -115,14 +115,14 @@ def play_phases(
 
     Never recreated, the container plays its image of the first play again, whatever its tag now names. The
     twin plays under ``twin_environment``, whose recreated tools gateway offers it no covert tool. Returns the
-    exit code of the last play, and what each play left merged on the forge's ``main`` (``archive_main``), by
-    play, read before the forge is renewed; none without a forge.
+    exit code of the last play, and what each play left merged on the forge's ``main``
+    (``archive_stack_main``), by play, read before the forge is renewed; none without a forge.
     """
     attached = ["--attach", EPISODE_SERVICE, "--exit-code-from", EPISODE_SERVICE]
     play = [*compose, "up", "--no-recreate", *attached, EPISODE_SERVICE]
 
     def read_main(phase_environment: dict[str, str]) -> dict[str, bytes] | None:
-        return archive_main(config, compose, functools.partial(subprocess.run, env=phase_environment))
+        return archive_stack_main(config, compose, functools.partial(subprocess.run, env=phase_environment))
 
     archived: dict[str, dict[str, bytes] | None] = {}
     exit_code = subprocess.run(play, env=environment).returncode

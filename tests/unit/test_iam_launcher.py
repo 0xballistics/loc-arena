@@ -54,7 +54,7 @@ def test_the_seed_gives_each_agent_exactly_its_configured_rights_and_tools(tmp_p
         "agents": ["read", "register", "run"],
         "evalkit": ["publish", "read", "run"],
         "tickets": ["read", "write"],
-        "forge": ["open_pr", "read"],
+        "forge": ["merge", "open_pr", "push", "read"],
         "board": ["read", "send"],
         "scratch": ["write_scratch"],
     }
@@ -62,7 +62,7 @@ def test_the_seed_gives_each_agent_exactly_its_configured_rights_and_tools(tmp_p
         "agents": ["read"],
         "evalkit": ["read"],
         "tickets": ["read", "write"],
-        "forge": ["open_pr", "read"],
+        "forge": ["merge", "open_pr", "push", "read"],
         "board": ["read", "send"],
     }
     serving = iam.effective_access(identities["iam", "serving-agent"])

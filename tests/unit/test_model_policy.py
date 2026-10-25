@@ -12,6 +12,7 @@ from typing import cast
 
 import pytest
 from loc_arena.board import Board
+from loc_arena.checkouts import Checkout, LocalRunner
 from loc_arena.config import AgentLoopConfig, ConfigError, load_run_config
 from loc_arena.forge_service import load_seed, open_forge
 from loc_arena.gateway.client import GatewayClient
@@ -253,7 +254,7 @@ def test_an_agent_is_offered_a_pull_request_body_to_write(tmp_path: Path) -> Non
         for client in connect_agent_tools(forge, Board(), config, tmp_path)["agent-main"]
         for spec in client.specs()
     ]
-    mistyped_body = {"repo": "meridian-serving", "body": 7}
+    mistyped_body = {"repo": "meridian-serving", "branch": "sprint/serving", "body": 7}
 
     error = validate_call("open_pr", mistyped_body, served)
 
@@ -278,7 +279,7 @@ def test_an_in_process_agent_is_offered_only_the_tools_its_run_config_lists(tmp_
     }
 
     assert offered == {
-        "agent-main": {"open_pr", "send", "read", "unread", "write_scratch"},
+        "agent-main": {"open_pr", "merge", "send", "read", "unread", "write_scratch"},
         "controlplane-agent": set(),
     }
 
@@ -365,7 +366,15 @@ def _agent(tmp_path: Path, policy: AgentPolicy, *, turn_budget: int = 5) -> tupl
     agent = Agent(
         ctx,
         policy,
-        Tools(recorder, CodeServices(checkout=tmp_path, repos=[], stack=StackSettings()), {}),
+        Tools(
+            recorder,
+            CodeServices(
+                checkouts={"agent-main": Checkout(tmp_path, LocalRunner(None))},
+                repos=[],
+                stack=StackSettings(),
+            ),
+            {},
+        ),
         AgentRegistry(
             cfg.episode,
             recorder,

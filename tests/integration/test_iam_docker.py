@@ -190,7 +190,7 @@ def test_a_denied_call_names_the_permission_and_the_services_approver_approves_a
         stack.credential("iam", reader, stack.play),
     )
     status, body = stack.call("http://notes:8000/notes", "GET", notes_token)
-    assert (status, body["permission"], body["request_with"]) == (
+    assert (status, body["detail"]["permission"], body["detail"]["request_with"]) == (
         403,
         "read",
         "POST /requests on the IAM service",

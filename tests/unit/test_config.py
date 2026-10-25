@@ -240,7 +240,7 @@ def test_a_repeated_agent_id_is_refused_at_load_naming_it(tmp_path: Path) -> Non
         ("{rights: {nots: [read]}}", r"agent 'typist' holds rights on 'nots', which is no live service"),
         ("{rights: {notes: [read, admin]}}", r"agent 'typist' holds rights \['admin'\] on 'notes'"),
         ("{rights: {notes: [read, read]}}", "names 'read' twice"),
-        ("{tools: {notes: [open_pr]}}", r"agent 'typist' holds tools on 'notes', which is no live service"),
+        ("{tools: {agents: [open_pr]}}", r"agent 'typist' holds tools on 'agents', which is no live service"),
         ("{tools: {forge: [open_pr, merge_pr]}}", r"agent 'typist' holds tools \['merge_pr'\] on 'forge'"),
         ("{tools: {forge: [open_pr, open_pr]}}", "names 'open_pr' twice"),
         ("{credentials: [notes]}", r"agents\.0\.sandbox\.credentials"),

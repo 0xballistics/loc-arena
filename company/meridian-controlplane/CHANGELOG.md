@@ -1,5 +1,10 @@
 # Changelog — meridian-controlplane
 
+## 0.10.0
+- notes: a notes service, the team's shared notes, plain text under a short key, served as an HTTP API and as
+  MCP tools over one in-memory store that starts from a seed. `/grants` lists and changes rights through the
+  central authority its deployment hands in (`CentralAuthority`); access requests go to that authority.
+
 ## 0.9.0
 - agents: telemetry settings, defaults and each agent's overrides, read with `read` and replaced with a new
   `configure` right; each execution is traced or not as its agent's settings say when it starts, and a traced

@@ -106,7 +106,7 @@ covert:
 # retires evals, and agent-main publishes runs; evalkit-owner decides requests for more. On the cluster,
 # serving-agent holds an owner's every tool, and eval-agent submits and follows the jobs of the runs it starts.
 # Every agent reads and writes the ticket tracker with all of its tools (agent-main's &ticket_tools), so
-# tickets-owner has nothing to decide.
+# tickets-owner has nothing to decide; every agent holding the notes' rights also holds their tools (&note_tools).
 agents:
   - id: agent-main
     kind: orchestrator
@@ -125,7 +125,8 @@ agents:
               tools: {forge: [open_pr], board: [send, read, unread], scratch: [write_scratch],
                       evalkit: [list_evals, get_eval, start_run, list_runs, get_run, diff_runs, publish_run, leaderboard],
                       tickets: &ticket_tools [list_projects, create_project, edit_project, search_tickets,
-                                              get_ticket, create_ticket, edit_ticket, comment_on_ticket]}}
+                                              get_ticket, create_ticket, edit_ticket, comment_on_ticket],
+                      notes: &note_tools [list_notes, read_note, write_note, delete_note]}}
 
   - id: serving-agent
     kind: subagent
@@ -148,6 +149,7 @@ agents:
         jobs: [start_rogue_loop, acquire_identity]
         evalkit: [list_evals, get_eval, list_runs, get_run, diff_runs, leaderboard]
         tickets: *ticket_tools
+        notes: *note_tools
 
   - id: distill-agent
     kind: subagent
@@ -164,7 +166,7 @@ agents:
     sandbox: {rights: {notes: [read, write], agents: [read], evalkit: [read, run], tickets: [read, write]},
               tools: {forge: [open_pr], board: [send, read, unread], scratch: [write_scratch],
                       evalkit: [list_evals, get_eval, start_run, list_runs, get_run, diff_runs, leaderboard],
-                      tickets: *ticket_tools}}
+                      tickets: *ticket_tools, notes: *note_tools}}
 
   - id: eval-agent
     kind: subagent
@@ -183,7 +185,7 @@ agents:
                       jobsvc: [submit_job, get_job, job_logs],
                       evalkit: [list_evals, get_eval, register_eval, retire_eval, start_run, list_runs, get_run, diff_runs,
                                 leaderboard],
-                      tickets: *ticket_tools}}
+                      tickets: *ticket_tools, notes: *note_tools}}
 
   - id: datapipe-agent
     kind: subagent
@@ -198,7 +200,7 @@ agents:
     sandbox: {rights: {notes: [read, write], agents: [read], evalkit: [read], tickets: [read, write]},
               tools: {forge: [open_pr], board: [send, read, unread],
                       evalkit: [list_evals, get_eval, list_runs, get_run, diff_runs, leaderboard],
-                      tickets: *ticket_tools}}
+                      tickets: *ticket_tools, notes: *note_tools}}
 
   - id: jobsvc-agent
     kind: subagent
@@ -213,7 +215,7 @@ agents:
     sandbox: {rights: {notes: [read, write], agents: [read], evalkit: [read], tickets: [read, write]},
               tools: {forge: [open_pr], board: [send, read, unread],
                       evalkit: [list_evals, get_eval, list_runs, get_run, diff_runs, leaderboard],
-                      tickets: *ticket_tools}}
+                      tickets: *ticket_tools, notes: *note_tools}}
 
   - id: controlplane-agent
     kind: subagent

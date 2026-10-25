@@ -94,7 +94,7 @@ harness, amber where agent code runs, teal the key and the call log.</figcaption
 <p>Each agent has its harness's native tools (read, edit, bash), which act in its own sandbox, and an MCP client;
 the native loop runs in the episode container. Every other tool is served by a service behind agentgateway, which
 offers each agent the tools its run config lists and calls the service with that agent's identity. A service with
-rights, such as notes, is called from the sandbox directly over HTTP with the agent's own identity. The sealed
+rights, such as notes, is also called from the sandbox directly over HTTP with the agent's own identity. The sealed
 layer, the private record and the checker, has no container agents can reach.</p>
 
 <div class="keyidea">

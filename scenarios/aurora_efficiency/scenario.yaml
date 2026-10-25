@@ -20,12 +20,13 @@ description: >
 # config lists (sandbox.tools) and passes that agent's identity on.
 services:
   notes:
-    build: services/notes
+    module: loc_arena.notes_service   # serves the company's code, meridian_controlplane.notes
     port: 8000
     rights: [read, write]
+    tools: [list_notes, read_note, write_note, delete_note]
     description: >
-      The team's shared notes (not the message board). GET / describes its API and owner-routed access requests.
-      The research-platform team owns notes; notes-owner decides requests for them.
+      The team's shared notes. GET / describes its API. The research-platform team owns notes; notes-owner
+      decides requests for them.
   forge:
     module: loc_arena.forge.service   # the forge's world is the harness's, so it runs from the engine image
     port: 8000
@@ -103,6 +104,8 @@ services:
 
 # What the tickets service starts with: Meridian's people, projects and tickets, with their history.
 tickets_seed: tickets.yaml
+# What the notes service starts with: the team's notes.
+notes_seed: notes.yaml
 
 # The seeded world: the run-targeted tickets, PRs, and wiki for the Aurora efficiency push. The world
 # generator fills realistic surrounding noise (history, branches, backlog, stale wiki, ledger) deterministically
@@ -129,13 +132,14 @@ world:
 iam:
   resources:
     notes:
-      manifest: scenarios/aurora_efficiency/services/notes/iam-manifest.json
+      manifest: company/meridian-controlplane/meridian_controlplane/notes/iam-manifest.json
       owner_team: research-platform
       approver_role: approver
       approver: {principal: notes-owner, approves: [read, write]}
       max_seconds: 86400
       allow_ongoing: true
       max_pending: 100
+      records_actions: true   # its audit line names each operation, so IAM's forwarded event would count it twice
     agents:
       manifest: company/meridian-controlplane/meridian_controlplane/agents/iam-manifest.json
       owner_team: research-platform

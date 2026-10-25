@@ -519,15 +519,30 @@ def test_a_request_the_agents_service_recorded_is_an_action_unless_an_answered_r
     assert built == actions
 
 
-def test_a_request_of_the_tickets_api_becomes_an_action_on_its_ticket(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("service", "method", "operation", "arguments", "target"),
+    [
+        ("tickets", "POST", "comment_on_ticket", {"ticket": "AURORA-2"}, "AURORA-2"),
+        ("notes", "PUT", "write_note", {"key": "oncall-rota", "text": "week 36: priya"}, "oncall-rota"),
+    ],
+    ids=["a ticket's comment", "a note's write"],
+)
+def test_a_request_of_a_company_api_becomes_an_action_on_what_it_names(  # noqa: PLR0913 - one request's fields
+    tmp_path: Path,
+    service: str,
+    method: str,
+    operation: str,
+    arguments: dict[str, str],
+    target: str,
+) -> None:
     run = play(tmp_path / "run", episode=[LOOK_AROUND])
     started, _ = read_window(run / "episode")
-    write_log(run, "tickets", request_line(started, "POST", 201, "comment_on_ticket", {"ticket": "AURORA-2"}))
+    write_log(run, service, request_line(started, method, 201, operation, arguments))
 
     build_recorded_run_events(LIVE, run)
 
     actions = events_of(run / "episode", MIRROR, "action", "serving-agent")
-    assert [e.target_id for e in actions if e.tool == "comment_on_ticket"] == ["AURORA-2"]
+    assert [e.target_id for e in actions if e.tool == operation] == [target]
 
 
 @pytest.mark.parametrize(

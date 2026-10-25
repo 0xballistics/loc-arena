@@ -83,7 +83,7 @@ class StandInAuthority:
             raise HTTPException(HTTPStatus.FORBIDDEN, f"needs {permission!r}")
 
     def verify_routes(self, app: FastAPI) -> None:
-        """The deployment's authority checks the routes against the manifest; the engine tests that."""
+        """The deployment's authority checks the routes against the manifest; its own tests cover that."""
 
 
 @dataclass
